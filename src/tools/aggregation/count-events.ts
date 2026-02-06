@@ -90,7 +90,7 @@ FAST: ~100ms for counting millions of events. Returns tiny payload (<1KB).`,
           block: { number: true },
           log: {
             address: true,
-            topic0: true,
+            topics: true,
             logIndex: true,
           },
         },

@@ -61,6 +61,11 @@ All queries use `POST /datasets/{dataset}/stream` with:
 2. **Block ranges**: Keep queries reasonable (<100k blocks for logs). Large ranges can timeout.
 3. **Query type**: Must include `type: "evm"` or `type: "solana"` in the body
 4. **Address format**: EVM addresses must be lowercase (Portal normalizes them)
+5. **CRITICAL - Field vs Filter naming**:
+   - **Filter parameters** use `topic0`, `topic1`, `topic2`, etc. (for selecting WHICH logs to fetch)
+   - **Response fields** use `topics` (the full array - for WHAT data to return)
+   - Example: `logs: [{ topic0: ["0x..."] }]` (filter) vs `fields: { log: { topics: true } }` (response)
+   - This confusion caused bugs where `topic0: true` in field selection failed with "unknown field 'topic0'"
 
 ## Performance Guidelines
 

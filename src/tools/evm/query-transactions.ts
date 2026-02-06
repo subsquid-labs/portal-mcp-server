@@ -189,8 +189,14 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
       const presetFields = getTransactionFields(field_preset || "standard");
       const fields: Record<string, unknown> = { ...presetFields };
 
-      // Override with full transaction fields if L2 or receipt requested
-      fields.transaction = buildEvmTransactionFields(includeL2, include_receipt);
+      // Merge L2/receipt fields if requested (but keep preset as base)
+      if (include_l2_fields || include_receipt) {
+        const additionalFields = buildEvmTransactionFields(includeL2, include_receipt);
+        fields.transaction = {
+          ...(fields.transaction as Record<string, boolean>),
+          ...additionalFields
+        };
+      }
 
       if (include_logs) {
         fields.log = buildEvmLogFields();

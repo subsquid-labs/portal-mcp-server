@@ -5,7 +5,7 @@ export const LOG_FIELD_PRESETS = {
   minimal: {
     log: {
       address: true,
-      topic0: true,
+      topics: true,
     },
     block: {
       number: true,
