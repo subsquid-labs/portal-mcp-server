@@ -66,6 +66,12 @@ All queries use `POST /datasets/{dataset}/stream` with:
    - **Response fields** use `topics` (the full array - for WHAT data to return)
    - Example: `logs: [{ topic0: ["0x..."] }]` (filter) vs `fields: { log: { topics: true } }` (response)
    - This confusion caused bugs where `topic0: true` in field selection failed with "unknown field 'topic0'"
+6. **Validation with limit parameter**:
+   - Unfiltered queries are normally limited to <100 blocks to prevent memory crashes
+   - **EXCEPTION**: If `limit <= 100`, any block range is allowed (even unfiltered)
+   - Why: The `limit` parameter naturally caps result size, making large ranges safe
+   - Example: `timeframe="1h"` (1800 blocks) + `limit=3` works fine without filters
+   - This enables common MCP patterns like "show me a few recent transactions"
 
 ## Performance Guidelines
 
