@@ -36,12 +36,15 @@ WHEN TO USE:
 - "Track transactions by function signature (sighash)"
 - "Get transaction history between two addresses"
 
+IMPORTANT: ALWAYS include at least one filter (from_addresses, to_addresses, or sighash).
+Unfiltered queries are limited to <100 blocks to prevent memory crashes.
+
 PERFORMANCE: <500ms for 5k blocks when filtered. Always filter by address or sighash.
 
 EXAMPLES:
-- Wallet activity: { from_addresses: ["0xWallet..."], from_block: X, to_block: Y }
-- Contract calls: { to_addresses: ["0xContract..."] }
-- Specific function: { to_addresses: ["0xContract..."], sighash: ["0x12345678"] }
+- Wallet activity (last 24h): { from_addresses: ["0xWallet..."], timeframe: "24h" }
+- Contract calls: { to_addresses: ["0xContract..."], timeframe: "1h" }
+- Specific function: { to_addresses: ["0xContract..."], sighash: ["0x12345678"], timeframe: "7d" }
 
 SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
     {
@@ -49,8 +52,8 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
       timeframe: z
         .string()
         .optional()
-        .describe("Time range (e.g., '24h', '7d'). Alternative to from_block/to_block. Supported: 1h, 6h, 12h, 24h, 3d, 7d, 14d, 30d"),
-      from_block: z.number().optional().describe("Starting block number (use this OR timeframe)"),
+        .describe("Time range (e.g., '24h', '7d'). Alternative to from_block/to_block. Supported: 1h, 6h, 12h, 24h, 3d, 7d, 14d, 30d. REQUIRES filters (from/to addresses or sighash) for ranges >100 blocks."),
+      from_block: z.number().optional().describe("Starting block number (use this OR timeframe). REQUIRES filters for ranges >100 blocks."),
       to_block: z
         .number()
         .optional()
@@ -62,15 +65,15 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
         .optional()
         .default(false)
         .describe("Only query finalized blocks"),
-      from_addresses: z.array(z.string()).optional().describe("Sender addresses (wallets or contracts that initiated the transaction)"),
+      from_addresses: z.array(z.string()).optional().describe("FILTER: Sender addresses (wallets or contracts that initiated the transaction). Required for timeframe >100 blocks."),
       to_addresses: z
         .array(z.string())
         .optional()
-        .describe("Recipient addresses (typically contracts being called, or wallets receiving ETH)"),
+        .describe("FILTER: Recipient addresses (typically contracts being called, or wallets receiving ETH). Required for timeframe >100 blocks."),
       sighash: z
         .array(z.string())
         .optional()
-        .describe("Function sighash filter (4-byte hex)"),
+        .describe("FILTER: Function sighash (4-byte hex, e.g., '0xa9059cbb' for transfer). Can be used instead of addresses for timeframe >100 blocks."),
       first_nonce: z.number().optional().describe("Minimum nonce"),
       last_nonce: z.number().optional().describe("Maximum nonce"),
       limit: z.number().max(1000).optional().default(20).describe("Max transactions (default: 20, max: 1000). Note: Lower default for MCP to reduce context usage."),
