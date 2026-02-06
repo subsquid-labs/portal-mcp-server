@@ -120,8 +120,13 @@ export function validateQuerySize(
     ? MAXIMUM_RANGES[queryType].filtered
     : MAXIMUM_RANGES[queryType].unfiltered;
 
+  // IMPORTANT: If limit is small (<=100), skip block range validation
+  // The limit parameter naturally caps the result set, making large ranges safe
+  // Example: timeframe="1h" (1800 blocks) with limit=3 only returns 3 records
+  const hasLowLimit = limit <= 100;
+
   // Check if query exceeds absolute maximum
-  if (blockRange > maximum) {
+  if (blockRange > maximum && !hasLowLimit) {
     let errorMessage: string;
     let recommendation: string;
 
@@ -165,6 +170,14 @@ Even with filters, this exceeds the maximum safe range of ${maximum.toLocaleStri
       valid: false,
       error: errorMessage,
       recommendation,
+    };
+  }
+
+  // If low limit bypassed the maximum check, add informational note
+  if (hasLowLimit && blockRange > maximum && blockRange > recommended) {
+    return {
+      valid: true,
+      warning: `Large block range (${blockRange.toLocaleString()} blocks) allowed due to low limit (${limit}). Query is safe because result set is capped.`,
     };
   }
 
