@@ -34,29 +34,13 @@ test-*.js
 demo.ts
 export-demo.ts
 
-# Development notes and summaries (keep in local only)
-*_SUMMARY.md
-*_REPORT.md
-*_COMPLETE.md
-*_PLAN.md
-*_STATUS.md
-PHASE*.md
-IMPROVEMENTS*.md
-DEPLOYMENT*.md
-FINAL*.md
-BUG_FIX*.md
-DATA_*.md
-LARGE_*.md
-COMMON_*.md
-EMOJI_*.md
-USER_*.md
-TEST_*.md
-GETTING_STARTED.md
-QUICK_START.md
-DEPLOYED.md
-REFACTORING*.md
-UX_*.md
-TOOL_*.md
+# Markdown files (except README and core docs)
+*.md
+!README.md
+!CLAUDE.md
+!LICENSE.md
+!CONTRIBUTING.md
+!CHANGELOG.md
 
 # Temporary files
 *.tmp
