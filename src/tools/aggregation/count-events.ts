@@ -56,8 +56,13 @@ FAST: ~100ms for counting millions of events. Returns tiny payload (<1KB).`,
         .optional()
         .default("none")
         .describe("Group counts by: 'address' (per contract), 'topic0' (per event type), 'none' (total only)"),
+      top_n: z
+        .number()
+        .optional()
+        .default(20)
+        .describe("When grouping, return only top N results (default: 20). Set to 0 for all results."),
     },
-    async ({ dataset, timeframe, from_block, to_block, addresses, topic0, group_by }) => {
+    async ({ dataset, timeframe, from_block, to_block, addresses, topic0, group_by, top_n }) => {
       const queryStartTime = Date.now();
       dataset = await resolveDataset(dataset);
       const chainType = detectChainType(dataset);
@@ -151,13 +156,28 @@ FAST: ~100ms for counting millions of events. Returns tiny payload (<1KB).`,
       };
 
       if (grouped) {
-        response.grouped = grouped;
-        response.unique_groups = grouped.length;
+        const totalGroups = grouped.length;
+        const shouldLimit = top_n && top_n > 0 && grouped.length > top_n;
+
+        if (shouldLimit) {
+          response.grouped = grouped.slice(0, top_n);
+          response.showing_top = top_n;
+          response.total_groups = totalGroups;
+          response.hidden_groups = totalGroups - top_n;
+        } else {
+          response.grouped = grouped;
+          response.total_groups = totalGroups;
+        }
+      }
+
+      let message = `Counted ${totalCount.toLocaleString()} events across ${results.length} blocks`;
+      if (grouped && response.hidden_groups) {
+        message += ` (showing top ${response.showing_top} of ${response.total_groups} groups)`;
       }
 
       return formatResult(
         response,
-        `Counted ${totalCount.toLocaleString()} events across ${results.length} blocks`,
+        message,
         {
           metadata: {
             dataset,

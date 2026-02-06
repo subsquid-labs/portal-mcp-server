@@ -19,6 +19,7 @@ import {
 } from "../../helpers/validation.js";
 import { getTransactionFields } from "../../helpers/field-presets.js";
 import { applyResponseFormat, type ResponseFormat } from "../../helpers/response-modes.js";
+import { resolveTimeframeOrBlocks } from "../../helpers/timeframe.js";
 
 // ============================================================================
 // Tool: Query Transactions (EVM)
@@ -45,7 +46,11 @@ EXAMPLES:
 SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
     {
       dataset: z.string().describe("Dataset name or alias"),
-      from_block: z.number().describe("Starting block number"),
+      timeframe: z
+        .string()
+        .optional()
+        .describe("Time range (e.g., '24h', '7d'). Alternative to from_block/to_block. Supported: 1h, 6h, 12h, 24h, 3d, 7d, 14d, 30d"),
+      from_block: z.number().optional().describe("Starting block number (use this OR timeframe)"),
       to_block: z
         .number()
         .optional()
@@ -111,6 +116,7 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
     },
     async ({
       dataset,
+      timeframe,
       from_block,
       to_block,
       finalized_only,
@@ -136,18 +142,27 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
         throw new Error("portal_query_transactions is only for EVM chains");
       }
 
+      // Resolve timeframe or use explicit blocks
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } =
+        await resolveTimeframeOrBlocks({
+          dataset,
+          timeframe,
+          from_block,
+          to_block,
+        });
+
       const normalizedFrom = normalizeAddresses(from_addresses, chainType);
       const normalizedTo = normalizeAddresses(to_addresses, chainType);
       const { validatedToBlock: endBlock } = await validateBlockRange(
         dataset,
-        from_block,
-        to_block ?? Number.MAX_SAFE_INTEGER,
+        resolvedFromBlock,
+        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       );
       const includeL2 = include_l2_fields || isL2Chain(dataset);
 
       // Validate query size to prevent crashes
-      const blockRange = endBlock - from_block;
+      const blockRange = endBlock - resolvedFromBlock;
       const hasFilters = !!(normalizedFrom || normalizedTo || sighash);
 
       const validation = validateQuerySize({
@@ -167,7 +182,7 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
       let warningMessage = "";
       if (validation.warning) {
         warningMessage = formatBlockRangeWarning(
-          from_block,
+          resolvedFromBlock,
           endBlock,
           "transactions",
           hasFilters,
@@ -210,7 +225,7 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
 
       const query = {
         type: "evm",
-        fromBlock: from_block,
+        fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields,
         transactions: [txFilter],
@@ -249,7 +264,7 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
           warnOnTruncation: false,
           metadata: {
             dataset,
-            from_block,
+            from_block: resolvedFromBlock,
             to_block: endBlock,
             query_start_time: queryStartTime,
           },
