@@ -28,8 +28,6 @@ import { registerStreamTool } from "./utilities/stream.js";
 import { registerQueryPaginatedTool } from "./utilities/query-paginated.js";
 import { registerBatchQueryTool } from "./utilities/batch-query.js";
 import { registerDecodeLogsTool } from "./utilities/decode-logs.js";
-import { registerGetAddressActivityTool } from "./utilities/address-activity.js";
-import { registerGetTokenTransfersForAddressTool } from "./utilities/token-transfers-for-address.js";
 import { registerResolveAddressesTool } from "./utilities/resolve-addresses.js";
 
 // Convenience tools
@@ -46,14 +44,12 @@ import {
   registerGetContractDeploymentsTool,
 } from "./convenience/index.js";
 
+// Meta tools
+import { registerSuggestToolTool } from "./meta/index.js";
+
 // Enrichment tools (external data sources)
 import {
   registerGetTokenInfoTool,
-  registerGetDefiProtocolTool,
-  registerGetProtocolsByChainTool,
-  registerGetChainTvlTool,
-  registerGetYieldPoolsTool,
-  registerGetProtocolFeesTool,
   registerGetSqdNetworkInfoTool,
   registerGetPortalCapabilitiesTool,
 } from "./enrichment/index.js";
@@ -92,13 +88,11 @@ export function registerAllTools(server: McpServer) {
   registerQuerySolanaLogsTool(server);
   registerQuerySolanaRewardsTool(server);
 
-  // Utility tools (7)
+  // Utility tools (5)
   registerStreamTool(server);
   registerQueryPaginatedTool(server);
   registerBatchQueryTool(server);
   registerDecodeLogsTool(server);
-  registerGetAddressActivityTool(server);
-  registerGetTokenTransfersForAddressTool(server);
   registerResolveAddressesTool(server);
 
   // Convenience tools (10) - High-level wrappers for common tasks
@@ -113,13 +107,11 @@ export function registerAllTools(server: McpServer) {
   registerGetTimeSeriesDataTool(server);
   registerGetContractDeploymentsTool(server);
 
-  // Enrichment tools (8) - External data sources for rich metadata
+  // Meta tools (1) - Tool discovery and guidance
+  registerSuggestToolTool(server);
+
+  // Enrichment tools (3) - External data sources for rich metadata
   registerGetTokenInfoTool(server);
-  registerGetDefiProtocolTool(server);
-  registerGetProtocolsByChainTool(server);
-  registerGetChainTvlTool(server);
-  registerGetYieldPoolsTool(server);
-  registerGetProtocolFeesTool(server);
   registerGetSqdNetworkInfoTool(server);
   registerGetPortalCapabilitiesTool(server);
 

@@ -3,36 +3,61 @@ node_modules/
 
 # Build output
 dist/
+build/
 
 # Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
 
 # OS files
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*~
 
 # IDE
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
+*.sublime-project
+*.sublime-workspace
 
 # Cloudflare Workers
 .wrangler/
 .dev.vars
 wrangler.toml.backup
+worker-configuration.d.ts
 
 # Test files (don't commit to main repo)
 test-*.mjs
 test-*.js
+test-*.sh
 *-test.mjs
 *-test.js
 demo.ts
+demo.mjs
+demo.js
 export-demo.ts
+examples/
+
+# Temporary test data
+/tmp/
+*.tmp
+*.temp
+.scratch/
+
+# Database files (if we add SQLite/DuckDB)
+*.db
+*.sqlite
+*.sqlite3
+*.duckdb
+*.parquet
+*.arrow
+cache/
+data/
 
 # Markdown files (except README and core docs)
 *.md
@@ -42,12 +67,48 @@ export-demo.ts
 !CONTRIBUTING.md
 !CHANGELOG.md
 
-# Temporary files
-*.tmp
-*.temp
-.scratch/
+# Specifically exclude all the documentation files you've accumulated
+BLOCK-TIME-SOLUTION.md
+BUG-FIXES-COMPLETED.md
+COMPLETE_IMPROVEMENTS_SUMMARY.md
+ENRICHMENT_SUMMARY.md
+ERROR_IMPROVEMENTS_SUMMARY.md
+EXECUTIVE_SUMMARY.md
+FILES_CHANGED.md
+IMPROVEMENTS_IMPLEMENTED.md
+IMPROVEMENTS.md
+MEMORY_LEAK_FIX.md
+NEW_TOOLS_SUMMARY.md
+PERFORMANCE_GUIDE.md
+QUERY_LIMITS_SUMMARY.md
+QUICK_REFERENCE.md
+REMOVED_TOOLS.md
+TIMESERIES_TEST_RESULTS.md
+TIMESERIES_VERIFICATION.md
+TIMESTAMP-BASED-APPROACH.md
+TIMESTAMP-ENDPOINT-DETAILED-ANALYSIS.md
+TIMESTAMP-ENDPOINT-TEST-RESULTS.md
+USAGE_EXAMPLES.md
+UX-IMPROVEMENTS.md
+WISHLIST_PROGRESS.md
 
 # Environment files with secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+
+# Claude project files (local configuration)
+.claude/
+
+# Package manager lock files (keep package-lock.json, ignore others)
+yarn.lock
+pnpm-lock.yaml
+
+# Coverage reports
+coverage/
+.nyc_output/
+
+# Backup files
+*.backup
+*.bak
+*.old

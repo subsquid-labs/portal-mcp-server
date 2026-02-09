@@ -197,10 +197,6 @@ RETURNS: Available query types, filters, performance tips, examples`,
             provides: ["Token names", "Symbols", "Decimals", "Logos"],
             chains: ["ethereum", "base", "arbitrum", "optimism", "polygon", "avalanche", "bsc"],
           },
-          defi_data: {
-            source: "DeFi Llama",
-            provides: ["Protocol TVL", "Yields/APY", "Fees", "Chain metrics"],
-          },
         },
         performance_tips: [
           "Use filters (addresses, topics) to reduce result size",

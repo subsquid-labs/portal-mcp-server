@@ -51,8 +51,14 @@ FAST: Returns list of deployed contracts with addresses, deployers, and block in
         .string()
         .optional()
         .describe("Optional: Filter to deployments by specific deployer address"),
+      limit: z
+        .number()
+        .max(100)
+        .optional()
+        .default(50)
+        .describe("Maximum number of deployments to return (default: 50, max: 100)"),
     },
-    async ({ dataset, num_blocks, include_deployer, deployer_address }) => {
+    async ({ dataset, num_blocks, include_deployer, deployer_address, limit }) => {
       const queryStartTime = Date.now();
       dataset = await resolveDataset(dataset);
       const chainType = detectChainType(dataset);
@@ -113,17 +119,48 @@ FAST: Returns list of deployed contracts with addresses, deployers, and block in
         timestamp: number;
       }> = [];
 
-      results.forEach((block: any) => {
-        block.transactions?.forEach((tx: any) => {
+      // Portal API may return data directly or with header/transactions/traces structure
+      results.forEach((item: any) => {
+        const blockData = item.header || item;
+        const blockNumber = blockData.number;
+        const timestamp = blockData.timestamp;
+
+        // Traces might be at top level or nested
+        const traces = item.traces || [];
+        const transactions = item.transactions || [];
+
+        // Process traces directly
+        traces.forEach((trace: any) => {
+          // Portal returns traces with action/result structure
+          const contractAddress = trace.result?.address || trace.createResultAddress;
+          const deployerAddress = trace.action?.from || trace.createFrom;
+
+          if (contractAddress) {
+            deployments.push({
+              contract_address: contractAddress.toLowerCase(),
+              deployer: deployerAddress?.toLowerCase() || "unknown",
+              deployment_type: trace.type === "create" ? "CREATE" : "CREATE2",
+              transaction_hash: trace.transactionHash || "unknown",
+              block_number: blockNumber,
+              timestamp: timestamp,
+            });
+          }
+        });
+
+        // Also check transactions for nested traces
+        transactions.forEach((tx: any) => {
           tx.traces?.forEach((trace: any) => {
-            if (trace.createResultAddress) {
+            const contractAddress = trace.result?.address || trace.createResultAddress;
+            const deployerAddress = trace.action?.from || trace.createFrom || tx.from;
+
+            if (contractAddress) {
               deployments.push({
-                contract_address: trace.createResultAddress.toLowerCase(),
-                deployer: trace.createFrom?.toLowerCase() || tx.from?.toLowerCase() || "unknown",
+                contract_address: contractAddress.toLowerCase(),
+                deployer: deployerAddress?.toLowerCase() || "unknown",
                 deployment_type: trace.type === "create" ? "CREATE" : "CREATE2",
                 transaction_hash: tx.hash,
-                block_number: block.number,
-                timestamp: block.timestamp,
+                block_number: blockNumber,
+                timestamp: timestamp,
               });
             }
           });
@@ -133,13 +170,18 @@ FAST: Returns list of deployed contracts with addresses, deployers, and block in
       // Sort by block number (most recent first)
       deployments.sort((a, b) => b.block_number - a.block_number);
 
-      // Calculate statistics
+      // Calculate statistics (before limiting)
+      const totalDeployments = deployments.length;
       const createCount = deployments.filter((d) => d.deployment_type === "CREATE").length;
       const create2Count = deployments.filter((d) => d.deployment_type === "CREATE2").length;
       const uniqueDeployers = new Set(deployments.map((d) => d.deployer)).size;
 
-      const summary = {
-        total_deployments: deployments.length,
+      // Apply limit
+      const limitedDeployments = deployments.slice(0, limit);
+
+      const summary: any = {
+        total_deployments: totalDeployments,
+        returned_deployments: limitedDeployments.length,
         create_deployments: createCount,
         create2_deployments: create2Count,
         unique_deployers: uniqueDeployers,
@@ -149,21 +191,25 @@ FAST: Returns list of deployed contracts with addresses, deployers, and block in
         most_active_deployer: deployments.length > 0 ? getMostActiveDeployer(deployments) : null,
       };
 
+      if (totalDeployments > limit) {
+        summary.warning = `Results limited to ${limit} deployments (${totalDeployments} total found). Increase 'limit' parameter or add filters to see more.`;
+      }
+
       if (deployer_address) {
-        (summary as any).filtered_by_deployer = deployer_address;
+        summary.filtered_by_deployer = deployer_address;
       }
 
       // Remove deployer info if not requested
       const outputDeployments = include_deployer
-        ? deployments
-        : deployments.map(({ deployer, ...rest }) => rest);
+        ? limitedDeployments
+        : limitedDeployments.map(({ deployer, ...rest }) => rest);
 
       return formatResult(
         {
           summary,
           deployments: outputDeployments,
         },
-        `Found ${deployments.length} contract deployments (${createCount} CREATE, ${create2Count} CREATE2) across ${results.length} blocks`,
+        `Found ${totalDeployments} contract deployments (${createCount} CREATE, ${create2Count} CREATE2) across ${results.length} blocks${totalDeployments > limit ? ` (showing first ${limit})` : ""}`,
         {
           metadata: {
             dataset,

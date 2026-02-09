@@ -5,6 +5,7 @@ import { resolveDataset, getBlockHead } from "../../cache/datasets.js";
 import { detectChainType } from "../../helpers/chain.js";
 import { portalFetchStream } from "../../helpers/fetch.js";
 import { formatResult } from "../../helpers/format.js";
+import { resolveContractLabel } from "../../constants/contract-labels.js";
 
 // ============================================================================
 // Tool: Get Top Contracts
@@ -116,12 +117,17 @@ FAST: Returns ranked list with transaction counts, percentages, and optional det
 
       // Convert to array and sort by transaction count
       const sortedContracts = Array.from(contractCounts.entries())
-        .map(([address, data]) => ({
-          address,
-          transaction_count: data.count,
-          percentage: ((data.count / totalTxs) * 100).toFixed(2),
-          sample_transactions: include_details ? data.samples : undefined,
-        }))
+        .map(([address, data]) => {
+          const label = resolveContractLabel(address, dataset);
+          return {
+            address,
+            name: label?.name,
+            category: label?.category,
+            transaction_count: data.count,
+            percentage: ((data.count / totalTxs) * 100).toFixed(2),
+            sample_transactions: include_details ? data.samples : undefined,
+          };
+        })
         .sort((a, b) => b.transaction_count - a.transaction_count)
         .slice(0, limit);
 

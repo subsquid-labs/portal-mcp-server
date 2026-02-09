@@ -158,7 +158,7 @@ export function registerGetContractActivityTool(server: McpServer) {
           total_transactions: transactions.length,
           unique_callers: uniqueCallers.length,
           top_callers: topCallers,
-          all_callers: uniqueCallers,
+          // Removed all_callers: massive array that bloats response unnecessarily
         },
         events: include_events
           ? {

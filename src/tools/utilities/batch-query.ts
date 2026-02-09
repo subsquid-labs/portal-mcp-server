@@ -67,11 +67,11 @@ export function registerBatchQueryTool(server: McpServer) {
       limit_per_dataset,
       finalized_only,
     }) => {
-      // Validate all datasets first
-      await Promise.all(datasets.map((d) => resolveDataset(d)));
+      // Resolve all dataset aliases to canonical names
+      const resolvedDatasets = await Promise.all(datasets.map((d) => resolveDataset(d)));
 
       // Filter to only EVM datasets for these query types
-      const evmDatasets = datasets.filter((d) => detectChainType(d) === "evm");
+      const evmDatasets = resolvedDatasets.filter((d) => detectChainType(d) === "evm");
       if (evmDatasets.length === 0) {
         throw new Error(
           "No EVM datasets provided. Batch query currently only supports EVM chains.",

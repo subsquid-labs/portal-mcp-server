@@ -2,8 +2,6 @@
 
 MCP server wrapping the SQD Portal API.
 
-**Now deployable to Cloudflare Workers!** ☁️
-
 ## Architecture
 
 This MCP server is a **thin wrapper** around the [SQD Portal API](https://docs.sqd.dev/portal/).

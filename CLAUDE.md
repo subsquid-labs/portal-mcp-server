@@ -72,6 +72,11 @@ All queries use `POST /datasets/{dataset}/stream` with:
    - Why: The `limit` parameter naturally caps result size, making large ranges safe
    - Example: `timeframe="1h"` (1800 blocks) + `limit=3` works fine without filters
    - This enables common MCP patterns like "show me a few recent transactions"
+7. **Timestamp-to-Block Conversion**:
+   - Portal provides `GET /datasets/{dataset}/timestamps/{timestamp}/block` endpoint
+   - Directly converts Unix timestamps to block numbers - no need to estimate block times!
+   - Example: `GET /datasets/base-mainnet/timestamps/1738800000/block` → `{"block_number": 26005327}`
+   - Use `src/helpers/timestamp-to-block.ts` helper functions for time-based queries
 
 ## Performance Guidelines
 

@@ -5,6 +5,8 @@ import { resolveDataset, getBlockHead } from "../../cache/datasets.js";
 import { detectChainType } from "../../helpers/chain.js";
 import { portalFetchStream } from "../../helpers/fetch.js";
 import { formatResult } from "../../helpers/format.js";
+import { getBlockRangeForDuration, getDurationSeconds } from "../../helpers/timestamp-to-block.js";
+import { formatTimestamp, weiToGwei } from "../../helpers/formatting.js";
 
 // ============================================================================
 // Tool: Get Time Series Data
@@ -59,56 +61,20 @@ FAST: Returns time-bucketed data ready for charting or analysis.`,
         throw new Error("portal_get_time_series is only for EVM chains");
       }
 
-      // Calculate block range based on duration
-      const head = await getBlockHead(dataset);
-      const latestBlock = head.number;
+      // Get block range using Portal's timestamp-to-block API (no guessing needed!)
+      const { fromBlock, toBlock } = await getBlockRangeForDuration(dataset, duration);
 
-      let blockRange: number;
-      switch (duration) {
-        case "1h":
-          blockRange = 300;
-          break;
-        case "6h":
-          blockRange = 1800;
-          break;
-        case "24h":
-          blockRange = 7200;
-          break;
-        case "7d":
-          blockRange = 50400;
-          break;
-        case "30d":
-          blockRange = 216000;
-          break;
-      }
-
-      const fromBlock = Math.max(0, latestBlock - blockRange + 1);
-
-      // Calculate bucket size in blocks
-      let bucketSize: number;
-      switch (interval) {
-        case "5m":
-          bucketSize = 25; // ~5 minutes at 12s blocks
-          break;
-        case "15m":
-          bucketSize = 75;
-          break;
-        case "1h":
-          bucketSize = 300;
-          break;
-        case "6h":
-          bucketSize = 1800;
-          break;
-        case "1d":
-          bucketSize = 7200;
-          break;
-      }
+      // Calculate bucket size based on interval duration
+      const intervalSeconds = getDurationSeconds(interval);
+      const durationSeconds = getDurationSeconds(duration);
+      const numBuckets = Math.ceil(durationSeconds / intervalSeconds);
+      const bucketSize = Math.ceil((toBlock - fromBlock + 1) / numBuckets);
 
       // Build query based on metric
       let query: any = {
         type: "evm",
         fromBlock,
-        toBlock: latestBlock,
+        toBlock,
         includeAllBlocks: true, // IMPORTANT: Get all blocks, not just those matching filters
         fields: {
           block: {
@@ -141,30 +107,37 @@ FAST: Returns time-bucketed data ready for charting or analysis.`,
         throw new Error("No data available for this time period");
       }
 
-      // Group blocks into time buckets (relative to fromBlock)
+      // Get the start and end timestamps from actual blocks
+      const firstBlock = results[0] as any;
+      const lastBlock = results[results.length - 1] as any;
+      const startTimestamp = firstBlock.timestamp || firstBlock.header?.timestamp;
+      const endTimestamp = lastBlock.timestamp || lastBlock.header?.timestamp;
+
+      if (!startTimestamp || !endTimestamp) {
+        throw new Error("Could not extract timestamps from block data");
+      }
+
+      // Calculate expected number of buckets based on time intervals
+      const expectedBuckets = Math.ceil(durationSeconds / intervalSeconds);
+
+      // Group blocks into timestamp-based buckets
       const buckets: Map<number, any[]> = new Map();
 
-      // Sample first few blocks to verify bucketing logic
-      const sampleBlocks = results.slice(0, 5).concat(results.slice(-5));
-      const bucketSamples: string[] = [];
-
-      results.forEach((block: any, idx: number) => {
-        // Portal API returns block data directly in the object, not nested
+      results.forEach((block: any) => {
         const blockNumber = block.number || block.header?.number;
-        if (!blockNumber) {
-          // Debug: show what we actually got
-          if (idx === 0) {
-            throw new Error(`Block number not found in response. Block keys: ${Object.keys(block).join(', ')}. Sample block: ${JSON.stringify(block).substring(0, 200)}`);
-          }
-          return; // Skip blocks without numbers
+        const timestamp = block.timestamp || block.header?.timestamp;
+
+        if (!blockNumber || !timestamp) {
+          return; // Skip blocks without required data
         }
 
-        const relativeBlockNumber = blockNumber - fromBlock;
-        const bucketIndex = Math.floor(relativeBlockNumber / bucketSize);
+        // Calculate which bucket this block belongs to based on timestamp
+        const elapsedSeconds = timestamp - startTimestamp;
+        const bucketIndex = Math.floor(elapsedSeconds / intervalSeconds);
 
-        // Collect samples for debugging
-        if (idx < 5 || idx >= results.length - 5) {
-          bucketSamples.push(`Block ${blockNumber} (rel=${relativeBlockNumber}) -> bucket ${bucketIndex}`);
+        // Skip blocks beyond expected range (shouldn't happen but be safe)
+        if (bucketIndex >= expectedBuckets) {
+          return;
         }
 
         if (!buckets.has(bucketIndex)) {
@@ -175,13 +148,16 @@ FAST: Returns time-bucketed data ready for charting or analysis.`,
 
 
       // Calculate aggregates for each bucket
-      const timeSeries = Array.from(buckets.entries())
+      let timeSeries = Array.from(buckets.entries())
         .map(([bucketIndex, blocks]) => {
           const firstBlock = blocks[0];
           const lastBlock = blocks[blocks.length - 1];
           const firstBlockNumber = firstBlock.number || firstBlock.header?.number;
           const lastBlockNumber = lastBlock.number || lastBlock.header?.number;
           const timestamp = firstBlock.timestamp || firstBlock.header?.timestamp;
+
+          // Calculate bucket timestamp (start of interval)
+          const bucketTimestamp = startTimestamp + (bucketIndex * intervalSeconds);
 
           let value: number;
 
@@ -214,7 +190,8 @@ FAST: Returns time-bucketed data ready for charting or analysis.`,
 
           return {
             bucket_index: bucketIndex,
-            timestamp,
+            timestamp: bucketTimestamp,
+            timestamp_human: formatTimestamp(bucketTimestamp),
             block_range: `${firstBlockNumber}-${lastBlockNumber}`,
             blocks_in_bucket: blocks.length,
             value: parseFloat(value.toFixed(2)),
@@ -222,20 +199,37 @@ FAST: Returns time-bucketed data ready for charting or analysis.`,
         })
         .sort((a, b) => a.bucket_index - b.bucket_index);
 
+      // Check if the last bucket is incomplete (has significantly fewer blocks than median)
+      if (timeSeries.length > 2) {
+        const blockCounts = timeSeries.slice(0, -1).map(t => t.blocks_in_bucket);
+        const medianBlockCount = blockCounts.sort((a, b) => a - b)[Math.floor(blockCounts.length / 2)];
+        const lastBucket = timeSeries[timeSeries.length - 1];
+
+        // If last bucket has less than 50% of median block count, exclude it
+        if (lastBucket.blocks_in_bucket < medianBlockCount * 0.5) {
+          timeSeries = timeSeries.slice(0, -1);
+        }
+      }
+
       // Calculate summary statistics
       const values = timeSeries.map((t) => t.value);
       const avg = values.reduce((sum, v) => sum + v, 0) / values.length;
       const min = Math.min(...values);
       const max = Math.max(...values);
 
-      const summary = {
+      // Check if we got significantly less data than expected (expectedBuckets already calculated above)
+      const dataCompleteness = (timeSeries.length / expectedBuckets) * 100;
+      const hasPartialData = dataCompleteness < 80; // Less than 80% of expected buckets
+
+      const summary: any = {
         metric,
         interval,
         duration,
         total_buckets: timeSeries.length,
+        expected_buckets: expectedBuckets,
         total_blocks: results.length,
         from_block: fromBlock,
-        to_block: latestBlock,
+        to_block: toBlock,
         statistics: {
           avg: parseFloat(avg.toFixed(2)),
           min: parseFloat(min.toFixed(2)),
@@ -243,21 +237,30 @@ FAST: Returns time-bucketed data ready for charting or analysis.`,
         },
       };
 
+      // Add warning if data is incomplete
+      if (hasPartialData) {
+        summary.warning = `Partial data returned: Got ${timeSeries.length}/${expectedBuckets} expected buckets (${dataCompleteness.toFixed(0)}%). Portal API may have hit size limits. Results may be incomplete.`;
+      }
+
       if (address) {
         (summary as any).filtered_by_address = address;
       }
+
+      const resultMessage = hasPartialData
+        ? `WARNING: Partial data! Aggregated ${metric} over ${duration} in ${interval} intervals. Got ${timeSeries.length}/${expectedBuckets} expected data points. Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`
+        : `Aggregated ${metric} over ${duration} in ${interval} intervals. ${timeSeries.length} data points. Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`;
 
       return formatResult(
         {
           summary,
           time_series: timeSeries,
         },
-        `Aggregated ${metric} over ${duration} in ${interval} intervals. ${timeSeries.length} data points. Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`,
+        resultMessage,
         {
           metadata: {
             dataset,
             from_block: fromBlock,
-            to_block: latestBlock,
+            to_block: toBlock,
             query_start_time: queryStartTime,
           },
         },

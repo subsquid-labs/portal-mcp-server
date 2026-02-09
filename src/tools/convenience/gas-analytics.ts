@@ -1,10 +1,11 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PORTAL_URL } from "../../constants/index.js";
-import { resolveDataset, getBlockHead } from "../../cache/datasets.js";
+import { resolveDataset } from "../../cache/datasets.js";
 import { detectChainType } from "../../helpers/chain.js";
 import { portalFetchStream } from "../../helpers/fetch.js";
 import { formatResult } from "../../helpers/format.js";
+import { getBlockRangeForDuration } from "../../helpers/timestamp-to-block.js";
 
 // ============================================================================
 // Tool: Get Gas Analytics
@@ -54,34 +55,15 @@ FAST: Returns percentiles, trends, and actionable recommendations.`,
         throw new Error("portal_get_gas_analytics is only for EVM chains");
       }
 
-      // Get latest block
-      const head = await getBlockHead(dataset);
-      const latestBlock = head.number;
-
-      // Calculate block range based on timeframe
-      let blockRange: number;
-      switch (timeframe) {
-        case "1h":
-          blockRange = 300; // ~1 hour (12s blocks)
-          break;
-        case "6h":
-          blockRange = 1800; // ~6 hours
-          break;
-        case "24h":
-          blockRange = 7200; // ~24 hours
-          break;
-        case "7d":
-          blockRange = 50400; // ~7 days
-          break;
-      }
-
-      const fromBlock = Math.max(0, latestBlock - blockRange + 1);
+      // Get block range using Portal's timestamp-to-block API
+      const { fromBlock, toBlock } = await getBlockRangeForDuration(dataset, timeframe);
 
       // Query block data with gas fields
       const query = {
         type: "evm",
         fromBlock,
-        toBlock: latestBlock,
+        toBlock,
+        includeAllBlocks: true, // CRITICAL: Return all blocks, not just those with matching transactions
         fields: {
           block: {
             number: true,
@@ -91,7 +73,7 @@ FAST: Returns percentiles, trends, and actionable recommendations.`,
             baseFeePerGas: true,
           },
         },
-        transactions: [], // Don't need transaction data
+        // Don't specify transactions filter at all - we want ALL blocks
       };
 
       const results = await portalFetchStream(
@@ -100,17 +82,21 @@ FAST: Returns percentiles, trends, and actionable recommendations.`,
       );
 
       // Extract gas data
+      // Portal API may return block data directly or wrapped in 'header'
       const gasData = results
-        .map((block: any) => ({
-          block_number: block.number,
-          timestamp: block.timestamp,
-          gas_used: parseInt(block.gasUsed || "0"),
-          gas_limit: parseInt(block.gasLimit || "0"),
-          base_fee: block.baseFeePerGas ? parseInt(block.baseFeePerGas) : null,
-          utilization: block.gasLimit
-            ? (parseInt(block.gasUsed || "0") / parseInt(block.gasLimit)) * 100
-            : 0,
-        }))
+        .map((item: any) => {
+          const block = item.header || item;
+          return {
+            block_number: block.number,
+            timestamp: block.timestamp,
+            gas_used: parseInt(block.gasUsed || "0"),
+            gas_limit: parseInt(block.gasLimit || "0"),
+            base_fee: block.baseFeePerGas ? parseInt(block.baseFeePerGas) : null,
+            utilization: block.gasLimit
+              ? (parseInt(block.gasUsed || "0") / parseInt(block.gasLimit)) * 100
+              : 0,
+          };
+        })
         .filter((d) => d.base_fee !== null);
 
       if (gasData.length === 0) {
@@ -199,7 +185,7 @@ FAST: Returns percentiles, trends, and actionable recommendations.`,
           metadata: {
             dataset,
             from_block: fromBlock,
-            to_block: latestBlock,
+            to_block: toBlock,
             query_start_time: queryStartTime,
           },
         },

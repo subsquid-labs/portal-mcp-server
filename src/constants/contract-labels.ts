@@ -36,7 +36,7 @@ export const BASE_LABELS: ContractLabel[] = [
   { address: "0x50c5725949a6f0c72e6c4a641f24049a917db0cb", name: "Dai Stablecoin", category: "token", symbol: "DAI" },
 
   // DEXs
-  { address: "0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24", name: "BaseSwap Router", category: "dex", website: "baseswap.fi" },
+  { address: "0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24", name: "Uniswap V2 Router", category: "dex", website: "uniswap.org" },
   { address: "0x327df1e6de05895d2ab08513aadd9313fe505d86", name: "Aerodrome Router", category: "dex", website: "aerodrome.finance" },
 ];
 
@@ -92,10 +92,21 @@ export function resolveContractLabel(
   address: string,
   dataset: string
 ): ContractLabel | undefined {
+  const normalized = address.toLowerCase();
+
+  // Special case: null address (burn address)
+  if (normalized === "0x0000000000000000000000000000000000000000") {
+    return {
+      address: normalized,
+      name: "Null Address (Burn)",
+      category: "other",
+      symbol: "NULL",
+    };
+  }
+
   const labels = CONTRACT_LABELS[dataset];
   if (!labels) return undefined;
 
-  const normalized = address.toLowerCase();
   return labels.find((l) => l.address.toLowerCase() === normalized);
 }
 

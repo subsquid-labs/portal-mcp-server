@@ -95,7 +95,7 @@ export function buildEvmTraceFields() {
     traceAddress: true,
     subtraces: true,
     transactionIndex: true,
-    transactionHash: true,
+    // transactionHash: true,  // REMOVED: Not a valid field in Portal API trace schema
     type: true,
     error: true,
     revertReason: true,
@@ -131,7 +131,7 @@ export function buildEvmTraceFields() {
 export function buildEvmStateDiffFields() {
   return {
     transactionIndex: true,
-    transactionHash: true,
+    // transactionHash: true,  // REMOVED: Not a valid field in Portal API stateDiff schema
     address: true,
     key: true,
     kind: true,

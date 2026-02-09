@@ -1,10 +1,13 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { PORTAL_URL, EVENT_SIGNATURES } from "../../constants/index.js";
-import { resolveDataset, getBlockHead } from "../../cache/datasets.js";
+import { resolveDataset } from "../../cache/datasets.js";
 import { detectChainType, isL2Chain } from "../../helpers/chain.js";
 import { portalFetch, portalFetchStream } from "../../helpers/fetch.js";
 import { formatResult } from "../../helpers/format.js";
+import { resolveContractLabel } from "../../constants/contract-labels.js";
+import { formatTimestamp, formatTokenAmount, hexToBigInt } from "../../helpers/formatting.js";
+import { getBlockRangeForDuration } from "../../helpers/timestamp-to-block.js";
 import {
   buildEvmTransactionFields,
   buildEvmLogFields,
@@ -88,38 +91,59 @@ SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get
 
       const normalizedAddress = normalizeEvmAddress(address);
 
-      // Get latest block (cached for 30s)
-      const head = await getBlockHead(dataset);
-      const latestBlock = head.number;
+      // Get block range using Portal's timestamp-to-block API
+      let fromBlock: number;
+      let toBlock: number;
 
-      // Calculate block range
-      let blockRange: number;
-      switch (timeframe) {
-        case "1h":
-          blockRange = 1800;
-          break;
-        case "24h":
-          blockRange = 43200;
-          break;
-        case "7d":
-          blockRange = 302400;
-          break;
-        default:
-          blockRange = parseInt(timeframe);
+      if (timeframe === "1h" || timeframe === "24h" || timeframe === "7d") {
+        const range = await getBlockRangeForDuration(dataset, timeframe);
+        fromBlock = range.fromBlock;
+        toBlock = range.toBlock;
+      } else {
+        // Custom block range (number string)
+        const blockRange = parseInt(timeframe);
+        const range = await getBlockRangeForDuration(dataset, "1h"); // Get current block
+        toBlock = range.toBlock;
+        fromBlock = Math.max(0, toBlock - blockRange);
       }
-
-      const fromBlock = Math.max(0, latestBlock - blockRange);
-      const toBlock = latestBlock;
       const includeL2 = isL2Chain(dataset);
 
       // Query 1: Transactions
+      // Use minimal transaction fields for summary (avoid context bloat)
+      const txFields: Record<string, boolean> = {
+        transactionIndex: true,
+        hash: true,
+        from: true,
+        to: true,
+        value: true,
+        // input: true,  // REMOVED: Can be huge, not needed in summary
+        nonce: true,
+        gas: true,
+        gasPrice: true,
+        gasUsed: true,
+        // cumulativeGasUsed: true,  // REMOVED: Not useful in wallet summary
+        effectiveGasPrice: true,
+        type: true,
+        status: true,
+        sighash: true,
+        contractAddress: true,
+        // v: true,  // REMOVED: Signature components waste 96 bytes
+        // r: true,
+        // s: true,
+      };
+
+      if (includeL2) {
+        txFields.l1Fee = true;
+        txFields.l1GasUsed = true;
+      }
+
       const txQuery = {
         type: "evm",
         fromBlock,
         toBlock,
         fields: {
           block: { number: true, timestamp: true },
-          transaction: buildEvmTransactionFields(includeL2),
+          transaction: txFields,
         },
         transactions: [
           { from: [normalizedAddress] },
@@ -181,21 +205,36 @@ SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get
                 data: string;
               }>;
             };
-            return (b.logs || []).map((log) => ({
-              block_number: b.header?.number,
-              timestamp: b.header?.timestamp,
-              transaction_hash: log.transactionHash,
-              log_index: log.logIndex,
-              token_address: log.address,
-              from: "0x" + (log.topics?.[1]?.slice(-40) || ""),
-              to: "0x" + (log.topics?.[2]?.slice(-40) || ""),
-              value: log.data,
-              direction:
-                "0x" + (log.topics?.[1]?.slice(-40) || "") ===
-                normalizedAddress
-                  ? "out"
-                  : "in",
-            }));
+            return (b.logs || []).map((log) => {
+              const tokenAddress = log.address.toLowerCase();
+              const tokenLabel = resolveContractLabel(tokenAddress, dataset);
+              const rawValue = log.data;
+
+              // Assume 18 decimals if unknown (ERC20 standard)
+              const decimals = 18;
+              const formattedValue = formatTokenAmount(rawValue, decimals, tokenLabel?.symbol);
+
+              return {
+                block_number: b.header?.number,
+                timestamp: b.header?.timestamp,
+                timestamp_human: b.header?.timestamp ? formatTimestamp(b.header.timestamp) : undefined,
+                transaction_hash: log.transactionHash,
+                log_index: log.logIndex,
+                token_address: tokenAddress,
+                token_name: tokenLabel?.name,
+                token_symbol: tokenLabel?.symbol,
+                from: "0x" + (log.topics?.[1]?.slice(-40) || ""),
+                to: "0x" + (log.topics?.[2]?.slice(-40) || ""),
+                value_raw: rawValue,
+                value: formattedValue,
+                value_decimal: hexToBigInt(rawValue).toString(),
+                direction:
+                  "0x" + (log.topics?.[1]?.slice(-40) || "") ===
+                  normalizedAddress
+                    ? "out"
+                    : "in",
+              };
+            });
           })
           .slice(0, limit_per_type);
       }
@@ -270,7 +309,12 @@ SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get
           .slice(0, limit_per_type);
       }
 
-      const summary = {
+      // Check if we hit the limit (partial data)
+      const hitTxLimit = transactions.length === limit_per_type;
+      const hitTokenLimit = include_tokens && tokenTransfers.length === limit_per_type;
+      const hitNftLimit = include_nfts && nftTransfers.length === limit_per_type;
+
+      const summary: any = {
         address: normalizedAddress,
         timeframe: {
           from_block: fromBlock,
@@ -301,9 +345,22 @@ SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get
           : null,
       };
 
+      // Add warning if we hit limits
+      if (hitTxLimit || hitTokenLimit || hitNftLimit) {
+        const limitedItems = [];
+        if (hitTxLimit) limitedItems.push("transactions");
+        if (hitTokenLimit) limitedItems.push("token transfers");
+        if (hitNftLimit) limitedItems.push("NFT transfers");
+        summary.warning = `Results limited: ${limitedItems.join(", ")} reached the ${limit_per_type} item limit. There may be more data available.`;
+      }
+
+      const message = (hitTxLimit || hitTokenLimit || hitNftLimit)
+        ? `WARNING: Partial results (limit reached). Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers`
+        : `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers`;
+
       return formatResult(
         summary,
-        `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers`,
+        message,
         {
           metadata: {
             dataset,

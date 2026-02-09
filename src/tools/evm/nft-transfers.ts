@@ -57,14 +57,32 @@ export function registerGetNftTransfersTool(server: McpServer) {
       );
       const endBlock = to_block ?? head.number;
 
+      // NOTE: We only query ERC1155 events (TransferSingle/TransferBatch) because
+      // ERC721 Transfer has the same signature as ERC20 Transfer, making them
+      // indistinguishable. To properly detect ERC721, you'd need to:
+      // 1. Know the contract addresses ahead of time, OR
+      // 2. Check contract code for ERC721 interface support
+      //
+      // For now, this tool only returns ERC1155 NFTs to avoid false positives.
       const signatures: string[] = [];
-      if (token_standard === "erc721" || token_standard === "both") {
-        signatures.push(EVENT_SIGNATURES.TRANSFER_ERC721);
+
+      if (token_standard === "erc721") {
+        throw new Error(
+          "ERC721 detection not supported - Transfer event signature is identical to ERC20. " +
+          "Use 'erc1155' or 'both' for reliable NFT detection, or provide specific contract_addresses."
+        );
       }
-      if (token_standard === "erc1155" || token_standard === "both") {
-        signatures.push(EVENT_SIGNATURES.TRANSFER_SINGLE);
-        signatures.push(EVENT_SIGNATURES.TRANSFER_BATCH);
+
+      if (token_standard === "both" && !contract_addresses) {
+        console.warn(
+          "WARNING: ERC721 Transfer events cannot be distinguished from ERC20 without contract addresses. " +
+          "Only returning ERC1155 transfers."
+        );
       }
+
+      // Only use ERC1155-specific signatures which are unique
+      signatures.push(EVENT_SIGNATURES.TRANSFER_SINGLE);
+      signatures.push(EVENT_SIGNATURES.TRANSFER_BATCH);
 
       const logFilter: Record<string, unknown> = {
         topic0: signatures,
@@ -106,12 +124,7 @@ export function registerGetNftTransfersTool(server: McpServer) {
             let to = "";
             let tokenId = "";
 
-            if (topic0 === EVENT_SIGNATURES.TRANSFER_ERC721) {
-              transferType = "erc721";
-              from = "0x" + (log.topics?.[1]?.slice(-40) || "");
-              to = "0x" + (log.topics?.[2]?.slice(-40) || "");
-              tokenId = log.topics?.[3] || "";
-            } else if (topic0 === EVENT_SIGNATURES.TRANSFER_SINGLE) {
+            if (topic0 === EVENT_SIGNATURES.TRANSFER_SINGLE) {
               transferType = "erc1155_single";
               from = "0x" + (log.topics?.[2]?.slice(-40) || "");
               to = "0x" + (log.topics?.[3]?.slice(-40) || "");
