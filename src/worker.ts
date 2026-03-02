@@ -5,8 +5,9 @@
 
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 
-import { PORTAL_URL, VERSION } from './constants/index.js'
+import { PORTAL_URL } from './constants/index.js'
 import { createPortalServer } from './server.js'
+import { npmVersion } from './version.js'
 
 // ============================================================================
 // SQD Portal MCP Server - Cloudflare Worker Entry Point
@@ -26,7 +27,7 @@ export default {
       return new Response(
         JSON.stringify({
           status: 'ok',
-          version: VERSION,
+          version: npmVersion,
           portal_url: portalUrl,
         }),
         {
@@ -70,7 +71,7 @@ export default {
 
     // Default response
     return new Response(
-      `SQD Portal MCP Server v${VERSION}\n\nEndpoints:\n- GET /health - Health check\n- POST /mcp - MCP protocol endpoint`,
+      `SQD Portal MCP Server v${npmVersion}\n\nEndpoints:\n- GET /health - Health check\n- POST /mcp - MCP protocol endpoint`,
       {
         headers: { 'Content-Type': 'text/plain' },
       },

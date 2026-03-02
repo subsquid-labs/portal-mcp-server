@@ -1,8 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
-import { VERSION } from './constants/index.js'
 import { registerSchemaResource } from './resources/schema.js'
 import { registerAllTools } from './tools/index.js'
+import { npmVersion } from './version.js'
 
 // ============================================================================
 // Server Factory
@@ -11,7 +11,8 @@ import { registerAllTools } from './tools/index.js'
 export function createPortalServer(): McpServer {
   const server = new McpServer({
     name: 'sqd-portal-mcp-server',
-    version: VERSION,
+    version: npmVersion,
+
   })
 
   // Register resources
