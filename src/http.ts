@@ -29,7 +29,7 @@ const server = createServer(async (req, res) => {
   }
 
   // MCP endpoint
-  if (url.pathname === '/mcp') {
+  if (url.pathname === '/') {
     if (req.method === 'POST') {
       try {
         const mcpServer = createPortalServer()
@@ -63,7 +63,7 @@ const server = createServer(async (req, res) => {
       return
     }
 
-    // GET and DELETE not supported in stateless mode
+    // GET and DELETE aren't supported in stateless mode
     res.writeHead(405, { 'Content-Type': 'application/json' })
     res.end(
       JSON.stringify({
@@ -74,18 +74,10 @@ const server = createServer(async (req, res) => {
     )
     return
   }
-
-  // Default response
-  res.writeHead(200, { 'Content-Type': 'text/plain' })
-  res.end(
-    `SQD Portal MCP Server v${npmVersion}\n\nEndpoints:\n- GET /health - Health check\n- POST /mcp - MCP protocol endpoint`,
-  )
 })
 
 server.listen(PORT, () => {
   console.log(`SQD Portal MCP Server listening on http://localhost:${PORT}`)
-  console.log(`Health check: http://localhost:${PORT}/health`)
-  console.log(`MCP endpoint: http://localhost:${PORT}/mcp`)
 })
 
 process.on('SIGINT', () => {
