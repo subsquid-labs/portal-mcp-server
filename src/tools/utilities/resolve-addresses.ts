@@ -1,8 +1,9 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveDataset } from "../../cache/datasets.js";
-import { formatResult } from "../../helpers/format.js";
-import { resolveContractLabel, getLabelsForDataset } from "../../constants/contract-labels.js";
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+
+import { resolveDataset } from '../../cache/datasets.js'
+import { getLabelsForDataset, resolveContractLabel } from '../../constants/contract-labels.js'
+import { formatResult } from '../../helpers/format.js'
 
 // ============================================================================
 // Tool: Resolve Contract Addresses
@@ -14,7 +15,7 @@ import { resolveContractLabel, getLabelsForDataset } from "../../constants/contr
  */
 export function registerResolveAddressesTool(server: McpServer) {
   server.tool(
-    "portal_resolve_addresses",
+    'portal_resolve_addresses',
     `Resolve contract addresses to human-readable labels (USDC, Uniswap, etc.). Avoids manual lookups.
 
 WHEN TO USE:
@@ -32,32 +33,25 @@ EXAMPLES:
 
 FAST: Instant lookup from built-in database. No API calls.`,
     {
-      dataset: z.string().describe("Dataset name"),
-      addresses: z
-        .array(z.string())
-        .optional()
-        .describe("Contract addresses to resolve"),
-      list_all: z
-        .boolean()
-        .optional()
-        .default(false)
-        .describe("List all known contracts for this chain"),
+      dataset: z.string().describe('Dataset name'),
+      addresses: z.array(z.string()).optional().describe('Contract addresses to resolve'),
+      list_all: z.boolean().optional().default(false).describe('List all known contracts for this chain'),
     },
     async ({ dataset, addresses, list_all }) => {
-      const queryStartTime = Date.now();
-      dataset = await resolveDataset(dataset);
+      const queryStartTime = Date.now()
+      dataset = await resolveDataset(dataset)
 
       if (list_all) {
         // Return all known labels for this dataset
-        const labels = getLabelsForDataset(dataset);
+        const labels = getLabelsForDataset(dataset)
         const grouped = {
-          tokens: labels.filter((l) => l.category === "token"),
-          dexs: labels.filter((l) => l.category === "dex"),
-          lending: labels.filter((l) => l.category === "lending"),
-          bridges: labels.filter((l) => l.category === "bridge"),
-          nfts: labels.filter((l) => l.category === "nft"),
-          other: labels.filter((l) => l.category === "other"),
-        };
+          tokens: labels.filter((l) => l.category === 'token'),
+          dexs: labels.filter((l) => l.category === 'dex'),
+          lending: labels.filter((l) => l.category === 'lending'),
+          bridges: labels.filter((l) => l.category === 'bridge'),
+          nfts: labels.filter((l) => l.category === 'nft'),
+          other: labels.filter((l) => l.category === 'other'),
+        }
 
         return formatResult(
           {
@@ -78,17 +72,17 @@ FAST: Instant lookup from built-in database. No API calls.`,
               dataset,
               query_start_time: queryStartTime,
             },
-          }
-        );
+          },
+        )
       }
 
       if (!addresses || addresses.length === 0) {
-        throw new Error("Either provide addresses or set list_all=true");
+        throw new Error('Either provide addresses or set list_all=true')
       }
 
       // Resolve each address
       const resolved = addresses.map((addr) => {
-        const label = resolveContractLabel(addr, dataset);
+        const label = resolveContractLabel(addr, dataset)
         if (label) {
           return {
             address: addr,
@@ -97,21 +91,21 @@ FAST: Instant lookup from built-in database. No API calls.`,
             category: label.category,
             symbol: label.symbol,
             website: label.website,
-          };
+          }
         }
         return {
           address: addr,
           found: false,
-          name: "Unknown",
-          category: "unknown",
-        };
-      });
+          name: 'Unknown',
+          category: 'unknown',
+        }
+      })
 
-      const foundCount = resolved.filter((r) => r.found).length;
+      const foundCount = resolved.filter((r) => r.found).length
       const message =
         foundCount > 0
           ? `Resolved ${foundCount}/${addresses.length} addresses`
-          : `No known labels for provided addresses on ${dataset}`;
+          : `No known labels for provided addresses on ${dataset}`
 
       return formatResult(
         {
@@ -125,8 +119,8 @@ FAST: Instant lookup from built-in database. No API calls.`,
             dataset,
             query_start_time: queryStartTime,
           },
-        }
-      );
-    }
-  );
+        },
+      )
+    },
+  )
 }

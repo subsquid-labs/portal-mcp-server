@@ -1,10 +1,11 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PORTAL_URL } from "../../constants/index.js";
-import { resolveDataset, getBlockHead } from "../../cache/datasets.js";
-import { detectChainType } from "../../helpers/chain.js";
-import { portalFetchStream } from "../../helpers/fetch.js";
-import { formatResult } from "../../helpers/format.js";
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+
+import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
+import { PORTAL_URL } from '../../constants/index.js'
+import { detectChainType } from '../../helpers/chain.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
+import { formatResult } from '../../helpers/format.js'
 
 // ============================================================================
 // Tool: Compare Chains
@@ -16,7 +17,7 @@ import { formatResult } from "../../helpers/format.js";
  */
 export function registerCompareChainsTool(server: McpServer) {
   server.tool(
-    "portal_compare_chains",
+    'portal_compare_chains',
     `Compare metrics across multiple chains in ONE call. Perfect for decision-making.
 
 WHEN TO USE:
@@ -41,62 +42,64 @@ FAST: Runs queries in parallel, returns ranked results.`,
         .max(10)
         .describe("Chain names to compare (2-10 chains). Supports short names like 'polygon', 'base', 'ethereum'"),
       metric: z
-        .enum(["transaction_density", "gas_prices", "active_addresses"])
-        .describe("Metric to compare across chains"),
+        .enum(['transaction_density', 'gas_prices', 'active_addresses'])
+        .describe('Metric to compare across chains'),
       num_blocks: z
         .number()
         .max(1000)
         .optional()
         .default(50)
-        .describe("Number of recent blocks to analyze (default: 50, used for transaction_density)"),
+        .describe('Number of recent blocks to analyze (default: 50, used for transaction_density)'),
       timeframe: z
-        .enum(["1h", "6h", "24h", "7d"])
+        .enum(['1h', '6h', '24h', '7d'])
         .optional()
-        .default("24h")
-        .describe("Timeframe for gas_prices analysis (default: 24h)"),
+        .default('24h')
+        .describe('Timeframe for gas_prices analysis (default: 24h)'),
     },
     async ({ chains, metric, num_blocks, timeframe }) => {
-      const queryStartTime = Date.now();
+      const queryStartTime = Date.now()
 
       // Resolve all chain names
       const resolvedChains = await Promise.all(
         chains.map(async (chain) => {
           try {
-            const resolved = await resolveDataset(chain);
-            return { original: chain, resolved, valid: true };
+            const resolved = await resolveDataset(chain)
+            return { original: chain, resolved, valid: true }
           } catch (e) {
-            return { original: chain, resolved: null, valid: false, error: (e as Error).message };
+            return { original: chain, resolved: null, valid: false, error: (e as Error).message }
           }
-        })
-      );
+        }),
+      )
 
-      const validChains = resolvedChains.filter((c) => c.valid);
-      const invalidChains = resolvedChains.filter((c) => !c.valid);
+      const validChains = resolvedChains.filter((c) => c.valid)
+      const invalidChains = resolvedChains.filter((c) => !c.valid)
 
       if (validChains.length === 0) {
-        throw new Error(`No valid chains found. Errors: ${invalidChains.map((c) => `${c.original}: ${c.error}`).join(", ")}`);
+        throw new Error(
+          `No valid chains found. Errors: ${invalidChains.map((c) => `${c.original}: ${c.error}`).join(', ')}`,
+        )
       }
 
       // Run metric queries in parallel
-      const results: Record<string, any> = {};
+      const results: Record<string, any> = {}
 
-      if (metric === "transaction_density") {
+      if (metric === 'transaction_density') {
         // Get transaction density for each chain
         const densityPromises = validChains.map(async (chainInfo) => {
           try {
-            const dataset = chainInfo.resolved!;
-            const chainType = detectChainType(dataset);
+            const dataset = chainInfo.resolved!
+            const chainType = detectChainType(dataset)
 
-            if (chainType !== "evm") {
-              return { chain: chainInfo.original, error: "Not an EVM chain", value: null };
+            if (chainType !== 'evm') {
+              return { chain: chainInfo.original, error: 'Not an EVM chain', value: null }
             }
 
-            const head = await getBlockHead(dataset);
-            const latestBlock = head.number;
-            const fromBlock = Math.max(0, latestBlock - num_blocks + 1);
+            const head = await getBlockHead(dataset)
+            const latestBlock = head.number
+            const fromBlock = Math.max(0, latestBlock - num_blocks + 1)
 
             const query = {
-              type: "evm",
+              type: 'evm',
               fromBlock,
               toBlock: latestBlock,
               fields: {
@@ -104,15 +107,12 @@ FAST: Runs queries in parallel, returns ranked results.`,
                 transaction: { transactionIndex: true },
               },
               transactions: [{}],
-            };
+            }
 
-            const blocks = await portalFetchStream(
-              `${PORTAL_URL}/datasets/${dataset}/stream`,
-              query,
-            );
+            const blocks = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
-            const totalTxs = blocks.reduce((sum: number, block: any) => sum + (block.transactions?.length || 0), 0);
-            const avgTxsPerBlock = blocks.length > 0 ? totalTxs / blocks.length : 0;
+            const totalTxs = blocks.reduce((sum: number, block: any) => sum + (block.transactions?.length || 0), 0)
+            const avgTxsPerBlock = blocks.length > 0 ? totalTxs / blocks.length : 0
 
             return {
               chain: chainInfo.original,
@@ -120,80 +120,77 @@ FAST: Runs queries in parallel, returns ranked results.`,
               value: parseFloat(avgTxsPerBlock.toFixed(2)),
               total_transactions: totalTxs,
               blocks_analyzed: blocks.length,
-              unit: "txs/block",
-            };
+              unit: 'txs/block',
+            }
           } catch (error) {
             return {
               chain: chainInfo.original,
               error: (error as Error).message,
               value: null,
-            };
+            }
           }
-        });
+        })
 
-        const densityResults = await Promise.all(densityPromises);
+        const densityResults = await Promise.all(densityPromises)
 
         densityResults.forEach((result) => {
-          results[result.chain] = result;
-        });
-      } else if (metric === "gas_prices") {
+          results[result.chain] = result
+        })
+      } else if (metric === 'gas_prices') {
         // Get gas analytics for each chain
         const gasPromises = validChains.map(async (chainInfo) => {
           try {
-            const dataset = chainInfo.resolved!;
-            const chainType = detectChainType(dataset);
+            const dataset = chainInfo.resolved!
+            const chainType = detectChainType(dataset)
 
-            if (chainType !== "evm") {
-              return { chain: chainInfo.original, error: "Not an EVM chain", value: null };
+            if (chainType !== 'evm') {
+              return { chain: chainInfo.original, error: 'Not an EVM chain', value: null }
             }
 
-            const head = await getBlockHead(dataset);
-            const latestBlock = head.number;
+            const head = await getBlockHead(dataset)
+            const latestBlock = head.number
 
-            let blockRange: number;
+            let blockRange: number
             switch (timeframe) {
-              case "1h":
-                blockRange = 300;
-                break;
-              case "6h":
-                blockRange = 1800;
-                break;
-              case "24h":
-                blockRange = 7200;
-                break;
-              case "7d":
-                blockRange = 50400;
-                break;
+              case '1h':
+                blockRange = 300
+                break
+              case '6h':
+                blockRange = 1800
+                break
+              case '24h':
+                blockRange = 7200
+                break
+              case '7d':
+                blockRange = 50400
+                break
             }
 
-            const fromBlock = Math.max(0, latestBlock - blockRange + 1);
+            const fromBlock = Math.max(0, latestBlock - blockRange + 1)
 
             const query = {
-              type: "evm",
+              type: 'evm',
               fromBlock,
               toBlock: latestBlock,
               fields: {
                 block: { baseFeePerGas: true },
               },
               transactions: [],
-            };
+            }
 
-            const blocks = await portalFetchStream(
-              `${PORTAL_URL}/datasets/${dataset}/stream`,
-              query,
-            );
+            const blocks = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
             const baseFees = blocks
               .map((b: any) => (b.baseFeePerGas ? parseInt(b.baseFeePerGas) : null))
-              .filter((f: number | null) => f !== null) as number[];
+              .filter((f: number | null) => f !== null) as number[]
 
             if (baseFees.length === 0) {
-              return { chain: chainInfo.original, error: "No gas data available", value: null };
+              return { chain: chainInfo.original, error: 'No gas data available', value: null }
             }
 
-            const avg = baseFees.reduce((sum, v) => sum + v, 0) / baseFees.length;
-            const current = baseFees[baseFees.length - 1];
-            const toGwei = (wei: number) => (wei / 1e9).toFixed(2);
+            const avg = baseFees.reduce((sum, v) => sum + v, 0) / baseFees.length
+            const current = baseFees[baseFees.length - 1]
+            const toGwei = (wei: number) => (wei / 1e9).toFixed(2)
 
             return {
               chain: chainInfo.original,
@@ -202,39 +199,39 @@ FAST: Runs queries in parallel, returns ranked results.`,
               avg_gwei: parseFloat(toGwei(avg)),
               min_gwei: parseFloat(toGwei(Math.min(...baseFees))),
               max_gwei: parseFloat(toGwei(Math.max(...baseFees))),
-              unit: "Gwei",
-            };
+              unit: 'Gwei',
+            }
           } catch (error) {
             return {
               chain: chainInfo.original,
               error: (error as Error).message,
               value: null,
-            };
+            }
           }
-        });
+        })
 
-        const gasResults = await Promise.all(gasPromises);
+        const gasResults = await Promise.all(gasPromises)
 
         gasResults.forEach((result) => {
-          results[result.chain] = result;
-        });
-      } else if (metric === "active_addresses") {
+          results[result.chain] = result
+        })
+      } else if (metric === 'active_addresses') {
         // Get active addresses (unique from/to addresses in recent blocks)
         const addressPromises = validChains.map(async (chainInfo) => {
           try {
-            const dataset = chainInfo.resolved!;
-            const chainType = detectChainType(dataset);
+            const dataset = chainInfo.resolved!
+            const chainType = detectChainType(dataset)
 
-            if (chainType !== "evm") {
-              return { chain: chainInfo.original, error: "Not an EVM chain", value: null };
+            if (chainType !== 'evm') {
+              return { chain: chainInfo.original, error: 'Not an EVM chain', value: null }
             }
 
-            const head = await getBlockHead(dataset);
-            const latestBlock = head.number;
-            const fromBlock = Math.max(0, latestBlock - num_blocks + 1);
+            const head = await getBlockHead(dataset)
+            const latestBlock = head.number
+            const fromBlock = Math.max(0, latestBlock - num_blocks + 1)
 
             const query = {
-              type: "evm",
+              type: 'evm',
               fromBlock,
               toBlock: latestBlock,
               fields: {
@@ -242,54 +239,51 @@ FAST: Runs queries in parallel, returns ranked results.`,
                 transaction: { from: true, to: true },
               },
               transactions: [{}],
-            };
+            }
 
-            const blocks = await portalFetchStream(
-              `${PORTAL_URL}/datasets/${dataset}/stream`,
-              query,
-            );
+            const blocks = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
-            const uniqueAddresses = new Set<string>();
+            const uniqueAddresses = new Set<string>()
             blocks.forEach((block: any) => {
               block.transactions?.forEach((tx: any) => {
-                if (tx.from) uniqueAddresses.add(tx.from.toLowerCase());
-                if (tx.to) uniqueAddresses.add(tx.to.toLowerCase());
-              });
-            });
+                if (tx.from) uniqueAddresses.add(tx.from.toLowerCase())
+                if (tx.to) uniqueAddresses.add(tx.to.toLowerCase())
+              })
+            })
 
             return {
               chain: chainInfo.original,
               resolved_name: dataset,
               value: uniqueAddresses.size,
               blocks_analyzed: blocks.length,
-              unit: "unique addresses",
-            };
+              unit: 'unique addresses',
+            }
           } catch (error) {
             return {
               chain: chainInfo.original,
               error: (error as Error).message,
               value: null,
-            };
+            }
           }
-        });
+        })
 
-        const addressResults = await Promise.all(addressPromises);
+        const addressResults = await Promise.all(addressPromises)
 
         addressResults.forEach((result) => {
-          results[result.chain] = result;
-        });
+          results[result.chain] = result
+        })
       }
 
       // Rank results
-      const successfulResults = Object.values(results).filter((r: any) => r.value !== null);
-      const failedResults = Object.values(results).filter((r: any) => r.value === null);
+      const successfulResults = Object.values(results).filter((r: any) => r.value !== null)
+      const failedResults = Object.values(results).filter((r: any) => r.value === null)
 
-      successfulResults.sort((a: any, b: any) => b.value - a.value);
+      successfulResults.sort((a: any, b: any) => b.value - a.value)
 
       // Add rankings
       successfulResults.forEach((result: any, index: number) => {
-        result.rank = index + 1;
-      });
+        result.rank = index + 1
+      })
 
       const summary = {
         metric,
@@ -303,7 +297,7 @@ FAST: Runs queries in parallel, returns ranked results.`,
           value: r.value,
           unit: r.unit,
         })),
-      };
+      }
 
       return formatResult(
         { summary, details: results },
@@ -313,7 +307,7 @@ FAST: Runs queries in parallel, returns ranked results.`,
             query_start_time: queryStartTime,
           },
         },
-      );
+      )
     },
-  );
+  )
 }

@@ -1,11 +1,12 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PORTAL_URL } from "../../constants/index.js";
-import { resolveDataset, validateBlockRange } from "../../cache/datasets.js";
-import { detectChainType, isL2Chain } from "../../helpers/chain.js";
-import { portalFetchStream } from "../../helpers/fetch.js";
-import { formatResult } from "../../helpers/format.js";
-import { buildEvmBlockFields } from "../../helpers/fields.js";
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+
+import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { PORTAL_URL } from '../../constants/index.js'
+import { detectChainType, isL2Chain } from '../../helpers/chain.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
+import { buildEvmBlockFields } from '../../helpers/fields.js'
+import { formatResult } from '../../helpers/format.js'
 
 // ============================================================================
 // Tool: Query Blocks (EVM)
@@ -13,40 +14,31 @@ import { buildEvmBlockFields } from "../../helpers/fields.js";
 
 export function registerQueryBlocksTool(server: McpServer) {
   server.tool(
-    "portal_query_blocks",
-    "Query block data from an EVM dataset",
+    'portal_query_blocks',
+    'Query block data from an EVM dataset',
     {
-      dataset: z.string().describe("Dataset name or alias"),
-      from_block: z.number().describe("Starting block number"),
-      to_block: z.number().optional().describe("Ending block number"),
-      finalized_only: z
-        .boolean()
+      dataset: z.string().describe('Dataset name or alias'),
+      from_block: z.number().describe('Starting block number'),
+      to_block: z.number().optional().describe('Ending block number'),
+      finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
+      limit: z
+        .number()
         .optional()
-        .default(false)
-        .describe("Only query finalized blocks"),
-      limit: z.number().optional().default(20).describe("Max blocks to return (default: 20). Note: Lower default for MCP to reduce context usage."),
+        .default(20)
+        .describe('Max blocks to return (default: 20). Note: Lower default for MCP to reduce context usage.'),
       include_l2_fields: z
         .boolean()
         .optional()
         .default(false)
-        .describe("Include L2-specific fields (auto-detected for L2 chains)"),
+        .describe('Include L2-specific fields (auto-detected for L2 chains)'),
     },
-    async ({
-      dataset,
-      from_block,
-      to_block,
-      limit,
-      include_l2_fields,
-      finalized_only,
-    }) => {
-      const queryStartTime = Date.now();
-      dataset = await resolveDataset(dataset);
-      const chainType = detectChainType(dataset);
+    async ({ dataset, from_block, to_block, limit, include_l2_fields, finalized_only }) => {
+      const queryStartTime = Date.now()
+      dataset = await resolveDataset(dataset)
+      const chainType = detectChainType(dataset)
 
-      if (chainType !== "evm") {
-        throw new Error(
-          "portal_query_blocks is only for EVM chains. Use portal_query_solana_instructions for Solana.",
-        );
+      if (chainType !== 'evm') {
+        throw new Error('portal_query_blocks is only for EVM chains. Use portal_query_solana_instructions for Solana.')
       }
 
       const { validatedToBlock } = await validateBlockRange(
@@ -54,24 +46,21 @@ export function registerQueryBlocksTool(server: McpServer) {
         from_block,
         to_block ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
-      );
-      const endBlock = Math.min(from_block + limit!, validatedToBlock);
-      const includeL2 = include_l2_fields || isL2Chain(dataset);
+      )
+      const endBlock = Math.min(from_block + limit!, validatedToBlock)
+      const includeL2 = include_l2_fields || isL2Chain(dataset)
 
       const query = {
-        type: "evm",
+        type: 'evm',
         fromBlock: from_block,
         toBlock: endBlock,
         fields: {
           block: buildEvmBlockFields(includeL2),
         },
         includeAllBlocks: true,
-      };
+      }
 
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-      );
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
       return formatResult(results, `Retrieved ${results.length} blocks`, {
         metadata: {
@@ -80,7 +69,7 @@ export function registerQueryBlocksTool(server: McpServer) {
           to_block: endBlock,
           query_start_time: queryStartTime,
         },
-      });
+      })
     },
-  );
+  )
 }

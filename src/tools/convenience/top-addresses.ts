@@ -1,10 +1,11 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PORTAL_URL } from "../../constants/index.js";
-import { resolveDataset, getBlockHead } from "../../cache/datasets.js";
-import { detectChainType } from "../../helpers/chain.js";
-import { portalFetchStream } from "../../helpers/fetch.js";
-import { formatResult } from "../../helpers/format.js";
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+
+import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
+import { PORTAL_URL } from '../../constants/index.js'
+import { detectChainType } from '../../helpers/chain.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
+import { formatResult } from '../../helpers/format.js'
 
 // ============================================================================
 // Tool: Get Top Addresses
@@ -16,7 +17,7 @@ import { formatResult } from "../../helpers/format.js";
  */
 export function registerGetTopAddressesTool(server: McpServer) {
   server.tool(
-    "portal_get_top_addresses",
+    'portal_get_top_addresses',
     `Find the most active wallet addresses by transaction volume. Perfect for whale watching and trend analysis.
 
 WHEN TO USE:
@@ -41,36 +42,36 @@ FAST: Returns ranked list with transaction counts, percentages, and optional det
         .max(10000)
         .optional()
         .default(1000)
-        .describe("Number of recent blocks to analyze (default: 1000, max: 10000 for performance)"),
+        .describe('Number of recent blocks to analyze (default: 1000, max: 10000 for performance)'),
       limit: z
         .number()
         .max(100)
         .optional()
         .default(10)
-        .describe("Number of top addresses to return (default: 10, max: 100)"),
+        .describe('Number of top addresses to return (default: 10, max: 100)'),
       include_details: z
         .boolean()
         .optional()
         .default(false)
-        .describe("Include sample transaction hashes for each address"),
+        .describe('Include sample transaction hashes for each address'),
     },
     async ({ dataset, num_blocks, limit, include_details }) => {
-      const queryStartTime = Date.now();
-      dataset = await resolveDataset(dataset);
-      const chainType = detectChainType(dataset);
+      const queryStartTime = Date.now()
+      dataset = await resolveDataset(dataset)
+      const chainType = detectChainType(dataset)
 
-      if (chainType !== "evm") {
-        throw new Error("portal_get_top_addresses is only for EVM chains");
+      if (chainType !== 'evm') {
+        throw new Error('portal_get_top_addresses is only for EVM chains')
       }
 
       // Get latest block
-      const head = await getBlockHead(dataset);
-      const latestBlock = head.number;
-      const fromBlock = Math.max(0, latestBlock - num_blocks + 1);
+      const head = await getBlockHead(dataset)
+      const latestBlock = head.number
+      const fromBlock = Math.max(0, latestBlock - num_blocks + 1)
 
       // Query transactions
       const query = {
-        type: "evm",
+        type: 'evm',
         fromBlock,
         toBlock: latestBlock,
         fields: {
@@ -81,37 +82,34 @@ FAST: Returns ranked list with transaction counts, percentages, and optional det
           },
         },
         transactions: [{}], // Get all transactions
-      };
+      }
 
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-      );
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
       // Count transactions per address
-      const addressCounts: Map<string, { count: number; samples: string[] }> = new Map();
-      let totalTxs = 0;
+      const addressCounts: Map<string, { count: number; samples: string[] }> = new Map()
+      let totalTxs = 0
 
       results.forEach((block: any) => {
         block.transactions?.forEach((tx: any) => {
           if (tx.from) {
-            const address = tx.from.toLowerCase();
-            totalTxs++;
+            const address = tx.from.toLowerCase()
+            totalTxs++
 
             if (!addressCounts.has(address)) {
-              addressCounts.set(address, { count: 0, samples: [] });
+              addressCounts.set(address, { count: 0, samples: [] })
             }
 
-            const entry = addressCounts.get(address)!;
-            entry.count++;
+            const entry = addressCounts.get(address)!
+            entry.count++
 
             // Store sample transaction hashes (up to 5)
             if (include_details && entry.samples.length < 5) {
-              entry.samples.push(tx.hash);
+              entry.samples.push(tx.hash)
             }
           }
-        });
-      });
+        })
+      })
 
       // Convert to array and sort by transaction count
       const sortedAddresses = Array.from(addressCounts.entries())
@@ -122,12 +120,12 @@ FAST: Returns ranked list with transaction counts, percentages, and optional det
           sample_transactions: include_details ? data.samples : undefined,
         }))
         .sort((a, b) => b.transaction_count - a.transaction_count)
-        .slice(0, limit);
+        .slice(0, limit)
 
       // Add rank
       sortedAddresses.forEach((addr, index) => {
-        (addr as any).rank = index + 1;
-      });
+        ;(addr as any).rank = index + 1
+      })
 
       const summary = {
         total_transactions: totalTxs,
@@ -137,7 +135,7 @@ FAST: Returns ranked list with transaction counts, percentages, and optional det
         to_block: latestBlock,
         top_address: sortedAddresses[0]?.address,
         top_address_txs: sortedAddresses[0]?.transaction_count,
-      };
+      }
 
       return formatResult(
         {
@@ -153,7 +151,7 @@ FAST: Returns ranked list with transaction counts, percentages, and optional det
             query_start_time: queryStartTime,
           },
         },
-      );
+      )
     },
-  );
+  )
 }

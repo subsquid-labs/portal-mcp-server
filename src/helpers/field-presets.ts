@@ -36,7 +36,7 @@ export const LOG_FIELD_PRESETS = {
       hash: true,
     },
   },
-};
+}
 
 export const TRANSACTION_FIELD_PRESETS = {
   minimal: {
@@ -81,7 +81,7 @@ export const TRANSACTION_FIELD_PRESETS = {
       hash: true,
     },
   },
-};
+}
 
 export const TRACE_FIELD_PRESETS = {
   minimal: {
@@ -125,27 +125,29 @@ export const TRACE_FIELD_PRESETS = {
       hash: true,
     },
   },
-};
+}
 
-export type FieldPreset = "minimal" | "standard" | "full" | "custom";
+export type FieldPreset = 'minimal' | 'standard' | 'full' | 'custom'
 
 export function getLogFields(preset: FieldPreset, customFields?: any) {
-  if (preset === "custom" && customFields) {
-    return customFields;
+  if (preset === 'custom' && customFields) {
+    return customFields
   }
-  return LOG_FIELD_PRESETS[preset as keyof typeof LOG_FIELD_PRESETS] || LOG_FIELD_PRESETS.standard;
+  return LOG_FIELD_PRESETS[preset as keyof typeof LOG_FIELD_PRESETS] || LOG_FIELD_PRESETS.standard
 }
 
 export function getTransactionFields(preset: FieldPreset, customFields?: any) {
-  if (preset === "custom" && customFields) {
-    return customFields;
+  if (preset === 'custom' && customFields) {
+    return customFields
   }
-  return TRANSACTION_FIELD_PRESETS[preset as keyof typeof TRANSACTION_FIELD_PRESETS] || TRANSACTION_FIELD_PRESETS.standard;
+  return (
+    TRANSACTION_FIELD_PRESETS[preset as keyof typeof TRANSACTION_FIELD_PRESETS] || TRANSACTION_FIELD_PRESETS.standard
+  )
 }
 
 export function getTraceFields(preset: FieldPreset, customFields?: any) {
-  if (preset === "custom" && customFields) {
-    return customFields;
+  if (preset === 'custom' && customFields) {
+    return customFields
   }
-  return TRACE_FIELD_PRESETS[preset as keyof typeof TRACE_FIELD_PRESETS] || TRACE_FIELD_PRESETS.standard;
+  return TRACE_FIELD_PRESETS[preset as keyof typeof TRACE_FIELD_PRESETS] || TRACE_FIELD_PRESETS.standard
 }

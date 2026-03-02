@@ -23,19 +23,16 @@ export function buildEvmBlockFields(includeL2: boolean = false) {
     difficulty: true,
     totalDifficulty: true,
     baseFeePerGas: true,
-  };
-
-  if (includeL2) {
-    fields.l1BlockNumber = true;
   }
 
-  return fields;
+  if (includeL2) {
+    fields.l1BlockNumber = true
+  }
+
+  return fields
 }
 
-export function buildEvmTransactionFields(
-  includeL2: boolean = false,
-  includeReceipt: boolean = false,
-) {
+export function buildEvmTransactionFields(includeL2: boolean = false, includeReceipt: boolean = false) {
   const fields: Record<string, boolean> = {
     transactionIndex: true,
     hash: true,
@@ -60,23 +57,23 @@ export function buildEvmTransactionFields(
     v: true,
     r: true,
     s: true,
-  };
+  }
 
   if (includeL2) {
-    fields.l1Fee = true;
-    fields.l1FeeScalar = true;
-    fields.l1GasPrice = true;
-    fields.l1GasUsed = true;
-    fields.l1BlobBaseFee = true;
-    fields.l1BlobBaseFeeScalar = true;
-    fields.l1BaseFeeScalar = true;
+    fields.l1Fee = true
+    fields.l1FeeScalar = true
+    fields.l1GasPrice = true
+    fields.l1GasUsed = true
+    fields.l1BlobBaseFee = true
+    fields.l1BlobBaseFeeScalar = true
+    fields.l1BaseFeeScalar = true
   }
 
   if (includeReceipt) {
-    fields.logsBloom = true;
+    fields.logsBloom = true
   }
 
-  return fields;
+  return fields
 }
 
 export function buildEvmLogFields() {
@@ -87,7 +84,7 @@ export function buildEvmLogFields() {
     address: true,
     data: true,
     topics: true,
-  };
+  }
 }
 
 export function buildEvmTraceFields() {
@@ -125,7 +122,7 @@ export function buildEvmTraceFields() {
     rewardAuthor: true,
     rewardValue: true,
     rewardType: true,
-  };
+  }
 }
 
 export function buildEvmStateDiffFields() {
@@ -137,7 +134,7 @@ export function buildEvmStateDiffFields() {
     kind: true,
     prev: true,
     next: true,
-  };
+  }
 }
 
 // ============================================================================
@@ -153,16 +150,16 @@ export function buildSolanaInstructionFields(includeDiscriminators: boolean = fa
     data: true,
     isCommitted: true,
     hasDroppedLogMessages: true,
-  };
-
-  if (includeDiscriminators) {
-    fields.d1 = true;
-    fields.d2 = true;
-    fields.d4 = true;
-    fields.d8 = true;
   }
 
-  return fields;
+  if (includeDiscriminators) {
+    fields.d1 = true
+    fields.d2 = true
+    fields.d4 = true
+    fields.d8 = true
+  }
+
+  return fields
 }
 
 export function buildSolanaTransactionFields() {
@@ -180,7 +177,7 @@ export function buildSolanaTransactionFields() {
     recentBlockhash: true,
     addressTableLookups: true,
     loadedAddresses: true,
-  };
+  }
 }
 
 export function buildSolanaBalanceFields() {
@@ -189,7 +186,7 @@ export function buildSolanaBalanceFields() {
     account: true,
     pre: true,
     post: true,
-  };
+  }
 }
 
 export function buildSolanaTokenBalanceFields() {
@@ -206,7 +203,7 @@ export function buildSolanaTokenBalanceFields() {
     postOwner: true,
     preAmount: true,
     postAmount: true,
-  };
+  }
 }
 
 export function buildSolanaLogFields() {
@@ -217,7 +214,7 @@ export function buildSolanaLogFields() {
     programId: true,
     kind: true,
     message: true,
-  };
+  }
 }
 
 export function buildSolanaRewardFields() {
@@ -227,5 +224,5 @@ export function buildSolanaRewardFields() {
     postBalance: true,
     rewardType: true,
     commission: true,
-  };
+  }
 }

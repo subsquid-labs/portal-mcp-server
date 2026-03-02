@@ -9,24 +9,24 @@ export class ActionableError extends Error {
     public context?: Record<string, unknown>,
   ) {
     // Build the full message including suggestions
-    const parts = [message];
+    const parts = [message]
 
     if (suggestions.length > 0) {
-      parts.push("\n\nSuggestions:");
+      parts.push('\n\nSuggestions:')
       suggestions.forEach((suggestion, i) => {
-        parts.push(`  ${i + 1}. ${suggestion}`);
-      });
+        parts.push(`  ${i + 1}. ${suggestion}`)
+      })
     }
 
     if (context && Object.keys(context).length > 0) {
-      parts.push("\n\nContext:");
+      parts.push('\n\nContext:')
       Object.entries(context).forEach(([key, value]) => {
-        parts.push(`  ${key}: ${JSON.stringify(value)}`);
-      });
+        parts.push(`  ${key}: ${JSON.stringify(value)}`)
+      })
     }
 
-    super(parts.join("\n"));
-    this.name = "ActionableError";
+    super(parts.join('\n'))
+    this.name = 'ActionableError'
   }
 }
 
@@ -38,114 +38,106 @@ export function parsePortalError(
   errorText: string,
   context?: { url?: string; query?: unknown },
 ): ActionableError {
-  const suggestions: string[] = [];
-  let message = `Portal API Error (${status})`;
+  const suggestions: string[] = []
+  let message = `Portal API Error (${status})`
 
   // 400 Bad Request - Parse detailed error
   if (status === 400) {
-    message = `Invalid request: ${errorText}`;
+    message = `Invalid request: ${errorText}`
 
-    if (errorText.includes("unknown field")) {
-      const fieldMatch = errorText.match(/unknown field `(\w+)`/);
+    if (errorText.includes('unknown field')) {
+      const fieldMatch = errorText.match(/unknown field `(\w+)`/)
       if (fieldMatch) {
-        suggestions.push(
-          `Remove the unsupported field '${fieldMatch[1]}' from your query`,
-        );
-        suggestions.push(
-          "Check the Portal API documentation for valid field names",
-        );
+        suggestions.push(`Remove the unsupported field '${fieldMatch[1]}' from your query`)
+        suggestions.push('Check the Portal API documentation for valid field names')
       }
     }
 
-    if (errorText.includes("missing field")) {
-      const fieldMatch = errorText.match(/missing field '(\w+)'/);
+    if (errorText.includes('missing field')) {
+      const fieldMatch = errorText.match(/missing field '(\w+)'/)
       if (fieldMatch) {
-        suggestions.push(`Add the required field '${fieldMatch[1]}' to your query`);
+        suggestions.push(`Add the required field '${fieldMatch[1]}' to your query`)
       }
     }
 
-    if (errorText.includes("fromBlock")) {
-      suggestions.push("Ensure fromBlock is a valid block number (integer)");
-      suggestions.push("Use portal_get_block_number to find the latest block");
+    if (errorText.includes('fromBlock')) {
+      suggestions.push('Ensure fromBlock is a valid block number (integer)')
+      suggestions.push('Use portal_get_block_number to find the latest block')
     }
 
-    if (errorText.includes("toBlock")) {
-      suggestions.push("Ensure toBlock >= fromBlock");
-      suggestions.push("Use portal_get_block_number to find the latest block");
+    if (errorText.includes('toBlock')) {
+      suggestions.push('Ensure toBlock >= fromBlock')
+      suggestions.push('Use portal_get_block_number to find the latest block')
     }
 
-    if (errorText.includes("invalid address")) {
-      suggestions.push("Use lowercase hex addresses (e.g., '0xabc...')");
-      suggestions.push("Ensure addresses are 42 characters long (0x + 40 hex digits)");
+    if (errorText.includes('invalid address')) {
+      suggestions.push("Use lowercase hex addresses (e.g., '0xabc...')")
+      suggestions.push('Ensure addresses are 42 characters long (0x + 40 hex digits)')
     }
 
-    if (errorText.includes("invalid topic")) {
-      suggestions.push("Use 32-byte hex topics (e.g., '0x' + 64 hex digits)");
-      suggestions.push("Ensure topic0, topic1, etc. are correctly formatted");
+    if (errorText.includes('invalid topic')) {
+      suggestions.push("Use 32-byte hex topics (e.g., '0x' + 64 hex digits)")
+      suggestions.push('Ensure topic0, topic1, etc. are correctly formatted')
     }
 
     // Generic 400 suggestions
     if (suggestions.length === 0) {
-      suggestions.push("Verify all query parameters are correctly formatted");
-      suggestions.push("Check that addresses are lowercase hex strings");
-      suggestions.push("Ensure block numbers are valid integers");
+      suggestions.push('Verify all query parameters are correctly formatted')
+      suggestions.push('Check that addresses are lowercase hex strings')
+      suggestions.push('Ensure block numbers are valid integers')
     }
   }
 
   // 404 Not Found
   if (status === 404) {
-    message = `Resource not found: ${errorText}`;
+    message = `Resource not found: ${errorText}`
 
-    if (context?.url?.includes("/datasets/")) {
-      const datasetMatch = context.url.match(/\/datasets\/([^/]+)/);
+    if (context?.url?.includes('/datasets/')) {
+      const datasetMatch = context.url.match(/\/datasets\/([^/]+)/)
       if (datasetMatch) {
-        suggestions.push(
-          `Dataset '${datasetMatch[1]}' not found or not available`,
-        );
-        suggestions.push("Use portal_list_datasets to see available datasets");
-        suggestions.push(
-          "Use portal_search_datasets to find datasets by chain name",
-        );
+        suggestions.push(`Dataset '${datasetMatch[1]}' not found or not available`)
+        suggestions.push('Use portal_list_datasets to see available datasets')
+        suggestions.push('Use portal_search_datasets to find datasets by chain name')
       }
     } else {
-      suggestions.push("Verify the dataset name is correct");
-      suggestions.push("Use portal_list_datasets to see all available datasets");
+      suggestions.push('Verify the dataset name is correct')
+      suggestions.push('Use portal_list_datasets to see all available datasets')
     }
   }
 
   // 409 Conflict (Chain Reorg)
   if (status === 409) {
-    message = "Chain reorganization detected";
-    suggestions.push("Wait a few seconds and retry with the same parameters");
-    suggestions.push("Query finalized blocks only (older blocks that won't reorg)");
-    suggestions.push("For recent data, use smaller block ranges (< 100 blocks)");
+    message = 'Chain reorganization detected'
+    suggestions.push('Wait a few seconds and retry with the same parameters')
+    suggestions.push("Query finalized blocks only (older blocks that won't reorg)")
+    suggestions.push('For recent data, use smaller block ranges (< 100 blocks)')
   }
 
   // 429 Rate Limited
   if (status === 429) {
-    const retryAfterMatch = errorText.match(/Retry after (\d+)s/);
+    const retryAfterMatch = errorText.match(/Retry after (\d+)s/)
     if (retryAfterMatch) {
-      message = `Rate limited. Retry after ${retryAfterMatch[1]} seconds`;
-      suggestions.push(`Wait ${retryAfterMatch[1]} seconds before retrying`);
+      message = `Rate limited. Retry after ${retryAfterMatch[1]} seconds`
+      suggestions.push(`Wait ${retryAfterMatch[1]} seconds before retrying`)
     } else {
-      message = "Rate limited";
-      suggestions.push("Wait a few seconds before retrying");
+      message = 'Rate limited'
+      suggestions.push('Wait a few seconds before retrying')
     }
-    suggestions.push("Reduce the frequency of your requests");
-    suggestions.push("Use smaller block ranges per query");
-    suggestions.push("Consider caching results");
+    suggestions.push('Reduce the frequency of your requests')
+    suggestions.push('Use smaller block ranges per query')
+    suggestions.push('Consider caching results')
   }
 
   // 500 Server Error
   if (status >= 500) {
-    message = `Portal server error (${status}): ${errorText}`;
-    suggestions.push("This is a Portal API infrastructure issue");
-    suggestions.push("Wait a few minutes and retry");
-    suggestions.push("Try a different dataset or smaller block range");
-    suggestions.push("Check Portal status at https://status.sqd.dev");
+    message = `Portal server error (${status}): ${errorText}`
+    suggestions.push('This is a Portal API infrastructure issue')
+    suggestions.push('Wait a few minutes and retry')
+    suggestions.push('Try a different dataset or smaller block range')
+    suggestions.push('Check Portal status at https://status.sqd.dev')
   }
 
-  return new ActionableError(message, suggestions, context);
+  return new ActionableError(message, suggestions, context)
 }
 
 /**
@@ -154,72 +146,57 @@ export function parsePortalError(
 export function createTimeoutError(timeout: number, context?: Record<string, unknown>): ActionableError {
   const suggestions = [
     `Request timed out after ${timeout}ms`,
-    "Try reducing the block range (query fewer blocks)",
-    "Add more specific filters (addresses, topics) to reduce result size",
-    "For large queries, use portal_query_paginated instead",
-    "Increase timeout using the timeout_ms parameter",
-  ];
+    'Try reducing the block range (query fewer blocks)',
+    'Add more specific filters (addresses, topics) to reduce result size',
+    'For large queries, use portal_query_paginated instead',
+    'Increase timeout using the timeout_ms parameter',
+  ]
 
-  return new ActionableError(
-    `Request timeout after ${timeout}ms`,
-    suggestions,
-    context,
-  );
+  return new ActionableError(`Request timeout after ${timeout}ms`, suggestions, context)
 }
 
 /**
  * Create error for block range issues
  */
-export function createBlockRangeError(
-  fromBlock: number,
-  toBlock: number,
-  reason: string,
-): ActionableError {
-  const range = toBlock - fromBlock + 1;
-  const suggestions = [];
+export function createBlockRangeError(fromBlock: number, toBlock: number, reason: string): ActionableError {
+  const range = toBlock - fromBlock + 1
+  const suggestions = []
 
   if (range > 100000) {
-    suggestions.push(`Block range is very large (${range.toLocaleString()} blocks)`);
-    suggestions.push("Reduce range to < 10,000 blocks for logs queries");
-    suggestions.push("Reduce range to < 5,000 blocks for traces queries");
-    suggestions.push("Use portal_query_paginated for large ranges");
+    suggestions.push(`Block range is very large (${range.toLocaleString()} blocks)`)
+    suggestions.push('Reduce range to < 10,000 blocks for logs queries')
+    suggestions.push('Reduce range to < 5,000 blocks for traces queries')
+    suggestions.push('Use portal_query_paginated for large ranges')
   } else if (range > 10000) {
-    suggestions.push(`Block range (${range.toLocaleString()} blocks) may be slow`);
-    suggestions.push("Consider reducing to < 10,000 blocks for better performance");
+    suggestions.push(`Block range (${range.toLocaleString()} blocks) may be slow`)
+    suggestions.push('Consider reducing to < 10,000 blocks for better performance')
   }
 
   if (toBlock < fromBlock) {
-    suggestions.push("toBlock must be >= fromBlock");
-    suggestions.push(`Current: fromBlock=${fromBlock}, toBlock=${toBlock}`);
+    suggestions.push('toBlock must be >= fromBlock')
+    suggestions.push(`Current: fromBlock=${fromBlock}, toBlock=${toBlock}`)
   }
 
   if (fromBlock < 0) {
-    suggestions.push("fromBlock must be >= 0");
+    suggestions.push('fromBlock must be >= 0')
   }
 
-  return new ActionableError(reason, suggestions, { fromBlock, toBlock, range });
+  return new ActionableError(reason, suggestions, { fromBlock, toBlock, range })
 }
 
 /**
  * Create error for empty results with suggestions
  */
-export function createEmptyResultError(
-  queryType: string,
-  context: Record<string, unknown>,
-): ActionableError {
+export function createEmptyResultError(queryType: string, context: Record<string, unknown>): ActionableError {
   const suggestions = [
-    "No data found for the specified query",
-    "Try expanding the block range",
-    "Check that addresses/topics are correct",
-    "Verify the dataset has data for this block range",
-    "Use portal_get_block_number to confirm blocks exist",
-  ];
+    'No data found for the specified query',
+    'Try expanding the block range',
+    'Check that addresses/topics are correct',
+    'Verify the dataset has data for this block range',
+    'Use portal_get_block_number to confirm blocks exist',
+  ]
 
-  return new ActionableError(
-    `No ${queryType} found in the specified range`,
-    suggestions,
-    context,
-  );
+  return new ActionableError(`No ${queryType} found in the specified range`, suggestions, context)
 }
 
 /**
@@ -231,45 +208,38 @@ export function createDatasetError(dataset: string, availableCount: number): Act
     `Use portal_list_datasets to see all ${availableCount} available datasets`,
     "Use portal_search_datasets to search by chain name (e.g., 'ethereum', 'base')",
     "Common aliases: 'ethereum', 'polygon', 'base', 'arbitrum', 'optimism'",
-  ];
+  ]
 
-  return new ActionableError(
-    `Unknown dataset: '${dataset}'`,
-    suggestions,
-    { dataset, available_datasets: availableCount },
-  );
+  return new ActionableError(`Unknown dataset: '${dataset}'`, suggestions, {
+    dataset,
+    available_datasets: availableCount,
+  })
 }
 
 /**
  * Create error for invalid address format
  */
 export function createAddressFormatError(address: string): ActionableError {
-  const suggestions = [];
+  const suggestions = []
 
-  if (!address.startsWith("0x")) {
-    suggestions.push("Address must start with '0x'");
+  if (!address.startsWith('0x')) {
+    suggestions.push("Address must start with '0x'")
   }
 
   if (address.length !== 42) {
-    suggestions.push(
-      `Address must be 42 characters (0x + 40 hex digits), got ${address.length}`,
-    );
+    suggestions.push(`Address must be 42 characters (0x + 40 hex digits), got ${address.length}`)
   }
 
   if (!/^0x[0-9a-fA-F]+$/.test(address)) {
-    suggestions.push("Address must contain only hexadecimal characters (0-9, a-f)");
+    suggestions.push('Address must contain only hexadecimal characters (0-9, a-f)')
   }
 
   if (address !== address.toLowerCase()) {
-    suggestions.push("Use lowercase addresses for consistency");
-    suggestions.push(`Try: ${address.toLowerCase()}`);
+    suggestions.push('Use lowercase addresses for consistency')
+    suggestions.push(`Try: ${address.toLowerCase()}`)
   }
 
-  return new ActionableError(
-    `Invalid address format: ${address}`,
-    suggestions,
-    { address },
-  );
+  return new ActionableError(`Invalid address format: ${address}`, suggestions, { address })
 }
 
 /**
@@ -277,31 +247,31 @@ export function createAddressFormatError(address: string): ActionableError {
  */
 export function wrapError(error: unknown, context?: Record<string, unknown>): Error {
   if (error instanceof ActionableError) {
-    return error;
+    return error
   }
 
   if (error instanceof Error) {
     // Check if it's a Portal API error we can parse
-    const httpMatch = error.message.match(/HTTP (\d+): (.+)/);
+    const httpMatch = error.message.match(/HTTP (\d+): (.+)/)
     if (httpMatch) {
-      const status = parseInt(httpMatch[1], 10);
-      const errorText = httpMatch[2];
-      return parsePortalError(status, errorText, context);
+      const status = parseInt(httpMatch[1], 10)
+      const errorText = httpMatch[2]
+      return parsePortalError(status, errorText, context)
     }
 
     // Check for timeout
-    if (error.message.includes("abort")) {
-      return createTimeoutError(60000, context);
+    if (error.message.includes('abort')) {
+      return createTimeoutError(60000, context)
     }
 
     // Generic error - add context if provided
     if (context) {
-      const suggestions = ["Review the error details and query parameters below"];
-      return new ActionableError(error.message, suggestions, context);
+      const suggestions = ['Review the error details and query parameters below']
+      return new ActionableError(error.message, suggestions, context)
     }
 
-    return error;
+    return error
   }
 
-  return new Error(String(error));
+  return new Error(String(error))
 }

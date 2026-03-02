@@ -1,19 +1,20 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PORTAL_URL } from "../../constants/index.js";
-import { resolveDataset } from "../../cache/datasets.js";
-import { detectChainType } from "../../helpers/chain.js";
-import { portalFetchStream } from "../../helpers/fetch.js";
-import { formatResult } from "../../helpers/format.js";
-import { normalizeAddresses } from "../../helpers/validation.js";
-import { resolveTimeframeOrBlocks } from "../../helpers/timeframe.js";
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+
+import { resolveDataset } from '../../cache/datasets.js'
+import { PORTAL_URL } from '../../constants/index.js'
+import { detectChainType } from '../../helpers/chain.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
+import { formatResult } from '../../helpers/format.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { normalizeAddresses } from '../../helpers/validation.js'
 
 // ============================================================================
 // Tool: Aggregate Transfers
 // ============================================================================
 
 // Transfer event signature
-const TRANSFER_TOPIC0 = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const TRANSFER_TOPIC0 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 
 /**
  * Aggregate transfer statistics without fetching individual transfers.
@@ -21,7 +22,7 @@ const TRANSFER_TOPIC0 = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55
  */
 export function registerAggregateTransfersTool(server: McpServer) {
   server.tool(
-    "portal_aggregate_transfers",
+    'portal_aggregate_transfers',
     `Aggregate transfer statistics (volume, unique addresses, token breakdown). ~98% smaller than fetching all transfers.
 
 WHEN TO USE:
@@ -39,67 +40,57 @@ EXAMPLES:
 
 FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
     {
-      dataset: z.string().describe("Dataset name"),
+      dataset: z.string().describe('Dataset name'),
       timeframe: z.string().optional().describe("Time range (e.g., '24h', '7d')"),
-      from_block: z.number().optional().describe("Starting block (use this OR timeframe)"),
-      to_block: z.number().optional().describe("Ending block"),
-      token_address: z
-        .string()
-        .optional()
-        .describe("Specific token contract to aggregate (e.g., USDC address)"),
-      from_address: z
-        .string()
-        .optional()
-        .describe("Filter transfers from this sender"),
-      to_address: z
-        .string()
-        .optional()
-        .describe("Filter transfers to this receiver"),
+      from_block: z.number().optional().describe('Starting block (use this OR timeframe)'),
+      to_block: z.number().optional().describe('Ending block'),
+      token_address: z.string().optional().describe('Specific token contract to aggregate (e.g., USDC address)'),
+      from_address: z.string().optional().describe('Filter transfers from this sender'),
+      to_address: z.string().optional().describe('Filter transfers to this receiver'),
       group_by: z
-        .enum(["token", "sender", "receiver", "none"])
+        .enum(['token', 'sender', 'receiver', 'none'])
         .optional()
-        .default("none")
+        .default('none')
         .describe("Group by: 'token' (per token), 'sender', 'receiver', 'none' (totals only)"),
     },
     async ({ dataset, timeframe, from_block, to_block, token_address, from_address, to_address, group_by }) => {
-      const queryStartTime = Date.now();
-      dataset = await resolveDataset(dataset);
-      const chainType = detectChainType(dataset);
+      const queryStartTime = Date.now()
+      dataset = await resolveDataset(dataset)
+      const chainType = detectChainType(dataset)
 
-      if (chainType !== "evm") {
-        throw new Error("portal_aggregate_transfers is only for EVM chains");
+      if (chainType !== 'evm') {
+        throw new Error('portal_aggregate_transfers is only for EVM chains')
       }
 
       // Resolve timeframe
-      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } =
-        await resolveTimeframeOrBlocks({
-          dataset,
-          timeframe,
-          from_block,
-          to_block,
-        });
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+        dataset,
+        timeframe,
+        from_block,
+        to_block,
+      })
 
       // Build filter
       const logFilter: Record<string, unknown> = {
         topic0: [TRANSFER_TOPIC0],
-      };
+      }
 
       if (token_address) {
-        logFilter.address = normalizeAddresses([token_address], chainType);
+        logFilter.address = normalizeAddresses([token_address], chainType)
       }
 
       // topic1 = from address (indexed), topic2 = to address (indexed)
       if (from_address) {
-        const paddedFrom = "0x" + "0".repeat(24) + from_address.toLowerCase().slice(2);
-        logFilter.topic1 = [paddedFrom];
+        const paddedFrom = '0x' + '0'.repeat(24) + from_address.toLowerCase().slice(2)
+        logFilter.topic1 = [paddedFrom]
       }
       if (to_address) {
-        const paddedTo = "0x" + "0".repeat(24) + to_address.toLowerCase().slice(2);
-        logFilter.topic2 = [paddedTo];
+        const paddedTo = '0x' + '0'.repeat(24) + to_address.toLowerCase().slice(2)
+        logFilter.topic2 = [paddedTo]
       }
 
       const query = {
-        type: "evm",
+        type: 'evm',
         fromBlock: resolvedFromBlock,
         toBlock: resolvedToBlock,
         fields: {
@@ -111,75 +102,72 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
           },
         },
         logs: [logFilter],
-      };
+      }
 
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query
-      );
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
       // Extract transfers
-      const allLogs = results.flatMap(
-        (block: any) => (block.logs || []).map((log: any) => ({ ...log, blockNumber: block.number }))
-      );
+      const allLogs = results.flatMap((block: any) =>
+        (block.logs || []).map((log: any) => ({ ...log, blockNumber: block.number })),
+      )
 
-      const totalTransfers = allLogs.length;
+      const totalTransfers = allLogs.length
 
       // Extract addresses from topics
-      const senders = new Set<string>();
-      const receivers = new Set<string>();
-      const tokens = new Set<string>();
+      const senders = new Set<string>()
+      const receivers = new Set<string>()
+      const tokens = new Set<string>()
 
       allLogs.forEach((log: any) => {
-        if (log.address) tokens.add(log.address.toLowerCase());
+        if (log.address) tokens.add(log.address.toLowerCase())
         if (log.topics && log.topics.length >= 3) {
           // topic1 = from (padded), topic2 = to (padded)
-          const from = "0x" + log.topics[1].slice(-40);
-          const to = "0x" + log.topics[2].slice(-40);
-          senders.add(from);
-          receivers.add(to);
+          const from = '0x' + log.topics[1].slice(-40)
+          const to = '0x' + log.topics[2].slice(-40)
+          senders.add(from)
+          receivers.add(to)
         }
-      });
+      })
 
       // Group if requested
-      let grouped: any = undefined;
+      let grouped: any = undefined
 
-      if (group_by === "token") {
-        const byToken = new Map<string, number>();
+      if (group_by === 'token') {
+        const byToken = new Map<string, number>()
         allLogs.forEach((log: any) => {
-          const token = log.address?.toLowerCase() || "unknown";
-          byToken.set(token, (byToken.get(token) || 0) + 1);
-        });
+          const token = log.address?.toLowerCase() || 'unknown'
+          byToken.set(token, (byToken.get(token) || 0) + 1)
+        })
 
         grouped = Array.from(byToken.entries())
           .map(([token, count]) => ({ token, transfer_count: count }))
-          .sort((a, b) => b.transfer_count - a.transfer_count);
-      } else if (group_by === "sender") {
-        const bySender = new Map<string, number>();
+          .sort((a, b) => b.transfer_count - a.transfer_count)
+      } else if (group_by === 'sender') {
+        const bySender = new Map<string, number>()
         allLogs.forEach((log: any) => {
           if (log.topics && log.topics.length >= 2) {
-            const from = "0x" + log.topics[1].slice(-40);
-            bySender.set(from, (bySender.get(from) || 0) + 1);
+            const from = '0x' + log.topics[1].slice(-40)
+            bySender.set(from, (bySender.get(from) || 0) + 1)
           }
-        });
+        })
 
         grouped = Array.from(bySender.entries())
           .map(([sender, count]) => ({ sender, transfer_count: count }))
           .sort((a, b) => b.transfer_count - a.transfer_count)
-          .slice(0, 20); // Top 20
-      } else if (group_by === "receiver") {
-        const byReceiver = new Map<string, number>();
+          .slice(0, 20) // Top 20
+      } else if (group_by === 'receiver') {
+        const byReceiver = new Map<string, number>()
         allLogs.forEach((log: any) => {
           if (log.topics && log.topics.length >= 3) {
-            const to = "0x" + log.topics[2].slice(-40);
-            byReceiver.set(to, (byReceiver.get(to) || 0) + 1);
+            const to = '0x' + log.topics[2].slice(-40)
+            byReceiver.set(to, (byReceiver.get(to) || 0) + 1)
           }
-        });
+        })
 
         grouped = Array.from(byReceiver.entries())
           .map(([receiver, count]) => ({ receiver, transfer_count: count }))
           .sort((a, b) => b.transfer_count - a.transfer_count)
-          .slice(0, 20); // Top 20
+          .slice(0, 20) // Top 20
       }
 
       const response: any = {
@@ -188,11 +176,11 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
         unique_receivers: receivers.size,
         unique_tokens: tokens.size,
         blocks_analyzed: results.length,
-      };
+      }
 
       if (grouped) {
-        response.grouped = grouped;
-        response.top_count = grouped.length;
+        response.grouped = grouped
+        response.top_count = grouped.length
       }
 
       return formatResult(
@@ -205,8 +193,8 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
             to_block: resolvedToBlock,
             query_start_time: queryStartTime,
           },
-        }
-      );
-    }
-  );
+        },
+      )
+    },
+  )
 }

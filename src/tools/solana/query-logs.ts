@@ -1,11 +1,12 @@
-import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { PORTAL_URL } from "../../constants/index.js";
-import { resolveDataset, validateBlockRange } from "../../cache/datasets.js";
-import { detectChainType } from "../../helpers/chain.js";
-import { portalFetchStream } from "../../helpers/fetch.js";
-import { formatResult } from "../../helpers/format.js";
-import { buildSolanaLogFields } from "../../helpers/fields.js";
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+
+import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { PORTAL_URL } from '../../constants/index.js'
+import { detectChainType } from '../../helpers/chain.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
+import { buildSolanaLogFields } from '../../helpers/fields.js'
+import { formatResult } from '../../helpers/format.js'
 
 // ============================================================================
 // Tool: Query Solana Logs
@@ -13,38 +14,26 @@ import { buildSolanaLogFields } from "../../helpers/fields.js";
 
 export function registerQuerySolanaLogsTool(server: McpServer) {
   server.tool(
-    "portal_query_solana_logs",
-    "Query log messages from a Solana dataset",
+    'portal_query_solana_logs',
+    'Query log messages from a Solana dataset',
     {
-      dataset: z.string().describe("Dataset name or alias"),
-      from_block: z.number().describe("Starting slot number"),
-      to_block: z.number().optional().describe("Ending slot number"),
-      finalized_only: z
-        .boolean()
-        .optional()
-        .default(false)
-        .describe("Only query finalized slots"),
-      program_id: z.array(z.string()).optional().describe("Program IDs"),
+      dataset: z.string().describe('Dataset name or alias'),
+      from_block: z.number().describe('Starting slot number'),
+      to_block: z.number().optional().describe('Ending slot number'),
+      finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
+      program_id: z.array(z.string()).optional().describe('Program IDs'),
       kind: z
-        .array(z.enum(["log", "data", "other"]))
+        .array(z.enum(['log', 'data', 'other']))
         .optional()
-        .describe("Log kinds"),
-      limit: z.number().optional().default(1000).describe("Max logs"),
+        .describe('Log kinds'),
+      limit: z.number().optional().default(1000).describe('Max logs'),
     },
-    async ({
-      dataset,
-      from_block,
-      to_block,
-      finalized_only,
-      program_id,
-      kind,
-      limit,
-    }) => {
-      dataset = await resolveDataset(dataset);
-      const chainType = detectChainType(dataset);
+    async ({ dataset, from_block, to_block, finalized_only, program_id, kind, limit }) => {
+      dataset = await resolveDataset(dataset)
+      const chainType = detectChainType(dataset)
 
-      if (chainType !== "solana") {
-        throw new Error("portal_query_solana_logs is only for Solana chains");
+      if (chainType !== 'solana') {
+        throw new Error('portal_query_solana_logs is only for Solana chains')
       }
 
       const { validatedToBlock: endBlock } = await validateBlockRange(
@@ -52,14 +41,14 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
         from_block,
         to_block ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
-      );
+      )
 
-      const logFilter: Record<string, unknown> = {};
-      if (program_id) logFilter.programId = program_id;
-      if (kind) logFilter.kind = kind;
+      const logFilter: Record<string, unknown> = {}
+      if (program_id) logFilter.programId = program_id
+      if (kind) logFilter.kind = kind
 
       const query = {
-        type: "solana",
+        type: 'solana',
         fromBlock: from_block,
         toBlock: endBlock,
         fields: {
@@ -67,17 +56,12 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
           log: buildSolanaLogFields(),
         },
         logs: [logFilter],
-      };
+      }
 
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-      );
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
-      const allLogs = results
-        .flatMap((block: unknown) => (block as { logs?: unknown[] }).logs || [])
-        .slice(0, limit);
-      return formatResult(allLogs, `Retrieved ${allLogs.length} logs`);
+      const allLogs = results.flatMap((block: unknown) => (block as { logs?: unknown[] }).logs || []).slice(0, limit)
+      return formatResult(allLogs, `Retrieved ${allLogs.length} logs`)
     },
-  );
+  )
 }

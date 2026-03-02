@@ -12,7 +12,6 @@ export function createPortalServer(): McpServer {
   const server = new McpServer({
     name: 'sqd-portal-mcp-server',
     version: npmVersion,
-
   })
 
   // Register resources

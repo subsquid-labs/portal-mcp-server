@@ -1,13 +1,5 @@
-import {
-  DEFAULT_TIMEOUT,
-  DEFAULT_RETRIES,
-  STREAM_TIMEOUT,
-} from "../constants/index.js";
-import {
-  parsePortalError,
-  createTimeoutError,
-  wrapError,
-} from "./errors.js";
+import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, STREAM_TIMEOUT } from '../constants/index.js'
+import { createTimeoutError, parsePortalError, wrapError } from './errors.js'
 
 // ============================================================================
 // Portal API Wrapper Functions
@@ -27,106 +19,99 @@ import {
 // ============================================================================
 
 export async function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export async function portalFetch<T>(
   url: string,
   options: {
-    method?: string;
-    body?: unknown;
-    timeout?: number;
-    retries?: number;
+    method?: string
+    body?: unknown
+    timeout?: number
+    retries?: number
   } = {},
 ): Promise<T> {
-  const {
-    method = "GET",
-    body,
-    timeout = DEFAULT_TIMEOUT,
-    retries = DEFAULT_RETRIES,
-  } = options;
+  const { method = 'GET', body, timeout = DEFAULT_TIMEOUT, retries = DEFAULT_RETRIES } = options
 
-  let lastError: Error | null = null;
+  let lastError: Error | null = null
 
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), timeout)
 
     try {
       const fetchOptions: RequestInit = {
         method,
         headers: {
-          "Accept-Encoding": "gzip",
-          "Content-Type": "application/json",
-          Accept: "application/json",
+          'Accept-Encoding': 'gzip',
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
         },
         signal: controller.signal,
-      };
-
-      if (body) {
-        fetchOptions.body = JSON.stringify(body);
       }
 
-      const response = await fetch(url, fetchOptions);
-      clearTimeout(timeoutId);
+      if (body) {
+        fetchOptions.body = JSON.stringify(body)
+      }
+
+      const response = await fetch(url, fetchOptions)
+      clearTimeout(timeoutId)
 
       // Handle specific status codes
       if (response.status === 204) {
-        return [] as T;
+        return [] as T
       }
 
       if (response.status === 409) {
         // Reorg detected - retry with backoff
         lastError = new Error(
-          "Chain reorganization detected (409 Conflict). The requested block range may have been affected by a reorg. Try with a different fromBlock or use finalized blocks.",
-        );
-        const delay = Math.pow(2, attempt) * 1000;
-        await sleep(delay);
-        continue;
+          'Chain reorganization detected (409 Conflict). The requested block range may have been affected by a reorg. Try with a different fromBlock or use finalized blocks.',
+        )
+        const delay = Math.pow(2, attempt) * 1000
+        await sleep(delay)
+        continue
       }
 
       if (response.status === 429) {
         // Rate limited - check Retry-After header
-        const retryAfter = response.headers.get("Retry-After");
-        const delay = retryAfter
-          ? parseInt(retryAfter, 10) * 1000
-          : Math.pow(2, attempt) * 1000;
+        const retryAfter = response.headers.get('Retry-After')
+        const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.pow(2, attempt) * 1000
         lastError = new Error(
           `Rate limited (429). ${retryAfter ? `Retry after ${retryAfter}s.` : `Retrying in ${delay}ms.`}`,
-        );
-        await sleep(delay);
-        continue;
+        )
+        await sleep(delay)
+        continue
       }
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw parsePortalError(response.status, errorText, { url, query: body });
+        const errorText = await response.text()
+        throw parsePortalError(response.status, errorText, { url, query: body })
       }
 
-      return (await response.json()) as T;
+      return (await response.json()) as T
     } catch (error) {
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutId)
 
       // Check for timeout/abort
-      if (error instanceof Error && (error.name === "AbortError" || error.message.includes("abort"))) {
-        throw createTimeoutError(timeout, { url, attempt: attempt + 1, max_attempts: retries + 1 });
+      if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('abort'))) {
+        throw createTimeoutError(timeout, { url, attempt: attempt + 1, max_attempts: retries + 1 })
       }
 
-      lastError = wrapError(error, { url, attempt: attempt + 1, max_attempts: retries + 1 }) as Error;
+      lastError = wrapError(error, { url, attempt: attempt + 1, max_attempts: retries + 1 }) as Error
 
       // Don't retry on client errors (except 409/429 handled above)
-      if (lastError.message.includes("HTTP 4")) {
-        throw lastError;
+      if (lastError.message.includes('HTTP 4')) {
+        throw lastError
       }
 
       if (attempt < retries) {
-        const delay = Math.pow(2, attempt) * 1000;
-        await sleep(delay);
+        const delay = Math.pow(2, attempt) * 1000
+        await sleep(delay)
       }
     }
   }
 
-  throw lastError || new Error("Request failed after retries");
+  throw lastError || new Error('Request failed after retries')
 }
 
 export async function portalFetchStream(
@@ -134,58 +119,58 @@ export async function portalFetchStream(
   body: unknown,
   timeout: number = STREAM_TIMEOUT,
 ): Promise<unknown[]> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeout)
 
   try {
     const response = await fetch(url, {
-      method: "POST",
+      method: 'POST',
       headers: {
-        "Accept-Encoding": "gzip",
-        "Content-Type": "application/json",
-        Accept: "application/x-ndjson",
+        'Accept-Encoding': 'gzip',
+        'Content-Type': 'application/json',
+        Accept: 'application/x-ndjson',
       },
       body: JSON.stringify(body),
       signal: controller.signal,
-    });
+    })
 
-    clearTimeout(timeoutId);
+    clearTimeout(timeoutId)
 
     if (response.status === 204) {
-      return [];
+      return []
     }
 
     if (response.status === 409) {
       throw new Error(
-        "Chain reorganization detected (409 Conflict). The requested block range may have been affected by a reorg. Try with a different fromBlock or use finalized blocks.",
-      );
+        'Chain reorganization detected (409 Conflict). The requested block range may have been affected by a reorg. Try with a different fromBlock or use finalized blocks.',
+      )
     }
 
     if (response.status === 429) {
-      const retryAfter = response.headers.get("Retry-After");
+      const retryAfter = response.headers.get('Retry-After')
       throw new Error(
-        `Rate limited (429). ${retryAfter ? `Retry after ${retryAfter}s.` : "Please wait before retrying."}`,
-      );
+        `Rate limited (429). ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait before retrying.'}`,
+      )
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw parsePortalError(response.status, errorText, { url, query: body });
+      const errorText = await response.text()
+      throw parsePortalError(response.status, errorText, { url, query: body })
     }
 
-    const text = await response.text();
+    const text = await response.text()
     return text
-      .split("\n")
+      .split('\n')
       .filter((line) => line.trim())
-      .map((line) => JSON.parse(line));
+      .map((line) => JSON.parse(line))
   } catch (error) {
-    clearTimeout(timeoutId);
+    clearTimeout(timeoutId)
 
     // Check for timeout/abort
-    if (error instanceof Error && (error.name === "AbortError" || error.message.includes("abort"))) {
-      throw createTimeoutError(timeout, { url, query: body });
+    if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('abort'))) {
+      throw createTimeoutError(timeout, { url, query: body })
     }
 
-    throw wrapError(error, { url, query: body });
+    throw wrapError(error, { url, query: body })
   }
 }

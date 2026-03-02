@@ -1,7 +1,7 @@
 // Response format modes for context optimization
 // Reduces token usage by 50-95% depending on mode
 
-export type ResponseFormat = "full" | "compact" | "summary";
+export type ResponseFormat = 'full' | 'compact' | 'summary'
 
 /**
  * Summarize log data - reduces by ~95%
@@ -9,41 +9,41 @@ export type ResponseFormat = "full" | "compact" | "summary";
  */
 export function summarizeLogs(logs: any[]): any {
   if (logs.length === 0) {
-    return { count: 0, summary: "No logs found" };
+    return { count: 0, summary: 'No logs found' }
   }
 
   // Group by address
-  const byAddress = new Map<string, number>();
-  const byTopic0 = new Map<string, number>();
+  const byAddress = new Map<string, number>()
+  const byTopic0 = new Map<string, number>()
 
   logs.forEach((log) => {
-    const addr = log.address || "unknown";
-    const topic0 = log.topic0 || log.topics?.[0] || "unknown";
+    const addr = log.address || 'unknown'
+    const topic0 = log.topic0 || log.topics?.[0] || 'unknown'
 
-    byAddress.set(addr, (byAddress.get(addr) || 0) + 1);
-    byTopic0.set(topic0, (byTopic0.get(topic0) || 0) + 1);
-  });
+    byAddress.set(addr, (byAddress.get(addr) || 0) + 1)
+    byTopic0.set(topic0, (byTopic0.get(topic0) || 0) + 1)
+  })
 
   // Get top contracts and event types
   const topAddresses = Array.from(byAddress.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
-    .map(([addr, count]) => ({ address: addr, count }));
+    .map(([addr, count]) => ({ address: addr, count }))
 
   const topEvents = Array.from(byTopic0.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
-    .map(([topic, count]) => ({ topic0: topic, count }));
+    .map(([topic, count]) => ({ topic0: topic, count }))
 
   // Block range
-  const blocks = logs.map((l) => l.blockNumber || l.block?.number).filter(Boolean);
+  const blocks = logs.map((l) => l.blockNumber || l.block?.number).filter(Boolean)
   const blockRange =
     blocks.length > 0
       ? {
           from: Math.min(...blocks),
           to: Math.max(...blocks),
         }
-      : undefined;
+      : undefined
 
   return {
     total_logs: logs.length,
@@ -52,7 +52,7 @@ export function summarizeLogs(logs: any[]): any {
     top_contracts: topAddresses,
     top_event_types: topEvents,
     block_range: blockRange,
-  };
+  }
 }
 
 /**
@@ -60,58 +60,58 @@ export function summarizeLogs(logs: any[]): any {
  */
 export function summarizeTransactions(txs: any[]): any {
   if (txs.length === 0) {
-    return { count: 0, summary: "No transactions found" };
+    return { count: 0, summary: 'No transactions found' }
   }
 
   // Count unique addresses
-  const fromAddresses = new Set<string>();
-  const toAddresses = new Set<string>();
-  let totalValue = BigInt(0);
-  let totalGas = BigInt(0);
+  const fromAddresses = new Set<string>()
+  const toAddresses = new Set<string>()
+  let totalValue = BigInt(0)
+  let totalGas = BigInt(0)
 
   txs.forEach((tx) => {
-    if (tx.from) fromAddresses.add(tx.from);
-    if (tx.to) toAddresses.add(tx.to);
+    if (tx.from) fromAddresses.add(tx.from)
+    if (tx.to) toAddresses.add(tx.to)
     if (tx.value) {
       try {
-        totalValue += BigInt(tx.value);
+        totalValue += BigInt(tx.value)
       } catch {}
     }
     if (tx.gas) {
       try {
-        totalGas += BigInt(tx.gas);
+        totalGas += BigInt(tx.gas)
       } catch {}
     }
-  });
+  })
 
   // Block range
-  const blocks = txs.map((t) => t.blockNumber || t.block?.number).filter(Boolean);
+  const blocks = txs.map((t) => t.blockNumber || t.block?.number).filter(Boolean)
   const blockRange =
     blocks.length > 0
       ? {
           from: Math.min(...blocks),
           to: Math.max(...blocks),
         }
-      : undefined;
+      : undefined
 
   // Top senders/receivers
-  const fromCounts = new Map<string, number>();
-  const toCounts = new Map<string, number>();
+  const fromCounts = new Map<string, number>()
+  const toCounts = new Map<string, number>()
 
   txs.forEach((tx) => {
-    if (tx.from) fromCounts.set(tx.from, (fromCounts.get(tx.from) || 0) + 1);
-    if (tx.to) toCounts.set(tx.to, (toCounts.get(tx.to) || 0) + 1);
-  });
+    if (tx.from) fromCounts.set(tx.from, (fromCounts.get(tx.from) || 0) + 1)
+    if (tx.to) toCounts.set(tx.to, (toCounts.get(tx.to) || 0) + 1)
+  })
 
   const topSenders = Array.from(fromCounts.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
-    .map(([addr, count]) => ({ address: addr, transaction_count: count }));
+    .map(([addr, count]) => ({ address: addr, transaction_count: count }))
 
   const topReceivers = Array.from(toCounts.entries())
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
-    .map(([addr, count]) => ({ address: addr, transaction_count: count }));
+    .map(([addr, count]) => ({ address: addr, transaction_count: count }))
 
   return {
     total_transactions: txs.length,
@@ -122,7 +122,7 @@ export function summarizeTransactions(txs: any[]): any {
     top_senders: topSenders,
     top_receivers: topReceivers,
     block_range: blockRange,
-  };
+  }
 }
 
 /**
@@ -137,7 +137,7 @@ export function compactLogs(logs: any[]): any[] {
     // Exclude: data (large hex string), transactionHash, logIndex, etc.
     blockNumber: log.blockNumber || log.block?.number,
     timestamp: log.timestamp || log.block?.timestamp,
-  }));
+  }))
 }
 
 /**
@@ -153,36 +153,32 @@ export function compactTransactions(txs: any[]): any[] {
     // Exclude: input (large hex), nonce, gasPrice details, etc.
     blockNumber: tx.blockNumber || tx.block?.number,
     timestamp: tx.timestamp || tx.block?.timestamp,
-  }));
+  }))
 }
 
 /**
  * Apply response format to data
  */
-export function applyResponseFormat(
-  data: any,
-  format: ResponseFormat,
-  dataType: "logs" | "transactions"
-): any {
-  if (format === "full" || !Array.isArray(data)) {
-    return data;
+export function applyResponseFormat(data: any, format: ResponseFormat, dataType: 'logs' | 'transactions'): any {
+  if (format === 'full' || !Array.isArray(data)) {
+    return data
   }
 
-  if (format === "summary") {
-    if (dataType === "logs") {
-      return summarizeLogs(data);
-    } else if (dataType === "transactions") {
-      return summarizeTransactions(data);
+  if (format === 'summary') {
+    if (dataType === 'logs') {
+      return summarizeLogs(data)
+    } else if (dataType === 'transactions') {
+      return summarizeTransactions(data)
     }
   }
 
-  if (format === "compact") {
-    if (dataType === "logs") {
-      return compactLogs(data);
-    } else if (dataType === "transactions") {
-      return compactTransactions(data);
+  if (format === 'compact') {
+    if (dataType === 'logs') {
+      return compactLogs(data)
+    } else if (dataType === 'transactions') {
+      return compactTransactions(data)
     }
   }
 
-  return data;
+  return data
 }
