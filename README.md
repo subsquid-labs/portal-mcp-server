@@ -50,14 +50,14 @@ See [PERFORMANCE_GUIDE.md](PERFORMANCE_GUIDE.md) for detailed optimization tips.
 ## Setup
 
 ```bash
-npm install
-npm run build
+pnpm install
+pnpm run build
 ```
 
 ## Test with MCP Inspector
 
 ```bash
-npm run inspect
+pnpm run inspect
 ```
 
 ## Use with Claude Desktop
@@ -74,123 +74,6 @@ Add to `claude_desktop_config.json`:
   }
 }
 ```
-
-## Deploy to Cloudflare Workers
-
-### Prerequisites
-
-1. Install Wrangler CLI (Cloudflare's deployment tool):
-```bash
-npm install -g wrangler
-```
-
-2. Login to Cloudflare:
-```bash
-wrangler login
-```
-
-### Deployment Steps
-
-1. **Install dependencies** (including Cloudflare-specific packages):
-```bash
-npm install
-```
-
-2. **Configure your worker** (optional):
-
-   Edit `wrangler.toml` to customize:
-   - Worker name
-   - Portal URL
-   - Routes and domains
-
-3. **Test locally**:
-```bash
-npm run cf:dev
-```
-
-This starts a local development server at `http://localhost:8787`
-
-4. **Deploy to Cloudflare**:
-```bash
-npm run cf:deploy
-```
-
-Your MCP server will be deployed and you'll receive a URL like:
-`https://sqd-portal-mcp.your-subdomain.workers.dev`
-
-### Using the Deployed Worker
-
-Once deployed, your MCP server is accessible via HTTP. You can:
-
-1. **Health Check**:
-```bash
-curl https://sqd-portal-mcp.your-subdomain.workers.dev/health
-```
-
-2. **Initialize MCP Connection**:
-```bash
-curl -X POST https://sqd-portal-mcp.your-subdomain.workers.dev/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "initialize",
-    "params": {
-      "protocolVersion": "2024-11-05",
-      "capabilities": {},
-      "clientInfo": {"name": "test", "version": "1.0"}
-    }
-  }'
-```
-
-Response will be in SSE format:
-```
-event: message
-data: {"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":"sqd-portal-mcp-server","version":"0.5.0"}},"jsonrpc":"2.0","id":1}
-```
-
-3. **Call Tools**:
-```bash
-curl -X POST https://sqd-portal-mcp.your-subdomain.workers.dev/mcp \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/call",
-    "params": {
-      "name": "portal_list_datasets",
-      "arguments": {}
-    }
-  }'
-```
-
-### Monitor Your Worker
-
-View real-time logs:
-```bash
-npm run cf:tail
-```
-
-### Configuration
-
-Environment variables can be set in `wrangler.toml`:
-
-```toml
-[vars]
-PORTAL_URL = "https://portal.sqd.dev"
-```
-
-Or set them in the Cloudflare dashboard under your Worker's Settings > Variables.
-
-### Cloudflare Workers Benefits
-
-- **Global Edge Network**: Your MCP server runs on Cloudflare's edge network worldwide
-- **Auto-scaling**: Handles traffic spikes automatically
-- **Low Latency**: Requests are served from the nearest edge location
-- **Free Tier**: 100,000 requests/day on the free plan
-- **Zero DevOps**: No servers to manage
 
 ### Architecture
 
