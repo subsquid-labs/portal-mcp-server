@@ -16,13 +16,13 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
 
   // Health check endpoint
+  // NOTE: Do not expose PORTAL_URL here — it may contain a sensitive token
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(
       JSON.stringify({
         status: 'ok',
         version: npmVersion,
-        portal_url: PORTAL_URL,
       }),
     )
     return
