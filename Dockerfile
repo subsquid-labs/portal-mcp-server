@@ -13,8 +13,15 @@ RUN pnpm run build
 
 FROM node:24-alpine
 
+RUN apk add --no-cache curl
+
 WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./
 
-CMD ["node", "dist/index.js"]
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+CMD ["node", "dist/http.js"]
