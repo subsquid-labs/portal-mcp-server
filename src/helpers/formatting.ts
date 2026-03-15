@@ -128,6 +128,77 @@ export function formatValue(valueHex: string): {
 }
 
 /**
+ * Check if a string looks like a hex value (0x prefixed, all hex chars)
+ */
+function isHexValue(value: unknown): value is string {
+  return typeof value === 'string' && /^0x[0-9a-fA-F]+$/.test(value) && value.length > 4
+}
+
+/**
+ * Check if a value is any hex string (including short ones like 0x0)
+ */
+function isAnyHexValue(value: unknown): value is string {
+  return typeof value === 'string' && /^0x[0-9a-fA-F]*$/.test(value)
+}
+
+/**
+ * Convert hex fields in a transaction object to human-readable values.
+ * Converts value/gas/gasPrice/etc inline so LLMs and users can read them.
+ */
+export function formatTransactionFields(tx: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...tx }
+
+  // Convert value (wei → ETH) — use isAnyHexValue to catch 0x0 too
+  if (isAnyHexValue(result.value)) {
+    const ethValue = weiToEth(result.value as string)
+    result.value_eth = ethValue
+    delete result.value
+  }
+
+  // Convert gas prices (wei → Gwei)
+  for (const field of ['gasPrice', 'effectiveGasPrice', 'maxFeePerGas', 'maxPriorityFeePerGas']) {
+    if (isHexValue(result[field])) {
+      result[`${field}_gwei`] = weiToGwei(result[field] as string)
+      delete result[field]
+    }
+  }
+
+  // Convert gas amounts (hex → decimal)
+  for (const field of ['gas', 'gasUsed', 'cumulativeGasUsed']) {
+    if (isHexValue(result[field])) {
+      result[field] = hexToNumber(result[field] as string)
+    }
+  }
+
+  // Convert nonce, transactionIndex, type, status (hex → decimal)
+  for (const field of ['nonce', 'transactionIndex', 'type', 'status']) {
+    if (isHexValue(result[field])) {
+      result[field] = hexToNumber(result[field] as string)
+    }
+  }
+
+  // Convert L2 fee fields
+  if (isHexValue(result.l1Fee)) {
+    result.l1Fee_eth = weiToEth(result.l1Fee as string)
+    delete result.l1Fee
+  }
+  if (isHexValue(result.l1GasUsed)) {
+    result.l1GasUsed = hexToNumber(result.l1GasUsed as string)
+  }
+  if (isHexValue(result.l1GasPrice)) {
+    result.l1GasPrice_gwei = weiToGwei(result.l1GasPrice as string)
+    delete result.l1GasPrice
+  }
+
+  // Remove noise fields that waste context
+  for (const field of ['v', 'r', 's', 'yParity', 'logsBloom']) {
+    delete result[field]
+  }
+
+  return result
+}
+
+/**
  * Shorten address for display (0x1234...5678)
  */
 export function shortenAddress(address: string): string {

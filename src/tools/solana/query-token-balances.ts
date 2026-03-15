@@ -7,6 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildSolanaTokenBalanceFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
 // Tool: Query Solana Token Balances
@@ -53,6 +54,17 @@ export function registerQuerySolanaTokenBalancesTool(server: McpServer) {
         to_block ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
+
+      const hasFilters = !!(account || pre_mint || post_mint || pre_owner || post_owner)
+      const validation = validateSolanaQuerySize({
+        slotRange: endBlock - from_block,
+        hasFilters,
+        queryType: 'token_balances',
+        limit,
+      })
+      if (!validation.valid) {
+        throw new Error(validation.error)
+      }
 
       const tokenBalanceFilter: Record<string, unknown> = {}
       if (account) tokenBalanceFilter.account = account

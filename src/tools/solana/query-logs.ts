@@ -7,6 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildSolanaLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
 // Tool: Query Solana Logs
@@ -42,6 +43,17 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
         to_block ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
+
+      const hasFilters = !!(program_id || kind)
+      const validation = validateSolanaQuerySize({
+        slotRange: endBlock - from_block,
+        hasFilters,
+        queryType: 'logs',
+        limit,
+      })
+      if (!validation.valid) {
+        throw new Error(validation.error)
+      }
 
       const logFilter: Record<string, unknown> = {}
       if (program_id) logFilter.programId = program_id

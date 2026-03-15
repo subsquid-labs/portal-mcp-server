@@ -19,24 +19,7 @@ import type { BlockHead } from '../../types/index.js'
 export function registerGetErc20TransfersTool(server: McpServer) {
   server.tool(
     'portal_get_erc20_transfers',
-    `Get ERC20 token transfers (USDC, DAI, USDT, etc.). Automatically filters Transfer events for you.
-
-WHEN TO USE:
-- "Track USDC transfers on Base"
-- "Show all token transfers from this wallet"
-- "Monitor incoming tokens to address X"
-- "Get token flow between two addresses"
-
-EASIER THAN portal_query_logs: No need to know event signatures or topics.
-
-EXAMPLES:
-- USDC transfers: { token_addresses: ["0xUSDC..."], from_block: X, to_block: Y }
-- Wallet outflows: { from_addresses: ["0xWallet..."] }
-- Incoming tokens: { to_addresses: ["0xWallet..."] }
-
-FAST: <1s for 10k blocks.
-
-SEE ALSO: portal_query_logs (more flexible), portal_get_wallet_summary (includes transactions too)`,
+    `Get ERC20 token transfers. Automatically filters Transfer events — no need to know event signatures. Supports filtering by token, sender, and recipient.`,
     {
       dataset: z.string().describe('Dataset name or alias'),
       from_block: z.number().describe('Starting block number'),

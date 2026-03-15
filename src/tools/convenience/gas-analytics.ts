@@ -18,23 +18,7 @@ import { getBlockRangeForDuration } from '../../helpers/timestamp-to-block.js'
 export function registerGetGasAnalyticsTool(server: McpServer) {
   server.tool(
     'portal_get_gas_analytics',
-    `Analyze gas prices and usage patterns. Answer "when is gas cheapest?" instantly.
-
-WHEN TO USE:
-- "When is gas cheapest on this chain?"
-- "What's the average gas price right now?"
-- "Show me gas price trends"
-- "Compare current gas vs historical"
-- "Is gas expensive right now?"
-
-PERFECT FOR: Gas optimization, transaction timing, cost estimation.
-
-EXAMPLES:
-- Last 24h trend: { dataset: "ethereum", timeframe: "24h" }
-- Current vs historical: { dataset: "polygon", timeframe: "7d" }
-- Cost estimation: { dataset: "base", include_cost_estimates: true }
-
-FAST: Returns percentiles, trends, and actionable recommendations.`,
+    `Analyze gas prices and usage patterns. Returns current price, percentiles, trends, and cost estimates.`,
     {
       dataset: z.string().describe("Dataset name (supports short names: 'ethereum', 'polygon', 'base', etc.)"),
       timeframe: z.enum(['1h', '6h', '24h', '7d']).default('24h').describe('Time period to analyze (default: 24h)'),

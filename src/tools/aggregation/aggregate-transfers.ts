@@ -23,22 +23,7 @@ const TRANSFER_TOPIC0 = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55
 export function registerAggregateTransfersTool(server: McpServer) {
   server.tool(
     'portal_aggregate_transfers',
-    `Aggregate transfer statistics (volume, unique addresses, token breakdown). ~98% smaller than fetching all transfers.
-
-WHEN TO USE:
-- "What's the total USDC transfer volume today?"
-- "How many unique senders/receivers?"
-- "Which tokens have the most transfers?"
-- "Transfer activity summary for this wallet"
-
-ONE CALL SOLUTION: Returns aggregated stats without individual transfer records.
-
-EXAMPLES:
-- USDC volume: { dataset: "base", timeframe: "24h", token_address: "0x833589...USDC" }
-- Wallet stats: { dataset: "ethereum", timeframe: "7d", from_address: "0xVitalik..." }
-- Top tokens: { dataset: "polygon", timeframe: "24h", group_by: "token" }
-
-FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
+    `Aggregate ERC20 transfer statistics: volume, unique addresses, token breakdown. ~98% smaller than fetching individual transfers.`,
     {
       dataset: z.string().describe('Dataset name'),
       timeframe: z.string().optional().describe("Time range (e.g., '24h', '7d')"),
@@ -98,6 +83,7 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
           log: {
             address: true,
             topics: true,
+            data: true,
             logIndex: true,
           },
         },
@@ -113,19 +99,27 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
 
       const totalTransfers = allLogs.length
 
-      // Extract addresses from topics
+      // Extract addresses and compute volume from topics + data
       const senders = new Set<string>()
       const receivers = new Set<string>()
       const tokens = new Set<string>()
+      let totalVolumeRaw = 0n
 
       allLogs.forEach((log: any) => {
         if (log.address) tokens.add(log.address.toLowerCase())
         if (log.topics && log.topics.length >= 3) {
-          // topic1 = from (padded), topic2 = to (padded)
           const from = '0x' + log.topics[1].slice(-40)
           const to = '0x' + log.topics[2].slice(-40)
           senders.add(from)
           receivers.add(to)
+        }
+        // Extract transfer value from data (Transfer event: data = uint256 value)
+        if (log.data && log.data !== '0x' && log.data.length >= 66) {
+          try {
+            totalVolumeRaw += BigInt(log.data.slice(0, 66))
+          } catch {
+            // skip malformed data
+          }
         }
       })
 
@@ -133,14 +127,23 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
       let grouped: any = undefined
 
       if (group_by === 'token') {
-        const byToken = new Map<string, number>()
+        const byToken = new Map<string, { count: number; volume: bigint }>()
         allLogs.forEach((log: any) => {
           const token = log.address?.toLowerCase() || 'unknown'
-          byToken.set(token, (byToken.get(token) || 0) + 1)
+          const existing = byToken.get(token) || { count: 0, volume: 0n }
+          existing.count++
+          if (log.data && log.data !== '0x' && log.data.length >= 66) {
+            try { existing.volume += BigInt(log.data.slice(0, 66)) } catch { /* skip */ }
+          }
+          byToken.set(token, existing)
         })
 
         grouped = Array.from(byToken.entries())
-          .map(([token, count]) => ({ token, transfer_count: count }))
+          .map(([token, { count, volume }]) => ({
+            token,
+            transfer_count: count,
+            total_volume_raw: volume.toString(),
+          }))
           .sort((a, b) => b.transfer_count - a.transfer_count)
       } else if (group_by === 'sender') {
         const bySender = new Map<string, number>()
@@ -154,7 +157,7 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
         grouped = Array.from(bySender.entries())
           .map(([sender, count]) => ({ sender, transfer_count: count }))
           .sort((a, b) => b.transfer_count - a.transfer_count)
-          .slice(0, 20) // Top 20
+          .slice(0, 20)
       } else if (group_by === 'receiver') {
         const byReceiver = new Map<string, number>()
         allLogs.forEach((log: any) => {
@@ -167,11 +170,12 @@ FAST: ~200ms for aggregating millions of transfers. Returns <2KB payload.`,
         grouped = Array.from(byReceiver.entries())
           .map(([receiver, count]) => ({ receiver, transfer_count: count }))
           .sort((a, b) => b.transfer_count - a.transfer_count)
-          .slice(0, 20) // Top 20
+          .slice(0, 20)
       }
 
       const response: any = {
         total_transfers: totalTransfers,
+        total_volume_raw: totalVolumeRaw.toString(),
         unique_senders: senders.size,
         unique_receivers: receivers.size,
         unique_tokens: tokens.size,

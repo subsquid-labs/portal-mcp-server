@@ -20,22 +20,7 @@ import { normalizeAddresses } from '../../helpers/validation.js'
 export function registerCountEventsTool(server: McpServer) {
   server.tool(
     'portal_count_events',
-    `Count events/logs without fetching full data. ~99% smaller than portal_query_logs.
-
-WHEN TO USE:
-- "How many USDC transfers in the last 24 hours?"
-- "Count Uniswap swaps on Base today"
-- "How many events from this contract?"
-- "What's the event volume per contract?"
-
-ONE CALL SOLUTION: Returns counts grouped by address or event type.
-
-EXAMPLES:
-- Count transfers: { dataset: "base", timeframe: "24h", topic0: ["0xddf252ad...Transfer"] }
-- Count by contract: { dataset: "ethereum", timeframe: "7d", group_by: "address" }
-- Total events: { dataset: "polygon", from_block: 100, to_block: 1000 }
-
-FAST: ~100ms for counting millions of events. Returns tiny payload (<1KB).`,
+    `Count events/logs without fetching full data. Returns counts by contract, ~99% smaller than portal_query_logs.`,
     {
       dataset: z.string().describe("Dataset name (supports short names: 'ethereum', 'polygon', 'base', etc.)"),
       timeframe: z.string().optional().describe("Time range (e.g., '24h', '7d'). Alternative to from_block/to_block"),

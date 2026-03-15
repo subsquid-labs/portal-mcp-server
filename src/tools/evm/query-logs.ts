@@ -24,22 +24,7 @@ import {
 export function registerQueryLogsTool(server: McpServer) {
   server.tool(
     'portal_query_logs',
-    `Query event logs (emitted events) from EVM chains. This is THE TOOL for tracking on-chain events.
-
-WHEN TO USE:
-- "Track all USDC transfers" → Filter by USDC address + Transfer event signature
-- "Monitor Uniswap swaps on pool X" → Filter by pool address + Swap event
-- "Get all events from contract Y" → Just filter by address
-- "Find Transfer events with specific recipient" → Use topic1 for indexed parameters
-
-PERFORMANCE: <1s for 10k blocks when filtered. ALWAYS filter by address or topics.
-
-EXAMPLES:
-- ERC20 transfers: { addresses: ["0xUSDC..."], topic0: ["0xddf252ad...Transfer"] }
-- All contract events: { addresses: ["0xContract..."], from_block: X, to_block: Y }
-- Indexed parameter: { topic1: ["0x000...paddedAddress"] } for transfer recipient
-
-SEE ALSO: portal_get_erc20_transfers (easier for token transfers), portal_get_nft_transfers`,
+    `Query event logs from EVM chains. Filter by contract address, event signature (topic0), and indexed parameters. Use field_preset and response_format to control response size.`,
     {
       dataset: z.string().describe('Dataset name or alias'),
       timeframe: z

@@ -196,6 +196,51 @@ Even with filters, this exceeds the maximum safe range of ${maximum.toLocaleStri
   return { valid: true }
 }
 
+// ============================================================================
+// Solana Query Size Validation
+// ============================================================================
+
+export interface SolanaQueryValidationOptions {
+  slotRange: number
+  hasFilters: boolean
+  queryType: 'instructions' | 'token_balances' | 'balances' | 'logs' | 'rewards'
+  limit: number
+}
+
+/**
+ * Solana slots are extremely data-dense compared to EVM blocks.
+ * A single Solana slot can contain thousands of instructions.
+ * These limits prevent OOM crashes from oversized NDJSON responses.
+ */
+const SOLANA_MAXIMUM_RANGES = {
+  instructions: { filtered: 1000, unfiltered: 10 },
+  token_balances: { filtered: 1000, unfiltered: 10 },
+  balances: { filtered: 1000, unfiltered: 10 },
+  logs: { filtered: 1000, unfiltered: 10 },
+  rewards: { filtered: 5000, unfiltered: 100 },
+}
+
+export function validateSolanaQuerySize(options: SolanaQueryValidationOptions): QueryValidationResult {
+  const { slotRange, hasFilters, queryType, limit } = options
+  const maximum = hasFilters ? SOLANA_MAXIMUM_RANGES[queryType].filtered : SOLANA_MAXIMUM_RANGES[queryType].unfiltered
+
+  // Small limit makes large ranges safe
+  if (limit <= 100) {
+    return { valid: true }
+  }
+
+  if (slotRange > maximum) {
+    return {
+      valid: false,
+      error: `Query too large (${slotRange.toLocaleString()} slots${hasFilters ? '' : ' unfiltered'}). ` +
+        `Solana slots are data-dense — max safe range is ${maximum.toLocaleString()} slots. ` +
+        `Reduce range or add filters (program_id, account, etc.) or set limit <= 100.`,
+    }
+  }
+
+  return { valid: true }
+}
+
 /**
  * Format block range validation warning for user display
  */

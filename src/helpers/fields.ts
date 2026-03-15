@@ -11,7 +11,7 @@ export function buildEvmBlockFields(includeL2: boolean = false) {
     transactionsRoot: true,
     receiptsRoot: true,
     stateRoot: true,
-    logsBloom: true,
+    // logsBloom: true,  // REMOVED: 512-byte hex blob wastes context window
     sha3Uncles: true,
     extraData: true,
     miner: true,
@@ -52,11 +52,8 @@ export function buildEvmTransactionFields(includeL2: boolean = false, includeRec
     status: true,
     sighash: true,
     contractAddress: true,
-    yParity: true,
     chainId: true,
-    v: true,
-    r: true,
-    s: true,
+    // v, r, s, yParity REMOVED: signature components waste ~192 bytes per tx with no analytical value
   }
 
   if (includeL2) {

@@ -16,31 +16,7 @@ import { normalizeAddresses, validateQuerySize } from '../../helpers/validation.
 export function registerQueryTracesTool(server: McpServer) {
   server.tool(
     'portal_query_traces',
-    `Query internal transactions/traces from EVM chains. Track contract deployments, internal calls, self-destructs, and block rewards.
-
-WHEN TO USE:
-- "Find contracts deployed by address X" → Use type: ["create"]
-- "Track internal ETH transfers" → Use type: ["call"]
-- "Monitor self-destructs" → Use type: ["suicide"]
-
-IMPORTANT FOR CONTRACT DEPLOYMENTS:
-- type "create" returns BOTH CREATE and CREATE2 deployments
-- Portal API does not distinguish between CREATE and CREATE2 opcodes
-- Both opcodes appear as type "create" in the results
-- To find all deployed contracts, use type: ["create"] and you'll get both
-
-PERFORMANCE: Traces are expensive. RECOMMENDED: <1k blocks per query.
-
-EXAMPLES:
-- All deployments: { type: ["create"], from_block: X, to_block: Y }
-- Deployments by specific deployer: { type: ["create"], create_from: ["0xDeployer..."] }
-- Internal calls to contract: { type: ["call"], call_to: ["0xContract..."] }
-
-CORRECT PARAMETERS BY TYPE:
-- CREATE traces: use create_from (NOT call_from)
-- CALL traces: use call_from and call_to
-- SUICIDE traces: use suicide_refund_address
-- REWARD traces: use reward_author`,
+    `Query internal transactions/traces from EVM chains. Find contract deployments (type: create), internal calls, and self-destructs.`,
     {
       dataset: z.string().describe('Dataset name or alias'),
       from_block: z.number().describe('Starting block number'),

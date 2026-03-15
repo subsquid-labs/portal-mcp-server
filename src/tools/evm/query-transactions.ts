@@ -13,6 +13,7 @@ import {
   buildEvmTransactionFields,
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { formatTransactionFields } from '../../helpers/formatting.js'
 import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import {
@@ -29,27 +30,7 @@ import {
 export function registerQueryTransactionsTool(server: McpServer) {
   server.tool(
     'portal_query_transactions',
-    `Query transactions from EVM chains. Use this for tracking wallet activity, contract interactions, or function calls.
-
-WHEN TO USE:
-- "Show all transactions from this wallet"
-- "Find all calls to this contract"
-- "Track transactions by function signature (sighash)"
-- "Get transaction history between two addresses"
-
-IMPORTANT: Unfiltered queries >100 blocks require a low limit (<=100) OR filters.
-- With limit <=100: Any timeframe works (e.g., timeframe="1h", limit=3)
-- Without filters and limit >100: Range must be <100 blocks
-
-PERFORMANCE: <500ms for 5k blocks when filtered. Always filter by address or sighash.
-
-EXAMPLES:
-- Recent transactions: { timeframe: "1h", limit: 3, field_preset: "minimal" }
-- Wallet activity: { from_addresses: ["0xWallet..."], timeframe: "24h" }
-- Contract calls: { to_addresses: ["0xContract..."], timeframe: "1h" }
-- Specific function: { to_addresses: ["0xContract..."], sighash: ["0x12345678"], timeframe: "7d" }
-
-SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
+    `Query transactions from EVM chains. Filter by sender, recipient, or function signature. Unfiltered queries >100 blocks need limit <=100.`,
     {
       dataset: z.string().describe('Dataset name or alias'),
       timeframe: z
@@ -229,7 +210,7 @@ SEE ALSO: portal_get_recent_transactions (simpler, auto-calculates blocks)`,
       const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
 
       // Apply limit after collecting all results
-      const limitedTxs = allTxs.slice(0, limit)
+      const limitedTxs = allTxs.slice(0, limit).map((tx) => formatTransactionFields(tx as Record<string, unknown>))
 
       // Apply response format (summary/compact/full)
       const formattedData = applyResponseFormat(limitedTxs, response_format || 'full', 'transactions')

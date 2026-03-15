@@ -15,7 +15,9 @@ export const LOG_FIELD_PRESETS = {
     log: {
       address: true,
       topics: true,
+      data: true,
       logIndex: true,
+      transactionHash: true,
     },
     block: {
       number: true,

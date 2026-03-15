@@ -1,39 +1,22 @@
+// Re-exports from cache/datasets.ts
+export { getChainType, isL2Chain } from '../cache/datasets.js'
+
 import type { ChainType } from '../types/index.js'
 
-// ============================================================================
-// Chain Type Detection (EVM or Solana only)
-// ============================================================================
-
+/**
+ * Sync chain type detection. Uses heuristic (dataset name pattern).
+ * Prefer getChainType() for metadata-driven detection.
+ */
 export function detectChainType(dataset: string): ChainType {
   const lower = dataset.toLowerCase()
-
-  // Solana datasets
-  if (lower.includes('solana') || lower.startsWith('solana-') || lower === 'solana' || lower.includes('eclipse')) {
+  if (lower.includes('solana') || lower.includes('eclipse')) {
     return 'solana'
   }
-
-  // Default to EVM for all other chains
+  if (lower === 'hyperliquid-fills') {
+    return 'hyperliquidFills'
+  }
+  if (lower === 'hyperliquid-replica-cmds') {
+    return 'hyperliquidReplicaCmds'
+  }
   return 'evm'
-}
-
-export function isL2Chain(dataset: string): boolean {
-  const lower = dataset.toLowerCase()
-  const l2Patterns = [
-    'arbitrum',
-    'optimism',
-    'base',
-    'zksync',
-    'linea',
-    'scroll',
-    'blast',
-    'mantle',
-    'mode',
-    'zora',
-    'polygon-zkevm',
-    'starknet',
-    'taiko',
-    'manta',
-    'metis',
-  ]
-  return l2Patterns.some((pattern) => lower.includes(pattern))
 }

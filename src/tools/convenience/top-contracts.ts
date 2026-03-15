@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
-import { resolveContractLabel } from '../../constants/contract-labels.js'
+
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
@@ -19,23 +19,7 @@ import { formatResult } from '../../helpers/format.js'
 export function registerGetTopContractsTool(server: McpServer) {
   server.tool(
     'portal_get_top_contracts',
-    `Find the most active contracts on a chain by transaction volume. Perfect for trend analysis.
-
-WHEN TO USE:
-- "Which contracts are most active on Base?"
-- "Show me the top 10 contracts by transaction volume"
-- "What contracts are getting the most usage?"
-- "Find trending contracts on this chain"
-- "Which DEXes have the most activity?"
-
-ONE CALL SOLUTION: Analyzes all transactions and ranks contracts by usage.
-
-EXAMPLES:
-- Top 10 in last 1000 blocks: { dataset: "base", num_blocks: 1000, limit: 10 }
-- Top contracts today: { dataset: "ethereum", num_blocks: 7200, limit: 20 }
-- Activity analysis: { dataset: "polygon", num_blocks: 5000, include_details: true }
-
-FAST: Returns ranked list with transaction counts, percentages, and optional details.`,
+    `Find the most active contracts on a chain by transaction count. Returns ranked list with transaction volumes.`,
     {
       dataset: z.string().describe("Dataset name (supports short names: 'ethereum', 'polygon', 'base', etc.)"),
       num_blocks: z
@@ -116,11 +100,8 @@ FAST: Returns ranked list with transaction counts, percentages, and optional det
       // Convert to array and sort by transaction count
       const sortedContracts = Array.from(contractCounts.entries())
         .map(([address, data]) => {
-          const label = resolveContractLabel(address, dataset)
           return {
             address,
-            name: label?.name,
-            category: label?.category,
             transaction_count: data.count,
             percentage: ((data.count / totalTxs) * 100).toFixed(2),
             sample_transactions: include_details ? data.samples : undefined,

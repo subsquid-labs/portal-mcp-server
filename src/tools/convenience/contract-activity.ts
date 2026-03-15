@@ -25,7 +25,7 @@ import type { BlockHead } from '../../types/index.js'
 export function registerGetContractActivityTool(server: McpServer) {
   server.tool(
     'portal_get_contract_activity',
-    'Analyze smart contract activity. Returns interaction count, unique callers, events emitted, and top users. Perfect for monitoring contract usage, identifying power users, or detecting unusual activity patterns.',
+    'Analyze smart contract activity: interaction count, unique callers, event emissions, and top users over a time period.',
     {
       dataset: z.string().describe('Dataset name or alias'),
       contract_address: z.string().describe('Contract address to analyze'),

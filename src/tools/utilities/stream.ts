@@ -14,21 +14,7 @@ import { formatResult } from '../../helpers/format.js'
 export function registerStreamTool(server: McpServer) {
   server.tool(
     'portal_stream',
-    `LOW-LEVEL TOOL: Execute raw Portal API queries. Most users should use specialized tools instead.
-
-WHEN TO USE:
-- Custom queries not covered by other tools
-- Advanced filtering combinations
-- Experimental queries
-
-BETTER ALTERNATIVES:
-- For logs: use portal_query_logs
-- For transactions: use portal_query_transactions
-- For traces: use portal_query_traces
-- For wallet analysis: use portal_get_wallet_summary
-- For transaction density: use portal_get_transaction_density
-
-IMPORTANT: The 'type' field is automatically added based on the dataset (evm/solana).`,
+    `Execute raw Portal API streaming queries. Use specialized tools (portal_query_logs, etc.) for common queries. Chain type is auto-detected.`,
     {
       dataset: z.string().describe('Dataset name or alias'),
       query: z

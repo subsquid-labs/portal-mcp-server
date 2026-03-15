@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "sqd-portal": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "cwd": "/ABSOLUTE/PATH/TO/portal-mcp-server"
+    }
+  }
+}

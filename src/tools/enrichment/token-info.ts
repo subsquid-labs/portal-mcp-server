@@ -14,22 +14,7 @@ import { formatResult } from '../../helpers/format.js'
 export function registerGetTokenInfoTool(server: McpServer) {
   server.tool(
     'portal_get_token_info',
-    `Get rich token metadata from CoinGecko. Returns name, symbol, decimals, logo for any token address.
-
-WHEN TO USE:
-- "What token is this address?" → Look up by address
-- "Show me USDC on Base" → Look up by symbol
-- "Get token logo for 0x..." → Fetch metadata including logo
-- "What's the name of this token?" → Resolve address to name
-
-DATA SOURCES: CoinGecko verified token lists
-
-EXAMPLES:
-- By address: { chain: "base", address: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" }
-- By symbol: { chain: "ethereum", symbol: "USDC" }
-- All tokens: { chain: "base" }
-
-SUPPORTED CHAINS: ethereum, base, arbitrum, optimism, polygon, avalanche, bsc`,
+    `Get token metadata (name, symbol, decimals, logo) from CoinGecko. Look up by address or symbol.`,
     {
       chain: z
         .enum(['ethereum', 'base', 'arbitrum', 'optimism', 'polygon', 'avalanche', 'bsc'])

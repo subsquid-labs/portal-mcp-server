@@ -20,23 +20,7 @@ import { getBlockRangeForDuration, getDurationSeconds } from '../../helpers/time
 export function registerGetTimeSeriesDataTool(server: McpServer) {
   server.tool(
     'portal_get_time_series',
-    `Aggregate blockchain metrics over time intervals. Perfect for trend analysis and charting.
-
-WHEN TO USE:
-- "Show me transaction volume over the past 24 hours"
-- "Chart gas prices by hour for the last week"
-- "What's the hourly transaction trend on Base?"
-- "Track contract activity over time"
-- "Visualize block utilization trends"
-
-ONE CALL SOLUTION: Automatically buckets data by time interval and calculates aggregates.
-
-EXAMPLES:
-- Hourly txs: { dataset: "base", metric: "transaction_count", interval: "1h", duration: "24h" }
-- Daily gas: { dataset: "ethereum", metric: "avg_gas_price", interval: "1d", duration: "7d" }
-- 15min activity: { dataset: "polygon", metric: "transaction_count", interval: "15m", duration: "6h" }
-
-FAST: Returns time-bucketed data ready for charting or analysis.`,
+    `Aggregate blockchain metrics (tx count, gas price, utilization, unique addresses) over time intervals. Returns bucketed data for charting.`,
     {
       dataset: z.string().describe("Dataset name (supports short names: 'ethereum', 'polygon', 'base', etc.)"),
       metric: z
@@ -67,35 +51,59 @@ FAST: Returns time-bucketed data ready for charting or analysis.`,
       const numBuckets = Math.ceil(durationSeconds / intervalSeconds)
       const bucketSize = Math.ceil((toBlock - fromBlock + 1) / numBuckets)
 
-      // Build query based on metric
-      let query: any = {
-        type: 'evm',
-        fromBlock,
-        toBlock,
-        includeAllBlocks: true, // IMPORTANT: Get all blocks, not just those matching filters
-        fields: {
-          block: {
-            number: true,
-            timestamp: true,
-          },
-        },
+      // Build base query fields based on metric
+      const baseFields: any = {
+        block: { number: true, timestamp: true },
       }
+      const queryExtras: any = {}
 
       if (metric === 'transaction_count' || metric === 'unique_addresses') {
-        query.fields.transaction = { transactionIndex: true }
+        baseFields.transaction = { transactionIndex: true }
         if (metric === 'unique_addresses') {
-          query.fields.transaction.from = true
-          query.fields.transaction.to = true
+          baseFields.transaction.from = true
+          baseFields.transaction.to = true
         }
-        query.transactions = address ? [{ to: [address.toLowerCase()] }] : [{}]
+        queryExtras.transactions = address ? [{ to: [address.toLowerCase()] }] : [{}]
       } else if (metric === 'avg_gas_price') {
-        query.fields.block.baseFeePerGas = true
+        baseFields.block.baseFeePerGas = true
       } else if (metric === 'gas_used' || metric === 'block_utilization') {
-        query.fields.block.gasUsed = true
-        query.fields.block.gasLimit = true
+        baseFields.block.gasUsed = true
+        baseFields.block.gasLimit = true
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Chunk large ranges to avoid Portal API size limits
+      const totalBlocks = toBlock - fromBlock
+      const hasTxData = metric === 'transaction_count' || metric === 'unique_addresses'
+      const chunkSize = hasTxData ? 5000 : 10000
+      const results: any[] = []
+
+      if (totalBlocks <= chunkSize) {
+        // Single query
+        const query = {
+          type: 'evm',
+          fromBlock,
+          toBlock,
+          includeAllBlocks: true,
+          fields: baseFields,
+          ...queryExtras,
+        }
+        results.push(...await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query))
+      } else {
+        // Chunked queries
+        for (let start = fromBlock; start < toBlock; start += chunkSize) {
+          const end = Math.min(start + chunkSize, toBlock)
+          const query = {
+            type: 'evm',
+            fromBlock: start,
+            toBlock: end,
+            includeAllBlocks: true,
+            fields: baseFields,
+            ...queryExtras,
+          }
+          const chunk = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+          results.push(...chunk)
+        }
+      }
 
       if (results.length === 0) {
         throw new Error('No data available for this time period')

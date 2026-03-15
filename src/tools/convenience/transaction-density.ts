@@ -18,22 +18,7 @@ import { formatResult } from '../../helpers/format.js'
 export function registerGetTransactionDensityTool(server: McpServer) {
   server.tool(
     'portal_get_transaction_density',
-    `Get transaction density (tx count per block) for creating charts and analysis. FAST: Only fetches minimal transaction data.
-
-WHEN TO USE:
-- "Compare transaction activity across chains"
-- "Create a density chart of txs per block"
-- "Show network activity over last N blocks"
-- "Which chain has more transactions?"
-
-PERFECT FOR: Charts, comparisons, network health monitoring.
-
-EXAMPLES:
-- Last 50 blocks: { dataset: "polygon", num_blocks: 50 }
-- Compare chains: Run for each chain with same num_blocks
-- Activity chart: { dataset: "ethereum", num_blocks: 100 }
-
-FAST: Returns block numbers + tx counts only. No full transaction data.`,
+    `Get transaction density (tx count per block) for recent blocks. Returns block-level counts for charting and analysis.`,
     {
       dataset: z.string().describe("Dataset name (supports short names: 'polygon', 'base', 'ethereum', etc.)"),
       num_blocks: z
@@ -72,8 +57,8 @@ FAST: Returns block numbers + tx counts only. No full transaction data.`,
 
       // Calculate tx density per block
       const densityData = results.map((block: any) => ({
-        block_number: block.number,
-        timestamp: block.timestamp,
+        block_number: block.header?.number ?? block.number,
+        timestamp: block.header?.timestamp ?? block.timestamp,
         transaction_count: block.transactions?.length || 0,
       }))
 

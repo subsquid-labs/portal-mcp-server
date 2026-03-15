@@ -7,6 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildSolanaRewardFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
 // Tool: Query Solana Rewards
@@ -38,6 +39,17 @@ export function registerQuerySolanaRewardsTool(server: McpServer) {
         to_block ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
+
+      const hasFilters = !!pubkey
+      const validation = validateSolanaQuerySize({
+        slotRange: endBlock - from_block,
+        hasFilters,
+        queryType: 'rewards',
+        limit,
+      })
+      if (!validation.valid) {
+        throw new Error(validation.error)
+      }
 
       const rewardFilter: Record<string, unknown> = {}
       if (pubkey) rewardFilter.pubkey = pubkey

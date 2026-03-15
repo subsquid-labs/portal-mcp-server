@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-03-16
+
+### Added
+- Hyperliquid support: `portal_query_fills`, `portal_query_replica_cmds`
+- Dynamic dataset discovery (replaced hardcoded network lists)
+- Convenience tools: `portal_get_contract_activity`, `portal_get_gas_analytics`, `portal_get_recent_transactions`, `portal_get_time_series`, `portal_get_top_contracts`, `portal_get_transaction_density`, `portal_get_wallet_summary`
+- Aggregation tools: `portal_aggregate_transfers`, `portal_count_events`
+- Enrichment: `portal_get_token_info`
+- Smoke test (`npm test`) — builds, boots server, calls 3 tools, asserts results
+- Release scripts (`npm run release:patch|minor|major`) — bump version, update CHANGELOG, create git tag
+
+### Fixed
+- NFT transfers: extract token_id and quantity from ERC1155 TransferSingle data
+- Transaction queries: convert hex values to human-readable (wei→ETH, gas→Gwei, hex→decimal)
+- Recent transactions and wallet summary: same hex-to-readable conversion
+- Decode logs: convert decoded numeric values to decimal strings
+- Query logs standard preset: include `data` and `transactionHash` fields
+- Transaction density: correctly extract block numbers from `header` subobject
+- Time series: chunk large queries to avoid Portal API size limits
+- Aggregate transfers: include volume data in results
+- Dataset info: correct network_type heuristic (arbitrum-one, arbitrum-nova classified as mainnet)
+- List datasets: fix mainnet detection for chains without "mainnet" suffix
+- Query blocks: remove `logsBloom` from response (context waste)
+- Transaction fields: strip cryptographic noise (`v`, `r`, `s`, `yParity`)
+
+### Changed
+- Field presets updated to exclude context-wasting fields by default
+
+## [0.5.4] - 2026-02-XX
+
+### Changed
+- Removed `portal_url` from health response
+- Version bump
+
+## [0.5.3] - 2026-02-XX
+
+### Changed
+- Moved MCP endpoint to root path
+- Added `dev:http` script
+
+## [0.5.2] - 2026-02-XX
+
+### Fixed
+- Copy node_modules to Docker runtime image
+
 ## [0.5.0] - 2025-01-XX
 
 ### Added

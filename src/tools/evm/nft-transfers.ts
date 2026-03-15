@@ -102,18 +102,33 @@ export function registerGetNftTransfersTool(server: McpServer) {
             let from = ''
             let to = ''
             let tokenId = ''
+            let quantity = ''
 
             if (topic0 === EVENT_SIGNATURES.TRANSFER_SINGLE) {
               transferType = 'erc1155_single'
               from = '0x' + (log.topics?.[2]?.slice(-40) || '')
               to = '0x' + (log.topics?.[3]?.slice(-40) || '')
+              // TransferSingle data: (uint256 id, uint256 value) — two 32-byte words
+              if (log.data && log.data.length >= 130) {
+                const dataHex = log.data.slice(2) // remove 0x
+                try {
+                  tokenId = BigInt('0x' + dataHex.slice(0, 64)).toString()
+                  quantity = BigInt('0x' + dataHex.slice(64, 128)).toString()
+                } catch {
+                  // fallback: leave as empty
+                }
+              }
             } else if (topic0 === EVENT_SIGNATURES.TRANSFER_BATCH) {
               transferType = 'erc1155_batch'
               from = '0x' + (log.topics?.[2]?.slice(-40) || '')
               to = '0x' + (log.topics?.[3]?.slice(-40) || '')
+              // TransferBatch data is ABI-encoded arrays — extract first id if possible
+              if (log.data && log.data.length > 2) {
+                tokenId = '(batch — see data)'
+              }
             }
 
-            return {
+            const result: Record<string, unknown> = {
               block_number: b.header?.number,
               transaction_hash: log.transactionHash,
               log_index: log.logIndex,
@@ -122,8 +137,9 @@ export function registerGetNftTransfersTool(server: McpServer) {
               from,
               to,
               token_id: tokenId,
-              data: log.data,
             }
+            if (quantity) result.quantity = quantity
+            return result
           })
         })
         .slice(0, limit)

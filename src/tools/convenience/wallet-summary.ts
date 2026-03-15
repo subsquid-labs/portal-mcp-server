@@ -2,13 +2,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset } from '../../cache/datasets.js'
-import { resolveContractLabel } from '../../constants/contract-labels.js'
+
 import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
 import { buildEvmLogFields, buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
-import { formatTimestamp, formatTokenAmount, hexToBigInt } from '../../helpers/formatting.js'
+import { formatTimestamp, formatTokenAmount, formatTransactionFields, hexToBigInt } from '../../helpers/formatting.js'
 import { getBlockRangeForDuration } from '../../helpers/timestamp-to-block.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
 import type { BlockHead } from '../../types/index.js'
@@ -28,23 +28,7 @@ import type { BlockHead } from '../../types/index.js'
 export function registerGetWalletSummaryTool(server: McpServer) {
   server.tool(
     'portal_get_wallet_summary',
-    `Get complete wallet activity in ONE call. Returns transactions + token transfers + NFTs together.
-
-WHEN TO USE (THIS IS THE BEST TOOL FOR):
-- "What has this wallet been doing?"
-- "Show me all activity for address 0x123..."
-- "Wallet dashboard for this address"
-- "Is this address active? What tokens did it receive?"
-
-ONE CALL = ALL DATA: No need to call multiple tools. Just specify address + timeframe.
-
-EXAMPLES:
-- Recent activity: { address: "0x123...", dataset: "polygon", timeframe: "24h" }
-- Full picture: { address: "0x456...", dataset: "ethereum", timeframe: "7d", include_nfts: true }
-
-DEFAULT: Returns transactions + token transfers. Set include_nfts: true for NFTs.
-
-SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get_nft_transfers`,
+    `Get wallet activity summary: recent transactions, ERC20 token transfers, and optionally NFT transfers for an address over a time period.`,
     {
       dataset: z.string().describe('Dataset name or alias'),
       address: z.string().describe('Wallet address to analyze'),
@@ -130,6 +114,7 @@ SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get
       const transactions = txResults
         .flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
         .slice(0, limit_per_type)
+        .map((tx) => formatTransactionFields(tx as Record<string, unknown>))
 
       // Query 2: Token Transfers (if requested)
       let tokenTransfers: unknown[] = []
@@ -171,12 +156,11 @@ SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get
             }
             return (b.logs || []).map((log) => {
               const tokenAddress = log.address.toLowerCase()
-              const tokenLabel = resolveContractLabel(tokenAddress, dataset)
               const rawValue = log.data
 
               // Assume 18 decimals if unknown (ERC20 standard)
               const decimals = 18
-              const formattedValue = formatTokenAmount(rawValue, decimals, tokenLabel?.symbol)
+              const formattedValue = formatTokenAmount(rawValue, decimals, undefined)
 
               return {
                 block_number: b.header?.number,
@@ -185,8 +169,8 @@ SEE ALSO: portal_get_recent_transactions, portal_get_erc20_transfers, portal_get
                 transaction_hash: log.transactionHash,
                 log_index: log.logIndex,
                 token_address: tokenAddress,
-                token_name: tokenLabel?.name,
-                token_symbol: tokenLabel?.symbol,
+                token_name: undefined,
+                token_symbol: undefined,
                 from: '0x' + (log.topics?.[1]?.slice(-40) || ''),
                 to: '0x' + (log.topics?.[2]?.slice(-40) || ''),
                 value_raw: rawValue,

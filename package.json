@@ -1,6 +1,6 @@
 {
   "name": "sqd-portal-mcp",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "MCP server wrapping SQD Portal API",
   "type": "module",
   "main": "dist/index.js",
@@ -13,7 +13,12 @@
     "start:http": "node dist/http.js",
     "dev": "tsx src/index.ts",
     "dev:http": "tsx src/http.ts",
-    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js"
+    "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "test": "tsx scripts/smoke-test.ts",
+    "test:tools": "tsx scripts/test-tools.ts",
+    "release:patch": "./scripts/release.sh patch",
+    "release:minor": "./scripts/release.sh minor",
+    "release:major": "./scripts/release.sh major"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",

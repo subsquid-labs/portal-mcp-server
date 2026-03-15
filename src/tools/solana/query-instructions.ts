@@ -13,6 +13,7 @@ import {
   buildSolanaTransactionFields,
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
 // Tool: Query Solana Instructions
@@ -111,6 +112,17 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         to_block ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
+
+      const hasFilters = !!(program_id || d1 || d2 || d4 || d8 || a0 || mentions_account || transaction_fee_payer)
+      const validation = validateSolanaQuerySize({
+        slotRange: endBlock - from_block,
+        hasFilters,
+        queryType: 'instructions',
+        limit,
+      })
+      if (!validation.valid) {
+        throw new Error(validation.error)
+      }
 
       const instructionFilter: Record<string, unknown> = {}
       if (program_id) instructionFilter.programId = program_id

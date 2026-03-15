@@ -181,7 +181,33 @@ function decodeLog(log: {
     const chunks = dataWithoutPrefix.match(/.{64}/g) || []
 
     for (let i = 0; i < nonIndexedInputs.length && i < chunks.length; i++) {
-      decoded[nonIndexedInputs[i].name] = '0x' + chunks[i]
+      const input = nonIndexedInputs[i]
+      const rawHex = '0x' + chunks[i]
+
+      // Convert numeric values to decimal strings for readability
+      if (
+        input.name === 'value' ||
+        input.name === 'wad' ||
+        input.name === 'id' ||
+        input.name === 'amount0' ||
+        input.name === 'amount1' ||
+        input.name === 'amount0In' ||
+        input.name === 'amount1In' ||
+        input.name === 'amount0Out' ||
+        input.name === 'amount1Out' ||
+        input.name === 'reserve0' ||
+        input.name === 'reserve1' ||
+        input.name === 'liquidity' ||
+        input.name === 'sqrtPriceX96'
+      ) {
+        try {
+          decoded[input.name] = BigInt(rawHex).toString()
+        } catch {
+          decoded[input.name] = rawHex
+        }
+      } else {
+        decoded[input.name] = rawHex
+      }
     }
   }
 

@@ -7,6 +7,7 @@ import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
 import { buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { formatTransactionFields } from '../../helpers/formatting.js'
 import { getQueryExamples, normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
 import type { BlockHead } from '../../types/index.js'
 
@@ -24,22 +25,7 @@ import type { BlockHead } from '../../types/index.js'
 export function registerGetRecentTransactionsTool(server: McpServer) {
   server.tool(
     'portal_get_recent_transactions',
-    `Get recent transactions without manual block calculation. Automatically queries the last N blocks or timeframe.
-
-WHEN TO USE:
-- "Show me the last 50 transactions on Polygon"
-- "What's the recent activity on this address?"
-- "Is this wallet still active?"
-- "Get latest transactions from/to specific addresses"
-
-FAST & SIMPLE: Just specify dataset + timeframe. No block numbers needed.
-
-EXAMPLES:
-- Recent activity: { dataset: "polygon", timeframe: "100", limit: 20 }
-- Track wallet: { dataset: "base", from_addresses: ["0x123..."], timeframe: "1h" }
-- Monitor recipient: { dataset: "ethereum", to_addresses: ["0xUSDC..."], timeframe: "24h" }
-
-SEE ALSO: portal_query_transactions (more filters), portal_get_wallet_summary (includes tokens)`,
+    `Get recent transactions without manual block calculation. Automatically queries the last N blocks or timeframe. Supports address filtering.`,
     {
       dataset: z
         .string()
@@ -138,7 +124,7 @@ SEE ALSO: portal_query_transactions (more filters), portal_get_wallet_summary (i
       const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
       const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
-      const limitedTxs = allTxs.slice(0, limit)
+      const limitedTxs = allTxs.slice(0, limit).map((tx) => formatTransactionFields(tx as Record<string, unknown>))
 
       return formatResult(
         limitedTxs,
