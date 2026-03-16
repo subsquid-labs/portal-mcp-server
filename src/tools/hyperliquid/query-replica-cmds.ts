@@ -30,7 +30,7 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
       user: z.array(z.string()).optional().describe('User wallet addresses (0x-prefixed, lowercase)'),
       vault_address: z.array(z.string()).optional().describe('Vault addresses (0x-prefixed, lowercase)'),
       status: z.enum(['ok', 'err']).optional().describe('Filter by action status'),
-      limit: z.number().optional().default(1000).describe('Max actions to return'),
+      limit: z.number().optional().default(50).describe('Max actions to return'),
     },
     async ({
       dataset,

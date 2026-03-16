@@ -142,7 +142,7 @@ export class ManagedCache<T> {
 
     const afterSize = this.cache.size
     if (beforeSize !== afterSize) {
-      console.log(`Cache cleanup: ${beforeSize} → ${afterSize} entries (freed ${beforeSize - afterSize})`)
+      console.error(`Cache cleanup: ${beforeSize} → ${afterSize} entries (freed ${beforeSize - afterSize})`)
     }
   }
 

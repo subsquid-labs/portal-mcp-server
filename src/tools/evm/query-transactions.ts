@@ -70,7 +70,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       last_nonce: z.number().optional().describe('Maximum nonce'),
       limit: z
         .number()
-        .max(1000)
+        .max(200)
         .optional()
         .default(20)
         .describe('Max transactions (default: 20, max: 1000). Note: Lower default for MCP to reduce context usage.'),

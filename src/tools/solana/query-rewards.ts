@@ -23,7 +23,7 @@ export function registerQuerySolanaRewardsTool(server: McpServer) {
       to_block: z.number().optional().describe('Ending slot number'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
       pubkey: z.array(z.string()).optional().describe('Reward recipient pubkeys'),
-      limit: z.number().optional().default(1000).describe('Max rewards'),
+      limit: z.number().optional().default(50).describe('Max rewards'),
     },
     async ({ dataset, from_block, to_block, finalized_only, pubkey, limit }) => {
       dataset = await resolveDataset(dataset)

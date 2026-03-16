@@ -23,7 +23,7 @@ export function registerGetTransactionDensityTool(server: McpServer) {
       dataset: z.string().describe("Dataset name (supports short names: 'polygon', 'base', 'ethereum', etc.)"),
       num_blocks: z
         .number()
-        .max(1000)
+        .max(200)
         .default(50)
         .describe('Number of recent blocks to analyze (default: 50, max: 1000)'),
     },

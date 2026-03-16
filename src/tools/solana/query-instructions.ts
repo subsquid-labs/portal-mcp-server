@@ -52,7 +52,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       mentions_account: z.array(z.string()).optional().describe('Accounts mentioned anywhere in the instruction'),
       is_committed: z.boolean().optional().describe('Only committed transactions'),
       transaction_fee_payer: z.array(z.string()).optional().describe('Fee payer filter'),
-      limit: z.number().optional().default(1000).describe('Max instructions'),
+      limit: z.number().optional().default(50).describe('Max instructions'),
       include_transaction: z.boolean().optional().default(false).describe('Include transaction data'),
       include_transaction_balances: z.boolean().optional().default(false).describe('Include SOL balance changes'),
       include_transaction_token_balances: z

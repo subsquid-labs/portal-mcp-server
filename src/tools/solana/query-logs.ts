@@ -27,7 +27,7 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
         .array(z.enum(['log', 'data', 'other']))
         .optional()
         .describe('Log kinds'),
-      limit: z.number().optional().default(1000).describe('Max logs'),
+      limit: z.number().optional().default(50).describe('Max logs'),
     },
     async ({ dataset, from_block, to_block, finalized_only, program_id, kind, limit }) => {
       dataset = await resolveDataset(dataset)

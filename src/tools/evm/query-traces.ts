@@ -42,7 +42,7 @@ export function registerQueryTracesTool(server: McpServer) {
       call_sighash: z.array(z.string()).optional().describe('Call sighash filter (4-byte hex)'),
       suicide_refund_address: z.array(z.string()).optional().describe('Suicide refund addresses'),
       reward_author: z.array(z.string()).optional().describe('Reward author addresses'),
-      limit: z.number().optional().default(1000).describe('Max traces'),
+      limit: z.number().optional().default(50).describe('Max traces'),
     },
     async ({
       dataset,

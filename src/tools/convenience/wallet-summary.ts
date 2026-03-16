@@ -39,7 +39,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         .describe("Look-back period: '1h'=~1800 blocks, '24h'=~43200, '7d'=~302400, or block count"),
       include_tokens: z.boolean().optional().default(true).describe('Include ERC20 token transfers'),
       include_nfts: z.boolean().optional().default(false).describe('Include NFT transfers (ERC721/1155)'),
-      limit_per_type: z.number().optional().default(50).describe('Max items per category (txs, tokens, nfts)'),
+      limit_per_type: z.number().optional().default(10).describe('Max items per category (txs, tokens, nfts)'),
     },
     async ({ dataset, address, timeframe, include_tokens, include_nfts, limit_per_type }) => {
       const queryStartTime = Date.now()

@@ -2,7 +2,7 @@
 // Result Formatting
 // ============================================================================
 
-const MAX_RESPONSE_LENGTH = 500_000 // 500KB - reasonable for MCP responses
+const MAX_RESPONSE_LENGTH = 50_000 // 50KB - keeps responses within MCP client context limits
 
 export interface FormatOptions {
   maxItems?: number

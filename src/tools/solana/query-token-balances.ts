@@ -27,7 +27,7 @@ export function registerQuerySolanaTokenBalancesTool(server: McpServer) {
       post_mint: z.array(z.string()).optional().describe('Token mint after tx'),
       pre_owner: z.array(z.string()).optional().describe('Owner before tx'),
       post_owner: z.array(z.string()).optional().describe('Owner after tx'),
-      limit: z.number().optional().default(1000).describe('Max token balance changes'),
+      limit: z.number().optional().default(50).describe('Max token balance changes'),
     },
     async ({
       dataset,

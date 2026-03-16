@@ -31,7 +31,7 @@ export function registerQueryStateDiffsTool(server: McpServer) {
         .array(z.enum(['=', '+', '*', '-']))
         .optional()
         .describe('Diff kinds: = (exists/no change), + (created), * (modified), - (deleted)'),
-      limit: z.number().optional().default(1000).describe('Max state diffs'),
+      limit: z.number().optional().default(50).describe('Max state diffs'),
     },
     async ({ dataset, from_block, to_block, finalized_only, addresses, key, kind, limit }) => {
       const queryStartTime = Date.now()

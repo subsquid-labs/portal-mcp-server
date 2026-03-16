@@ -27,7 +27,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
       token_addresses: z.array(z.string()).optional().describe('Token contract addresses'),
       from_addresses: z.array(z.string()).optional().describe('Sender addresses'),
       to_addresses: z.array(z.string()).optional().describe('Recipient addresses'),
-      limit: z.number().optional().default(1000).describe('Max transfers'),
+      limit: z.number().optional().default(50).describe('Max transfers'),
       include_token_info: z
         .boolean()
         .optional()

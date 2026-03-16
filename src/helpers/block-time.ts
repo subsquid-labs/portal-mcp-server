@@ -89,7 +89,7 @@ export async function measureBlockTime(dataset: string, sampleSize: number = 100
       timestamp: Date.now(),
     })
 
-    console.log(`Measured block time for ${dataset}: ${avgBlockTime.toFixed(2)}s (${validSamples} samples)`)
+    console.error(`Measured block time for ${dataset}: ${avgBlockTime.toFixed(2)}s (${validSamples} samples)`)
 
     return avgBlockTime
   } catch (error) {

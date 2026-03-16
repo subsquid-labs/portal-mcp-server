@@ -23,7 +23,7 @@ export function registerQuerySolanaBalancesTool(server: McpServer) {
       to_block: z.number().optional().describe('Ending slot number'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
       account: z.array(z.string()).optional().describe('Account addresses to filter'),
-      limit: z.number().optional().default(1000).describe('Max balance changes'),
+      limit: z.number().optional().default(50).describe('Max balance changes'),
     },
     async ({ dataset, from_block, to_block, finalized_only, account, limit }) => {
       dataset = await resolveDataset(dataset)

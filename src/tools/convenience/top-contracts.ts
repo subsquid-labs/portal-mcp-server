@@ -26,7 +26,7 @@ export function registerGetTopContractsTool(server: McpServer) {
         .number()
         .max(10000)
         .optional()
-        .default(1000)
+        .default(50)
         .describe('Number of recent blocks to analyze (default: 1000, max: 10000 for performance)'),
       limit: z
         .number()

@@ -24,7 +24,7 @@ export function registerGetNftTransfersTool(server: McpServer) {
       to_block: z.number().optional().describe('Ending block number'),
       contract_addresses: z.array(z.string()).optional().describe('NFT contract addresses'),
       token_standard: z.enum(['erc721', 'erc1155', 'both']).optional().default('both').describe('Token standard'),
-      limit: z.number().optional().default(1000).describe('Max transfers'),
+      limit: z.number().optional().default(50).describe('Max transfers'),
     },
     async ({ dataset, from_block, to_block, contract_addresses, token_standard, limit }) => {
       const queryStartTime = Date.now()

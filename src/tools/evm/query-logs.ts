@@ -64,7 +64,7 @@ export function registerQueryLogsTool(server: McpServer) {
       topic3: z.array(z.string()).optional().describe('Topic3 filter (indexed parameter 3, chain-specific)'),
       limit: z
         .number()
-        .max(1000)
+        .max(200)
         .optional()
         .default(20)
         .describe('Max logs to return (default: 20, max: 1000). Note: Lower default for MCP to reduce context usage.'),

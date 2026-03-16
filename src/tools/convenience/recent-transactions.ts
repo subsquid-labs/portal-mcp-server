@@ -41,10 +41,10 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
       to_addresses: z.array(z.string()).optional().describe('Filter by recipient addresses'),
       limit: z
         .number()
-        .max(1000)
+        .max(200)
         .optional()
-        .default(100)
-        .describe('Max transactions to return (max: 1000). For larger datasets, use portal_paginate_query'),
+        .default(10)
+        .describe('Max transactions to return (max: 200)'),
     },
     async ({ dataset, timeframe, from_addresses, to_addresses, limit }) => {
       const queryStartTime = Date.now()
