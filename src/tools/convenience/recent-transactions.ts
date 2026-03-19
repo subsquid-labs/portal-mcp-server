@@ -4,8 +4,8 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
+import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
 import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
-import { buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTransactionFields } from '../../helpers/formatting.js'
 import { getQueryExamples, normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
@@ -109,14 +109,18 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         throw new Error(validation.error + examples)
       }
 
+      // Use standard preset (no 'input' field) to prevent response size explosions.
+      // The 'input' field contains arbitrary-length hex data that dominates response size.
+      const fields = {
+        block: { number: true, timestamp: true, hash: true },
+        transaction: { ...TRANSACTION_FIELD_PRESETS.standard.transaction, gasUsed: true, status: true, sighash: true },
+      }
+
       const query: Record<string, unknown> = {
         type: 'evm',
         fromBlock,
         toBlock,
-        fields: {
-          block: { number: true, timestamp: true, hash: true },
-          transaction: buildEvmTransactionFields(includeL2),
-        },
+        fields,
         // ALWAYS include transactions field - empty array means "return all transactions"
         transactions: txFilters.length > 0 ? txFilters : [{}],
       }

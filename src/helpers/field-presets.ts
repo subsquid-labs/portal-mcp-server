@@ -129,6 +129,46 @@ export const TRACE_FIELD_PRESETS = {
   },
 }
 
+export const BLOCK_FIELD_PRESETS = {
+  minimal: {
+    number: true,
+    timestamp: true,
+    gasUsed: true,
+    gasLimit: true,
+    baseFeePerGas: true,
+  },
+  standard: {
+    number: true,
+    hash: true,
+    timestamp: true,
+    miner: true,
+    size: true,
+    gasUsed: true,
+    gasLimit: true,
+    baseFeePerGas: true,
+  },
+  full: {
+    number: true,
+    hash: true,
+    parentHash: true,
+    timestamp: true,
+    transactionsRoot: true,
+    receiptsRoot: true,
+    stateRoot: true,
+    sha3Uncles: true,
+    extraData: true,
+    miner: true,
+    nonce: true,
+    mixHash: true,
+    size: true,
+    gasLimit: true,
+    gasUsed: true,
+    difficulty: true,
+    totalDifficulty: true,
+    baseFeePerGas: true,
+  },
+}
+
 export type FieldPreset = 'minimal' | 'standard' | 'full' | 'custom'
 
 export function getLogFields(preset: FieldPreset, customFields?: any) {
@@ -152,4 +192,11 @@ export function getTraceFields(preset: FieldPreset, customFields?: any) {
     return customFields
   }
   return TRACE_FIELD_PRESETS[preset as keyof typeof TRACE_FIELD_PRESETS] || TRACE_FIELD_PRESETS.standard
+}
+
+export function getBlockFields(preset: FieldPreset, customFields?: any) {
+  if (preset === 'custom' && customFields) {
+    return customFields
+  }
+  return BLOCK_FIELD_PRESETS[preset as keyof typeof BLOCK_FIELD_PRESETS] || BLOCK_FIELD_PRESETS.standard
 }

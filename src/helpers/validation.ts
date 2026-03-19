@@ -111,10 +111,12 @@ export function validateQuerySize(options: QueryValidationOptions): QueryValidat
 
   const maximum = hasFilters ? MAXIMUM_RANGES[queryType].filtered : MAXIMUM_RANGES[queryType].unfiltered
 
-  // IMPORTANT: If limit is small (<=100), skip block range validation
-  // The limit parameter naturally caps the result set, making large ranges safe
-  // Example: timeframe="1h" (1800 blocks) with limit=3 only returns 3 records
-  const hasLowLimit = limit <= 100
+  // Low limit bypass ONLY for filtered queries.
+  // Filtered queries can skip non-matching blocks efficiently in Portal,
+  // so a small limit naturally caps the result set.
+  // UNFILTERED queries download ALL data before applying limit (client-side),
+  // so the bypass would still crash on high-throughput chains.
+  const hasLowLimit = limit <= 100 && hasFilters
 
   // Check if query exceeds absolute maximum
   if (blockRange > maximum && !hasLowLimit) {
@@ -224,8 +226,8 @@ export function validateSolanaQuerySize(options: SolanaQueryValidationOptions): 
   const { slotRange, hasFilters, queryType, limit } = options
   const maximum = hasFilters ? SOLANA_MAXIMUM_RANGES[queryType].filtered : SOLANA_MAXIMUM_RANGES[queryType].unfiltered
 
-  // Small limit makes large ranges safe
-  if (limit <= 100) {
+  // Small limit bypass ONLY for filtered queries (same rationale as EVM — see above)
+  if (limit <= 100 && hasFilters) {
     return { valid: true }
   }
 

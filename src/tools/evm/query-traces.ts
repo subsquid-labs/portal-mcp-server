@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { getTraceFields } from '../../helpers/field-presets.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildEvmTraceFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
@@ -43,6 +44,13 @@ export function registerQueryTracesTool(server: McpServer) {
       suicide_refund_address: z.array(z.string()).optional().describe('Suicide refund addresses'),
       reward_author: z.array(z.string()).optional().describe('Reward author addresses'),
       limit: z.number().optional().default(50).describe('Max traces'),
+      field_preset: z
+        .enum(['minimal', 'standard', 'full'])
+        .optional()
+        .default('standard')
+        .describe(
+          "Field preset: 'minimal' (type+from+to, smallest), 'standard' (+value+sighash, no input/output hex), 'full' (all fields including input/output hex blobs)",
+        ),
     },
     async ({
       dataset,
@@ -57,6 +65,7 @@ export function registerQueryTracesTool(server: McpServer) {
       suicide_refund_address,
       reward_author,
       limit,
+      field_preset,
     }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
@@ -109,13 +118,18 @@ export function registerQueryTracesTool(server: McpServer) {
       if (normalizedSuicideRefund) traceFilter.suicideRefundAddress = normalizedSuicideRefund
       if (normalizedRewardAuthor) traceFilter.rewardAuthor = normalizedRewardAuthor
 
+      // Use field preset for compact responses, fall back to full builder for 'full'
+      const presetFields = getTraceFields(field_preset)
+      const traceFields = field_preset === 'full' ? buildEvmTraceFields() : presetFields.trace
+      const blockFieldsForTrace = presetFields.block || { number: true, timestamp: true, hash: true }
+
       const query = {
         type: 'evm',
         fromBlock: from_block,
         toBlock: endBlock,
         fields: {
-          block: { number: true, timestamp: true, hash: true },
-          trace: buildEvmTraceFields(),
+          block: blockFieldsForTrace,
+          trace: traceFields,
         },
         traces: [traceFilter],
       }

@@ -17,8 +17,9 @@ export function registerListDatasetsTool(server: McpServer) {
       network_type: z.enum(['mainnet', 'testnet', 'devnet']).optional().describe('Filter by network type'),
       query: z.string().optional().describe('Search by name, alias, or chain ID'),
       real_time_only: z.boolean().optional().describe('Only show real-time datasets'),
+      limit: z.number().max(100).optional().default(25).describe('Max results to return (default: 25, max: 100)'),
     },
-    async ({ chain_type, network_type, query, real_time_only }) => {
+    async ({ chain_type, network_type, query, real_time_only, limit }) => {
       let datasets = await getDatasets()
 
       if (chain_type) {
@@ -92,7 +93,14 @@ export function registerListDatasetsTool(server: McpServer) {
         }
       })
 
-      return formatResult(results, `Found ${results.length} datasets`)
+      const totalAvailable = results.length
+      const limitedResults = results.slice(0, limit)
+      const message =
+        totalAvailable > limitedResults.length
+          ? `Found ${totalAvailable} datasets (showing ${limitedResults.length}). Use limit parameter to see more.`
+          : `Found ${limitedResults.length} datasets`
+
+      return formatResult(limitedResults, message)
     },
   )
 }

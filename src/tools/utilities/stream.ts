@@ -35,8 +35,13 @@ export function registerStreamTool(server: McpServer) {
         .passthrough() // Allow additional properties like 'type'
         .describe("Query object. NOTE: 'type' field is automatically added - do not include it"),
       timeout_ms: z.number().optional().default(60000).describe('Request timeout in milliseconds'),
+      limit: z
+        .number()
+        .optional()
+        .default(20)
+        .describe('Max blocks to return (default: 20). Caps the NDJSON stream to prevent context overflow.'),
     },
-    async ({ dataset, query, timeout_ms }) => {
+    async ({ dataset, query, timeout_ms, limit }) => {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
@@ -46,9 +51,19 @@ export function registerStreamTool(server: McpServer) {
         type: chainType,
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, queryWithType, timeout_ms)
+      const results = await portalFetchStream(
+        `${PORTAL_URL}/datasets/${dataset}/stream`,
+        queryWithType,
+        timeout_ms,
+        limit,
+      )
 
-      return formatResult(results, `Retrieved ${results.length} blocks of data`)
+      const truncated = results.length >= limit
+      const message = truncated
+        ? `Retrieved ${results.length} blocks of data (capped at limit=${limit})`
+        : `Retrieved ${results.length} blocks of data`
+
+      return formatResult(results, message)
     },
   )
 }

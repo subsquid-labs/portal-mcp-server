@@ -126,7 +126,7 @@ function decodeLog(log: {
   address: string
   event_name: string | null
   decoded: Record<string, string> | null
-  raw: { topics: string[]; data: string }
+  raw?: { topics: string[]; data: string }
   transaction_hash?: string
   log_index?: number
 } {
@@ -211,11 +211,12 @@ function decodeLog(log: {
     }
   }
 
+  // Omit raw section for successfully decoded events — the decoded fields
+  // contain the same info in human-readable form, so raw just bloats the response.
   return {
     address: log.address,
     event_name: eventInfo.name,
     decoded,
-    raw: { topics: log.topics, data: log.data },
     transaction_hash: log.transactionHash,
     log_index: log.logIndex,
   }

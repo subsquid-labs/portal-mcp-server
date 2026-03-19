@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
+import { getBlockFields } from '../../helpers/field-presets.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildEvmBlockFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
@@ -31,8 +32,15 @@ export function registerQueryBlocksTool(server: McpServer) {
         .optional()
         .default(false)
         .describe('Include L2-specific fields (auto-detected for L2 chains)'),
+      field_preset: z
+        .enum(['minimal', 'standard', 'full'])
+        .optional()
+        .default('standard')
+        .describe(
+          "Field preset: 'minimal' (number+timestamp+gas, smallest), 'standard' (+hash+miner+size), 'full' (all fields including parentHash, stateRoot, mixHash, etc.)",
+        ),
     },
-    async ({ dataset, from_block, to_block, limit, include_l2_fields, finalized_only }) => {
+    async ({ dataset, from_block, to_block, limit, include_l2_fields, finalized_only, field_preset }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
@@ -50,12 +58,18 @@ export function registerQueryBlocksTool(server: McpServer) {
       const endBlock = Math.min(from_block + limit!, validatedToBlock)
       const includeL2 = include_l2_fields || isL2Chain(dataset)
 
+      // Use field preset for compact responses, fall back to full builder for 'full'
+      const blockFields =
+        field_preset === 'full'
+          ? buildEvmBlockFields(includeL2)
+          : { ...getBlockFields(field_preset), ...(includeL2 ? { l1BlockNumber: true } : {}) }
+
       const query = {
         type: 'evm',
         fromBlock: from_block,
         toBlock: endBlock,
         fields: {
-          block: buildEvmBlockFields(includeL2),
+          block: blockFields,
         },
         includeAllBlocks: true,
       }

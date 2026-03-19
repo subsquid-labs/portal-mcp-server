@@ -7,7 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
-import { normalizeAddresses } from '../../helpers/validation.js'
+import { getQueryExamples, normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
 // Tool: Count Events
@@ -57,6 +57,20 @@ export function registerCountEventsTool(server: McpServer) {
       })
 
       const normalizedAddresses = normalizeAddresses(addresses, chainType)
+
+      // Validate query size to prevent crashes
+      const queryBlockRange = resolvedToBlock - resolvedFromBlock
+      const hasFilters = !!(normalizedAddresses || topic0)
+      const validation = validateQuerySize({
+        blockRange: queryBlockRange,
+        hasFilters,
+        queryType: 'logs',
+        limit: 10000, // count_events has no user-facing limit
+      })
+      if (!validation.valid) {
+        const examples = !hasFilters ? getQueryExamples('logs') : ''
+        throw new Error(validation.error + examples)
+      }
 
       // Build minimal query - only fetch what we need to count
       const logFilter: Record<string, unknown> = {}

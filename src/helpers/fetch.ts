@@ -114,10 +114,22 @@ export async function portalFetch<T>(
   throw lastError || new Error('Request failed after retries')
 }
 
+/**
+ * Stream Portal API results with early termination.
+ *
+ * maxBlocks: stop reading after this many NDJSON lines (each line = one block).
+ * Default 0 = no limit (reads entire response).
+ *
+ * maxBytes: stop reading after accumulating this many bytes of raw text.
+ * Prevents V8 string-length crashes on unexpectedly large responses.
+ * Default 20MB.
+ */
 export async function portalFetchStream(
   url: string,
   body: unknown,
   timeout: number = STREAM_TIMEOUT,
+  maxBlocks: number = 0,
+  maxBytes: number = 20 * 1024 * 1024,
 ): Promise<unknown[]> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)
@@ -158,11 +170,67 @@ export async function portalFetchStream(
       throw parsePortalError(response.status, errorText, { url, query: body })
     }
 
-    const text = await response.text()
-    return text
-      .split('\n')
-      .filter((line) => line.trim())
-      .map((line) => JSON.parse(line))
+    // Stream response line-by-line with early termination
+    if (!response.body) {
+      // Fallback for environments without ReadableStream
+      const text = await response.text()
+      return text
+        .split('\n')
+        .filter((line) => line.trim())
+        .map((line) => JSON.parse(line))
+    }
+
+    const results: unknown[] = []
+    let buffer = ''
+    let totalBytes = 0
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        totalBytes += chunk.length
+        buffer += chunk
+
+        // Process complete lines
+        let newlineIdx: number
+        while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIdx).trim()
+          buffer = buffer.slice(newlineIdx + 1)
+
+          if (line) {
+            results.push(JSON.parse(line))
+
+            // Early termination: max blocks reached
+            if (maxBlocks > 0 && results.length >= maxBlocks) {
+              reader.cancel()
+              return results
+            }
+          }
+        }
+
+        // Safety: abort if response exceeds maxBytes
+        if (totalBytes > maxBytes) {
+          reader.cancel()
+          throw new Error(
+            `Response too large (>${Math.round(maxBytes / 1024 / 1024)}MB). Add filters or reduce block range.`,
+          )
+        }
+      }
+
+      // Process any remaining data in buffer
+      const remaining = buffer.trim()
+      if (remaining) {
+        results.push(JSON.parse(remaining))
+      }
+    } finally {
+      reader.releaseLock()
+    }
+
+    return results
   } catch (error) {
     clearTimeout(timeoutId)
 
