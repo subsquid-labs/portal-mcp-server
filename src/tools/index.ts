@@ -18,7 +18,7 @@ import { registerListDatasetsTool } from './datasets/list.js'
 // Enrichment tools
 import { registerGetTokenInfoTool } from './enrichment/index.js'
 // Hyperliquid tools
-import { registerQueryHyperliquidFillsTool, registerQueryHyperliquidReplicaCmdsTool } from './hyperliquid/index.js'
+import { registerQueryHyperliquidFillsTool } from './hyperliquid/index.js'
 import { registerBlockAtTimestampTool } from './evm/block-at-timestamp.js'
 // EVM tools
 import { registerGetBlockNumberTool } from './evm/block-number.js'
@@ -68,9 +68,8 @@ export function registerAllTools(server: McpServer) {
   registerQuerySolanaLogsTool(server)
   registerQuerySolanaRewardsTool(server)
 
-  // Hyperliquid tools (2)
+  // Hyperliquid tools (1)
   registerQueryHyperliquidFillsTool(server)
-  registerQueryHyperliquidReplicaCmdsTool(server)
 
   // Utility tools (2)
   registerStreamTool(server)

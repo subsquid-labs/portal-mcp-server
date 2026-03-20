@@ -206,19 +206,6 @@ const tests: ToolTest[] = [
       assert(text.includes('Retrieved') || text.includes('fill'), 'Should report fills')
     },
   },
-  {
-    name: 'portal_query_hyperliquid_replica_cmds',
-    args: {
-      dataset: 'hyperliquid-replica-cmds',
-      from_block: -4, // special placeholder: use hlReplicaBlock - 100
-      limit: 5,
-    },
-    validate: (r) => {
-      const text = r.content[0].text
-      assert(text.includes('Retrieved') || text.includes('action'), 'Should report actions')
-    },
-  },
-
   // --- Convenience Tools ---
   {
     name: 'portal_get_recent_transactions',
@@ -404,14 +391,7 @@ async function main() {
   const hlFillsBlock = extractJson((hlFillsHead as any).content[0].text).number
   console.log(`Hyperliquid fills latest block: ${hlFillsBlock}`)
 
-  let hlReplicaBlock = 0
-  try {
-    const hlReplicaHead = await client.callTool({ name: 'portal_get_block_number', arguments: { dataset: 'hyperliquid-replica-cmds' } })
-    hlReplicaBlock = extractJson((hlReplicaHead as any).content[0].text).number
-    console.log(`Hyperliquid replica-cmds latest block: ${hlReplicaBlock}\n`)
-  } catch {
-    console.log(`Hyperliquid replica-cmds: could not get latest block (dataset may be unavailable)\n`)
-  }
+  console.log() // blank line after block numbers
 
   let passed = 0
   let failed = 0
@@ -425,7 +405,6 @@ async function main() {
     let blockForTest = baseBlock
     if (test.name.includes('solana')) blockForTest = solBlock
     else if (test.name.includes('hyperliquid_fills')) blockForTest = hlFillsBlock
-    else if (test.name.includes('hyperliquid_replica')) blockForTest = hlReplicaBlock
     replacePlaceholders(args, blockForTest)
 
     try {
@@ -475,7 +454,6 @@ function replacePlaceholders(obj: any, latestBlock: number) {
       if (obj[key] === -1) obj[key] = latestBlock - 500
       else if (obj[key] === -2) obj[key] = latestBlock - 5 // Tiny range (Solana)
       else if (obj[key] === -3) obj[key] = latestBlock - 100 // Hyperliquid fills
-      else if (obj[key] === -4) obj[key] = latestBlock - 100 // Hyperliquid replica cmds
       else if (obj[key] === -5) obj[key] = latestBlock - 10 // Tiny range for dense data (state diffs)
     } else if (obj[key] === -1 && (key === 'to_block' || key === 'toBlock')) {
       obj[key] = latestBlock

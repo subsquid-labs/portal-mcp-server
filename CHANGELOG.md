@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `portal_count_events`: added 500-block cap to prevent >100MB crashes on dense chains (Base), returns partial results with notice
 - `portal_aggregate_transfers`: reduced block cap from 500 to 200 and capped token grouping to top 20 — unfiltered queries on dense chains exceeded response size limits
 
+### Removed
+- `portal_query_hyperliquid_replica_cmds`: dataset not available on Portal API (will re-add when backend is fixed)
+
 ## [0.7.0] - 2026-03-20
 
 ### Added
