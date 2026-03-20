@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset } from '../../cache/datasets.js'
-import { PORTAL_URL } from '../../constants/index.js'
+import { EVENT_NAMES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
@@ -73,9 +73,18 @@ export function registerCountEventsTool(server: McpServer) {
       }
 
       // Build minimal query - only fetch what we need to count
+      // Only request 'topics' when grouping by topic0 (reduces response size)
       const logFilter: Record<string, unknown> = {}
       if (normalizedAddresses) logFilter.address = normalizedAddresses
       if (topic0) logFilter.topic0 = topic0
+
+      const logFields: Record<string, boolean> = {
+        address: true,
+        logIndex: true,
+      }
+      if (group_by === 'topic0') {
+        logFields.topics = true
+      }
 
       const query = {
         type: 'evm',
@@ -83,16 +92,20 @@ export function registerCountEventsTool(server: McpServer) {
         toBlock: resolvedToBlock,
         fields: {
           block: { number: true },
-          log: {
-            address: true,
-            topics: true,
-            logIndex: true,
-          },
+          log: logFields,
         },
         logs: [logFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // count_events downloads full log data to count client-side, so cap bytes at 100MB
+      // to handle dense chains like Base (~160 txs/block)
+      const results = await portalFetchStream(
+        `${PORTAL_URL}/datasets/${dataset}/stream`,
+        query,
+        undefined,
+        0,
+        100 * 1024 * 1024,
+      )
 
       // Count events
       const allLogs = results.flatMap((block: any) =>
@@ -117,12 +130,17 @@ export function registerCountEventsTool(server: McpServer) {
       } else if (group_by === 'topic0') {
         const byTopic = new Map<string, number>()
         allLogs.forEach((log: any) => {
-          const topic = log.topic0 || 'unknown'
+          // Portal returns topics as an array, topic0 is the first element
+          const topic = log.topics?.[0] || 'unknown'
           byTopic.set(topic, (byTopic.get(topic) || 0) + 1)
         })
 
         grouped = Array.from(byTopic.entries())
-          .map(([topic0, count]) => ({ topic0, count }))
+          .map(([topic0, count]) => ({
+            topic0,
+            event_name: EVENT_NAMES[topic0] || null,
+            count,
+          }))
           .sort((a, b) => b.count - a.count)
       }
 

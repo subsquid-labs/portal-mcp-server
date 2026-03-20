@@ -90,15 +90,32 @@ export async function getDatasetTables(dataset: string): Promise<string[]> {
 }
 
 // Common chain name aliases for fuzzy resolution
+// Source: https://github.com/subsquid-labs/agent-skills/blob/main/portal/portal-dataset-discovery/references/full-chain-mapping.md
 const CHAIN_ALIASES: Record<string, string[]> = {
-  'hyperliquid-mainnet': ['hyperevm', 'hyperl', 'hyper'],
+  'ethereum-mainnet': ['ethereum', 'eth'],
   'arbitrum-one': ['arbitrum', 'arb'],
   'optimism-mainnet': ['optimism', 'op'],
-  'polygon-mainnet': ['polygon', 'matic'],
-  'avalanche-mainnet': ['avalanche', 'avax'],
-  'binance-mainnet': ['bsc', 'bnb', 'binance'],
   'base-mainnet': ['base'],
-  'ethereum-mainnet': ['ethereum', 'eth'],
+  'polygon-mainnet': ['polygon', 'matic'],
+  'binance-mainnet': ['bsc', 'bnb', 'binance'],
+  'avalanche-mainnet': ['avalanche', 'avax'],
+  'gnosis-mainnet': ['gnosis', 'xdai'],
+  'zksync-mainnet': ['zksync', 'zksync-era'],
+  'blast-l2-mainnet': ['blast'],
+  'scroll-mainnet': ['scroll'],
+  'linea-mainnet': ['linea'],
+  'mantle-mainnet': ['mantle'],
+  'mode-mainnet': ['mode'],
+  'taiko-mainnet': ['taiko'],
+  'moonbeam-mainnet': ['moonbeam', 'glmr'],
+  'moonriver-mainnet': ['moonriver', 'movr'],
+  'fantom-mainnet': ['fantom', 'ftm'],
+  'celo-mainnet': ['celo'],
+  'worldchain-mainnet': ['worldchain', 'world'],
+  'zora-mainnet': ['zora'],
+  'hyperliquid-mainnet': ['hyperevm', 'hyperl', 'hyper'],
+  'hyperliquid-fills': ['hl-fills', 'hlfills'],
+  'solana-mainnet': ['solana', 'sol'],
 }
 
 /**

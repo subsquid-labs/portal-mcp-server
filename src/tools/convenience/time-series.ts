@@ -87,7 +87,13 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           fields: baseFields,
           ...queryExtras,
         }
-        results.push(...await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query))
+        results.push(...await portalFetchStream(
+          `${PORTAL_URL}/datasets/${dataset}/stream`,
+          query,
+          undefined,
+          0,
+          100 * 1024 * 1024,
+        ))
       } else {
         // Chunked queries
         for (let start = fromBlock; start < toBlock; start += chunkSize) {
@@ -100,7 +106,13 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             fields: baseFields,
             ...queryExtras,
           }
-          const chunk = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+          const chunk = await portalFetchStream(
+            `${PORTAL_URL}/datasets/${dataset}/stream`,
+            query,
+            undefined,
+            0,
+            100 * 1024 * 1024,
+          )
           results.push(...chunk)
         }
       }

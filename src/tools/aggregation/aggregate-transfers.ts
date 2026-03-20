@@ -90,7 +90,14 @@ export function registerAggregateTransfersTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Aggregation downloads full log data, so allow higher byte cap for dense chains
+      const results = await portalFetchStream(
+        `${PORTAL_URL}/datasets/${dataset}/stream`,
+        query,
+        undefined,
+        0,
+        100 * 1024 * 1024,
+      )
 
       // Extract transfers
       const allLogs = results.flatMap((block: any) =>

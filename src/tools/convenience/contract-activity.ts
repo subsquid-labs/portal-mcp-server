@@ -2,10 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
-import { PORTAL_URL } from '../../constants/index.js'
+import { EVENT_NAMES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
 import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
-import { buildEvmLogFields, buildEvmTransactionFields } from '../../helpers/fields.js'
+import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
 import type { BlockHead } from '../../types/index.js'
@@ -70,19 +71,26 @@ export function registerGetContractActivityTool(server: McpServer) {
       const fromBlock = Math.max(0, latestBlock - blockRange)
       const toBlock = latestBlock
 
-      // Query 1: Transactions to contract
+      // Query 1: Transactions to contract (standard preset — no input hex bloat)
       const txQuery = {
         type: 'evm',
         fromBlock,
         toBlock,
         fields: {
           block: { number: true, timestamp: true },
-          transaction: buildEvmTransactionFields(false),
+          transaction: { ...TRANSACTION_FIELD_PRESETS.standard.transaction },
         },
         transactions: [{ to: [normalizedContract] }],
       }
 
-      const txResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery)
+      // Contract activity aggregates all data, allow higher byte cap for dense chains
+      const txResults = await portalFetchStream(
+        `${PORTAL_URL}/datasets/${dataset}/stream`,
+        txQuery,
+        undefined,
+        0,
+        100 * 1024 * 1024,
+      )
 
       const transactions = txResults.flatMap(
         (block: unknown) => (block as { transactions?: unknown[] }).transactions || [],
@@ -116,15 +124,22 @@ export function registerGetContractActivityTool(server: McpServer) {
           logs: [{ address: [normalizedContract] }],
         }
 
-        const eventResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, eventsQuery)
+        const eventResults = await portalFetchStream(
+          `${PORTAL_URL}/datasets/${dataset}/stream`,
+          eventsQuery,
+          undefined,
+          0,
+          100 * 1024 * 1024,
+        )
 
         const rawEvents = eventResults.flatMap((block: unknown) => (block as { logs?: unknown[] }).logs || [])
         events = rawEvents as Array<{ topics?: string[]; data: string }>
 
-        // Count events by topic0 (event signature)
+        // Count events by topic0 (event signature) — resolve to human-readable names
         ;(events as Array<{ topics?: string[]; data: string }>).forEach((event) => {
           const topic0 = event.topics?.[0] || 'unknown'
-          eventsByType[topic0] = (eventsByType[topic0] || 0) + 1
+          const eventName = EVENT_NAMES[topic0] || topic0
+          eventsByType[eventName] = (eventsByType[eventName] || 0) + 1
         })
       }
 

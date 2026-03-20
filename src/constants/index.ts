@@ -33,4 +33,24 @@ export const EVENT_SIGNATURES = {
   UNISWAP_V2_SWAP: '0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822',
   UNISWAP_V3_SWAP: '0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67',
   SYNC: '0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1',
+  // WETH
+  DEPOSIT: '0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c',
+  WITHDRAWAL: '0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65',
+}
+
+/**
+ * Reverse lookup: topic0 hash → human-readable event name.
+ * Used by tools that display raw topic0 hashes to make output more actionable.
+ */
+export const EVENT_NAMES: Record<string, string> = {
+  [EVENT_SIGNATURES.TRANSFER_ERC20]: 'Transfer',
+  [EVENT_SIGNATURES.APPROVAL_ERC20]: 'Approval',
+  [EVENT_SIGNATURES.APPROVAL_FOR_ALL]: 'ApprovalForAll',
+  [EVENT_SIGNATURES.TRANSFER_SINGLE]: 'TransferSingle (ERC1155)',
+  [EVENT_SIGNATURES.TRANSFER_BATCH]: 'TransferBatch (ERC1155)',
+  [EVENT_SIGNATURES.UNISWAP_V2_SWAP]: 'Swap (Uniswap V2)',
+  [EVENT_SIGNATURES.UNISWAP_V3_SWAP]: 'Swap (Uniswap V3)',
+  [EVENT_SIGNATURES.SYNC]: 'Sync (Uniswap V2)',
+  [EVENT_SIGNATURES.DEPOSIT]: 'Deposit (WETH)',
+  [EVENT_SIGNATURES.WITHDRAWAL]: 'Withdrawal (WETH)',
 }

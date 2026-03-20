@@ -122,14 +122,14 @@ export async function portalFetch<T>(
  *
  * maxBytes: stop reading after accumulating this many bytes of raw text.
  * Prevents V8 string-length crashes on unexpectedly large responses.
- * Default 20MB.
+ * Default 50MB.
  */
 export async function portalFetchStream(
   url: string,
   body: unknown,
   timeout: number = STREAM_TIMEOUT,
   maxBlocks: number = 0,
-  maxBytes: number = 20 * 1024 * 1024,
+  maxBytes: number = 50 * 1024 * 1024,
 ): Promise<unknown[]> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)

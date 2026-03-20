@@ -125,7 +125,15 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         transactions: txFilters.length > 0 ? txFilters : [{}],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Use maxBlocks to stop streaming early — on dense chains like Base,
+      // even 100 blocks can have 16K+ txs, so we only need enough blocks to fill the limit
+      const maxBlocksNeeded = Math.min(blockRange, Math.max(limit * 2, 100))
+      const results = await portalFetchStream(
+        `${PORTAL_URL}/datasets/${dataset}/stream`,
+        query,
+        undefined,
+        hasFilters ? 0 : maxBlocksNeeded,
+      )
 
       const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
       const limitedTxs = allTxs.slice(0, limit).map((tx) => formatTransactionFields(tx as Record<string, unknown>))

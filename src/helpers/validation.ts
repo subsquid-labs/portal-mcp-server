@@ -111,12 +111,10 @@ export function validateQuerySize(options: QueryValidationOptions): QueryValidat
 
   const maximum = hasFilters ? MAXIMUM_RANGES[queryType].filtered : MAXIMUM_RANGES[queryType].unfiltered
 
-  // Low limit bypass ONLY for filtered queries.
-  // Filtered queries can skip non-matching blocks efficiently in Portal,
-  // so a small limit naturally caps the result set.
-  // UNFILTERED queries download ALL data before applying limit (client-side),
-  // so the bypass would still crash on high-throughput chains.
-  const hasLowLimit = limit <= 100 && hasFilters
+  // Low limit bypass: allow large block ranges when the user only wants a few results.
+  // The streaming layer (maxBlocks/maxBytes in portalFetchStream) is the safety net
+  // that prevents V8 crashes — validation doesn't need to duplicate that protection.
+  const hasLowLimit = limit <= 100
 
   // Check if query exceeds absolute maximum
   if (blockRange > maximum && !hasLowLimit) {
@@ -226,8 +224,8 @@ export function validateSolanaQuerySize(options: SolanaQueryValidationOptions): 
   const { slotRange, hasFilters, queryType, limit } = options
   const maximum = hasFilters ? SOLANA_MAXIMUM_RANGES[queryType].filtered : SOLANA_MAXIMUM_RANGES[queryType].unfiltered
 
-  // Small limit bypass ONLY for filtered queries (same rationale as EVM — see above)
-  if (limit <= 100 && hasFilters) {
+  // Small limit bypass: streaming safety net (maxBlocks/maxBytes) prevents crashes
+  if (limit <= 100) {
     return { valid: true }
   }
 

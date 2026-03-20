@@ -8,6 +8,7 @@ import { getBlockFields } from '../../helpers/field-presets.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildEvmBlockFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { hexToNumber, weiToGwei } from '../../helpers/formatting.js'
 
 // ============================================================================
 // Tool: Query Blocks (EVM)
@@ -76,7 +77,32 @@ export function registerQueryBlocksTool(server: McpServer) {
 
       const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
-      return formatResult(results, `Retrieved ${results.length} blocks`, {
+      // Convert hex values to human-readable numbers
+      const formatted = results.map((block: any) => {
+        const header = block.header || block
+        if (header.gasUsed && typeof header.gasUsed === 'string') {
+          header.gasUsed = hexToNumber(header.gasUsed)
+        }
+        if (header.gasLimit && typeof header.gasLimit === 'string') {
+          header.gasLimit = hexToNumber(header.gasLimit)
+        }
+        if (header.baseFeePerGas && typeof header.baseFeePerGas === 'string') {
+          header.baseFeePerGas_gwei = weiToGwei(header.baseFeePerGas)
+          delete header.baseFeePerGas
+        }
+        if (header.size && typeof header.size === 'string') {
+          header.size = hexToNumber(header.size)
+        }
+        if (header.difficulty && typeof header.difficulty === 'string') {
+          header.difficulty = hexToNumber(header.difficulty)
+        }
+        if (header.totalDifficulty && typeof header.totalDifficulty === 'string') {
+          header.totalDifficulty = hexToNumber(header.totalDifficulty)
+        }
+        return block
+      })
+
+      return formatResult(formatted, `Retrieved ${formatted.length} blocks`, {
         metadata: {
           dataset,
           from_block,
