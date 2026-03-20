@@ -91,7 +91,6 @@ export function registerAggregateTransfersTool(server: McpServer) {
       }
 
       // Cap streaming at 200 blocks max to prevent OOM on dense chains like Base (~160 txs/block).
-      // Transfer events are especially dense — 500 blocks exceeded 100MB on Base.
       // Returns partial results with a notice rather than crashing.
       const blockRange = resolvedToBlock - resolvedFromBlock
       const maxBlocks = Math.min(blockRange, 200)
@@ -157,6 +156,7 @@ export function registerAggregateTransfersTool(server: McpServer) {
             total_volume_raw: volume.toString(),
           }))
           .sort((a, b) => b.transfer_count - a.transfer_count)
+          .slice(0, 20)
       } else if (group_by === 'sender') {
         const bySender = new Map<string, number>()
         allLogs.forEach((log: any) => {

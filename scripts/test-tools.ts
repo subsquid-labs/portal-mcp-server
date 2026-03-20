@@ -131,7 +131,7 @@ const tests: ToolTest[] = [
     name: 'portal_query_state_diffs',
     args: {
       dataset: 'base-mainnet',
-      from_block: -1, // will be replaced
+      from_block: -5, // will be replaced — use small range, state diffs are very dense
       limit: 3,
     },
     validate: (r) => {
@@ -404,9 +404,14 @@ async function main() {
   const hlFillsBlock = extractJson((hlFillsHead as any).content[0].text).number
   console.log(`Hyperliquid fills latest block: ${hlFillsBlock}`)
 
-  const hlReplicaHead = await client.callTool({ name: 'portal_get_block_number', arguments: { dataset: 'hyperliquid-replica-cmds' } })
-  const hlReplicaBlock = extractJson((hlReplicaHead as any).content[0].text).number
-  console.log(`Hyperliquid replica-cmds latest block: ${hlReplicaBlock}\n`)
+  let hlReplicaBlock = 0
+  try {
+    const hlReplicaHead = await client.callTool({ name: 'portal_get_block_number', arguments: { dataset: 'hyperliquid-replica-cmds' } })
+    hlReplicaBlock = extractJson((hlReplicaHead as any).content[0].text).number
+    console.log(`Hyperliquid replica-cmds latest block: ${hlReplicaBlock}\n`)
+  } catch {
+    console.log(`Hyperliquid replica-cmds: could not get latest block (dataset may be unavailable)\n`)
+  }
 
   let passed = 0
   let failed = 0
@@ -471,6 +476,7 @@ function replacePlaceholders(obj: any, latestBlock: number) {
       else if (obj[key] === -2) obj[key] = latestBlock - 5 // Tiny range (Solana)
       else if (obj[key] === -3) obj[key] = latestBlock - 100 // Hyperliquid fills
       else if (obj[key] === -4) obj[key] = latestBlock - 100 // Hyperliquid replica cmds
+      else if (obj[key] === -5) obj[key] = latestBlock - 10 // Tiny range for dense data (state diffs)
     } else if (obj[key] === -1 && (key === 'to_block' || key === 'toBlock')) {
       obj[key] = latestBlock
     }

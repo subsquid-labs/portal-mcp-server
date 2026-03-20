@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Hyperliquid fills: removed `nonce` field that Portal API rejects (all other v0.6.4 fields work correctly)
 - `portal_count_events`: added 500-block cap to prevent >100MB crashes on dense chains (Base), returns partial results with notice
-- `portal_aggregate_transfers`: reduced block cap from 500 to 200 — Transfer events are especially dense, 500 blocks exceeded 100MB on Base
+- `portal_aggregate_transfers`: reduced block cap from 500 to 200 and capped token grouping to top 20 — unfiltered queries on dense chains exceeded response size limits
 
 ## [0.7.0] - 2026-03-20
 
