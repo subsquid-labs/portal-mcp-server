@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-20
+
+### Added
+- Prometheus metrics endpoint (`GET /metrics`):
+  - `mcp_tool_calls_total{tool,status}` — counter of tool invocations (success/error)
+  - `mcp_tool_call_duration_seconds{tool}` — histogram of tool call latency
+  - `mcp_tool_calls_active{tool}` — gauge of in-flight tool calls
+  - `mcp_portal_api_requests_total{method,status_code}` — counter of Portal API requests
+  - `mcp_dataset_queries_total{dataset}` — counter of queries per dataset
+  - Default Node.js process metrics (CPU, memory, GC, event loop)
+
 ## [0.6.0] - 2026-03-16
 
 ### Added

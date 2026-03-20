@@ -3,6 +3,7 @@ import { createServer } from 'node:http'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
 import { PORTAL_URL } from './constants/index.js'
+import { register } from './metrics.js'
 import { createPortalServer } from './server.js'
 import { npmVersion } from './version.js'
 
@@ -25,6 +26,13 @@ const server = createServer(async (req, res) => {
         version: npmVersion,
       }),
     )
+    return
+  }
+
+  // Prometheus metrics endpoint
+  if (url.pathname === '/metrics') {
+    res.writeHead(200, { 'Content-Type': register.contentType })
+    res.end(await register.metrics())
     return
   }
 

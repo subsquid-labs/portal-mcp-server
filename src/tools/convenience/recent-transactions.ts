@@ -39,12 +39,7 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         ),
       from_addresses: z.array(z.string()).optional().describe('Filter by sender addresses'),
       to_addresses: z.array(z.string()).optional().describe('Filter by recipient addresses'),
-      limit: z
-        .number()
-        .max(200)
-        .optional()
-        .default(10)
-        .describe('Max transactions to return (max: 200)'),
+      limit: z.number().max(200).optional().default(10).describe('Max transactions to return (max: 200)'),
     },
     async ({ dataset, timeframe, from_addresses, to_addresses, limit }) => {
       const queryStartTime = Date.now()

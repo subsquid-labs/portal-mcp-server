@@ -1,4 +1,5 @@
 import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, STREAM_TIMEOUT } from '../constants/index.js'
+import { portalRequestsTotal } from '../metrics.js'
 import { createTimeoutError, parsePortalError, wrapError } from './errors.js'
 
 // ============================================================================
@@ -56,6 +57,8 @@ export async function portalFetch<T>(
 
       const response = await fetch(url, fetchOptions)
       clearTimeout(timeoutId)
+
+      portalRequestsTotal.inc({ method, status_code: response.status })
 
       // Handle specific status codes
       if (response.status === 204) {
@@ -147,6 +150,8 @@ export async function portalFetchStream(
     })
 
     clearTimeout(timeoutId)
+
+    portalRequestsTotal.inc({ method: 'POST', status_code: response.status })
 
     if (response.status === 204) {
       return []
