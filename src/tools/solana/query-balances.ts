@@ -7,6 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildSolanaBalanceFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -19,13 +20,14 @@ export function registerQuerySolanaBalancesTool(server: McpServer) {
     'Query SOL balance changes from a Solana dataset',
     {
       dataset: z.string().describe('Dataset name or alias'),
-      from_block: z.number().describe('Starting slot number'),
+      timeframe: z.string().optional().describe("Time range (e.g., '1h', '24h'). Alternative to from_block/to_block."),
+      from_block: z.number().optional().describe('Starting slot number (use this OR timeframe)'),
       to_block: z.number().optional().describe('Ending slot number'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
       account: z.array(z.string()).optional().describe('Account addresses to filter'),
       limit: z.number().optional().default(50).describe('Max balance changes'),
     },
-    async ({ dataset, from_block, to_block, finalized_only, account, limit }) => {
+    async ({ dataset, timeframe, from_block, to_block, finalized_only, account, limit }) => {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
@@ -33,16 +35,20 @@ export function registerQuerySolanaBalancesTool(server: McpServer) {
         throw new Error('portal_query_solana_balances is only for Solana chains')
       }
 
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+        dataset, timeframe, from_block, to_block,
+      })
+
       const { validatedToBlock: endBlock } = await validateBlockRange(
         dataset,
-        from_block,
-        to_block ?? Number.MAX_SAFE_INTEGER,
+        resolvedFromBlock,
+        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
 
       const hasFilters = !!account
       const validation = validateSolanaQuerySize({
-        slotRange: endBlock - from_block,
+        slotRange: endBlock - resolvedFromBlock,
         hasFilters,
         queryType: 'balances',
         limit,
@@ -56,7 +62,7 @@ export function registerQuerySolanaBalancesTool(server: McpServer) {
 
       const query = {
         type: 'solana',
-        fromBlock: from_block,
+        fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields: {
           block: { number: true, timestamp: true },
@@ -65,7 +71,10 @@ export function registerQuerySolanaBalancesTool(server: McpServer) {
         balances: [balanceFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Solana slots are extremely dense — cap maxBlocks to prevent OOM.
+      const maxBlocks = hasFilters ? 0 : Math.max(5, Math.ceil(limit / 50))
+
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks)
 
       const allBalances = results
         .flatMap((block: unknown) => (block as { balances?: unknown[] }).balances || [])

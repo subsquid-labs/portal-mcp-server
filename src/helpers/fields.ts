@@ -145,6 +145,8 @@ export function buildSolanaInstructionFields(includeDiscriminators: boolean = fa
     programId: true,
     accounts: true,
     data: true,
+    error: true,
+    computeUnitsConsumed: true,
     isCommitted: true,
     hasDroppedLogMessages: true,
   }
@@ -152,6 +154,7 @@ export function buildSolanaInstructionFields(includeDiscriminators: boolean = fa
   if (includeDiscriminators) {
     fields.d1 = true
     fields.d2 = true
+    fields.d3 = true
     fields.d4 = true
     fields.d8 = true
   }
@@ -165,6 +168,7 @@ export function buildSolanaTransactionFields() {
     signature: true,
     version: true,
     fee: true,
+    feePayer: true,
     err: true,
     computeUnitsConsumed: true,
     isCommitted: true,

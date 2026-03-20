@@ -6,6 +6,7 @@ import { resolveDataset } from '../../cache/datasets.js'
 import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
+import { getKnownTokenDecimals } from '../../helpers/conversions.js'
 import { buildEvmLogFields, buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatTokenAmount, formatTransactionFields, hexToBigInt } from '../../helpers/formatting.js'
@@ -158,8 +159,8 @@ export function registerGetWalletSummaryTool(server: McpServer) {
               const tokenAddress = log.address.toLowerCase()
               const rawValue = log.data
 
-              // Assume 18 decimals if unknown (ERC20 standard)
-              const decimals = 18
+              // Use known token decimals (e.g., 6 for USDC) or default to 18
+              const decimals = getKnownTokenDecimals(tokenAddress) ?? 18
               const formattedValue = formatTokenAmount(rawValue, decimals, undefined)
 
               return {

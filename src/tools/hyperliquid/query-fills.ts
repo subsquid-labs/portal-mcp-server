@@ -5,6 +5,7 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
 // Tool: Query Hyperliquid Fills
@@ -20,7 +21,11 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         .optional()
         .default('hyperliquid-fills')
         .describe("Dataset name (default: 'hyperliquid-fills')"),
-      from_block: z.number().describe('Starting block number'),
+      timeframe: z
+        .string()
+        .optional()
+        .describe("Time range (e.g., '1h', '24h'). Alternative to from_block/to_block."),
+      from_block: z.number().optional().describe('Starting block number (use this OR timeframe)'),
       to_block: z.number().optional().describe('Ending block number'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
       user: z.array(z.string()).optional().describe('Trader wallet addresses (0x-prefixed, lowercase)'),
@@ -35,6 +40,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
     },
     async ({
       dataset,
+      timeframe,
       from_block,
       to_block,
       finalized_only,
@@ -51,10 +57,18 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
 
+      // Resolve timeframe or use explicit blocks
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+        dataset,
+        timeframe,
+        from_block,
+        to_block,
+      })
+
       const { validatedToBlock: endBlock } = await validateBlockRange(
         dataset,
-        from_block,
-        to_block ?? Number.MAX_SAFE_INTEGER,
+        resolvedFromBlock,
+        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
 
@@ -69,6 +83,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
 
       // Build field selection
       const fillFields: Record<string, boolean> = {
+        fillIndex: true,
         user: true,
         coin: true,
         px: true,
@@ -81,6 +96,9 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         tid: true,
         crossed: true,
         hash: true,
+        nonce: true,
+        cloid: true,
+        feeToken: true,
       }
 
       if (include_pnl) {
@@ -91,11 +109,12 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       if (include_builder_info) {
         fillFields.builderFee = true
         fillFields.builder = true
+        fillFields.twapId = true
       }
 
       const query = {
         type: 'hyperliquidFills',
-        fromBlock: from_block,
+        fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields: {
           block: { number: true, timestamp: true },
@@ -128,7 +147,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
           warnOnTruncation: false,
           metadata: {
             dataset,
-            from_block,
+            from_block: resolvedFromBlock,
             to_block: endBlock,
             query_start_time: queryStartTime,
           },

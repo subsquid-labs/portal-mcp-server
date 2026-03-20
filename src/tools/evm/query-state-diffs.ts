@@ -3,10 +3,11 @@ import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
-import { detectChainType } from '../../helpers/chain.js'
+import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
-import { buildEvmStateDiffFields } from '../../helpers/fields.js'
+import { buildEvmStateDiffFields, buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -19,7 +20,11 @@ export function registerQueryStateDiffsTool(server: McpServer) {
     'Query state changes from an EVM dataset. Wrapper for Portal API POST /datasets/{dataset}/stream. Keep block ranges reasonable for performance.',
     {
       dataset: z.string().describe('Dataset name or alias'),
-      from_block: z.number().describe('Starting block number'),
+      timeframe: z
+        .string()
+        .optional()
+        .describe("Time range (e.g., '1h', '24h'). Alternative to from_block/to_block."),
+      from_block: z.number().optional().describe('Starting block number (use this OR timeframe)'),
       to_block: z
         .number()
         .optional()
@@ -31,9 +36,14 @@ export function registerQueryStateDiffsTool(server: McpServer) {
         .array(z.enum(['=', '+', '*', '-']))
         .optional()
         .describe('Diff kinds: = (exists/no change), + (created), * (modified), - (deleted)'),
+      include_transaction: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('Include parent transaction data for each state diff'),
       limit: z.number().optional().default(50).describe('Max state diffs'),
     },
-    async ({ dataset, from_block, to_block, finalized_only, addresses, key, kind, limit }) => {
+    async ({ dataset, timeframe, from_block, to_block, finalized_only, addresses, key, kind, include_transaction, limit }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
@@ -42,16 +52,24 @@ export function registerQueryStateDiffsTool(server: McpServer) {
         throw new Error('portal_query_state_diffs is only for EVM chains')
       }
 
+      // Resolve timeframe or use explicit blocks
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+        dataset,
+        timeframe,
+        from_block,
+        to_block,
+      })
+
       const normalizedAddresses = normalizeAddresses(addresses, chainType)
       const { validatedToBlock: endBlock } = await validateBlockRange(
         dataset,
-        from_block,
-        to_block ?? Number.MAX_SAFE_INTEGER,
+        resolvedFromBlock,
+        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
 
       // Validate query size to prevent memory crashes
-      const blockRange = endBlock - from_block
+      const blockRange = endBlock - resolvedFromBlock
       const hasFilters = !!(addresses || key || kind)
       const validation = validateQuerySize({
         blockRange,
@@ -68,15 +86,21 @@ export function registerQueryStateDiffsTool(server: McpServer) {
       if (normalizedAddresses) diffFilter.address = normalizedAddresses
       if (key) diffFilter.key = key
       if (kind) diffFilter.kind = kind
+      if (include_transaction) diffFilter.transaction = true
+
+      const fields: Record<string, unknown> = {
+        block: { number: true, timestamp: true, hash: true },
+        stateDiff: buildEvmStateDiffFields(),
+      }
+      if (include_transaction) {
+        fields.transaction = buildEvmTransactionFields(isL2Chain(dataset))
+      }
 
       const query = {
         type: 'evm',
-        fromBlock: from_block,
+        fromBlock: resolvedFromBlock,
         toBlock: endBlock,
-        fields: {
-          block: { number: true, timestamp: true, hash: true },
-          stateDiff: buildEvmStateDiffFields(),
-        },
+        fields,
         stateDiffs: [diffFilter],
       }
 
@@ -88,7 +112,7 @@ export function registerQueryStateDiffsTool(server: McpServer) {
       return formatResult(allDiffs, `Retrieved ${allDiffs.length} state diffs`, {
         metadata: {
           dataset,
-          from_block,
+          from_block: resolvedFromBlock,
           to_block: endBlock,
           query_start_time: queryStartTime,
         },

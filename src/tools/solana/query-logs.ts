@@ -7,6 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildSolanaLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -19,7 +20,8 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
     'Query log messages from a Solana dataset',
     {
       dataset: z.string().describe('Dataset name or alias'),
-      from_block: z.number().describe('Starting slot number'),
+      timeframe: z.string().optional().describe("Time range (e.g., '1h', '24h'). Alternative to from_block/to_block."),
+      from_block: z.number().optional().describe('Starting slot number (use this OR timeframe)'),
       to_block: z.number().optional().describe('Ending slot number'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
       program_id: z.array(z.string()).optional().describe('Program IDs'),
@@ -29,7 +31,7 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
         .describe('Log kinds'),
       limit: z.number().optional().default(50).describe('Max logs'),
     },
-    async ({ dataset, from_block, to_block, finalized_only, program_id, kind, limit }) => {
+    async ({ dataset, timeframe, from_block, to_block, finalized_only, program_id, kind, limit }) => {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
@@ -37,16 +39,20 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
         throw new Error('portal_query_solana_logs is only for Solana chains')
       }
 
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+        dataset, timeframe, from_block, to_block,
+      })
+
       const { validatedToBlock: endBlock } = await validateBlockRange(
         dataset,
-        from_block,
-        to_block ?? Number.MAX_SAFE_INTEGER,
+        resolvedFromBlock,
+        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
 
       const hasFilters = !!(program_id || kind)
       const validation = validateSolanaQuerySize({
-        slotRange: endBlock - from_block,
+        slotRange: endBlock - resolvedFromBlock,
         hasFilters,
         queryType: 'logs',
         limit,
@@ -61,7 +67,7 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
 
       const query = {
         type: 'solana',
-        fromBlock: from_block,
+        fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields: {
           block: { number: true, timestamp: true },
@@ -70,7 +76,10 @@ export function registerQuerySolanaLogsTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Solana slots are extremely dense — cap maxBlocks to prevent OOM.
+      const maxBlocks = hasFilters ? 0 : Math.max(5, Math.ceil(limit / 50))
+
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks)
 
       const allLogs = results.flatMap((block: unknown) => (block as { logs?: unknown[] }).logs || []).slice(0, limit)
       return formatResult(allLogs, `Retrieved ${allLogs.length} logs`)

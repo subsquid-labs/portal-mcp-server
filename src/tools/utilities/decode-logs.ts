@@ -114,6 +114,50 @@ const KNOWN_EVENTS: Record<string, { name: string; inputs: EventInput[] }> = {
       { name: 'wad', indexed: false },
     ],
   },
+  // Burn(address indexed account, uint256 amount)
+  '0xcc16f5dbb4873280815c1ee09dbd06736cffcc184412cf7a71a0fdb75d397ca5': {
+    name: 'Burn',
+    inputs: [
+      { name: 'account', indexed: true },
+      { name: 'amount', indexed: false },
+    ],
+  },
+  // Mint(address indexed account, uint256 amount)
+  '0xab8530f87dc9b59234c4623bf917212bb2536d647574c8e7e5da92c2ede0c9f8': {
+    name: 'Mint',
+    inputs: [
+      { name: 'account', indexed: true },
+      { name: 'amount', indexed: false },
+    ],
+  },
+  // Uniswap V3 - IncreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)
+  '0x3067048beee31b25b2f1681f88dac838c8bba36af25bfb2b7cf7473a5847e35f': {
+    name: 'IncreaseLiquidity',
+    inputs: [
+      { name: 'tokenId', indexed: true },
+      { name: 'liquidity', indexed: false },
+      { name: 'amount0', indexed: false },
+      { name: 'amount1', indexed: false },
+    ],
+  },
+  // Uniswap V3 - DecreaseLiquidity(uint256 indexed tokenId, uint128 liquidity, uint256 amount0, uint256 amount1)
+  '0x26f6a048ee9138f2c0ce266f322cb99228e8d619ae2bff30c67f8dcf9d2377b4': {
+    name: 'DecreaseLiquidity',
+    inputs: [
+      { name: 'tokenId', indexed: true },
+      { name: 'liquidity', indexed: false },
+      { name: 'amount0', indexed: false },
+      { name: 'amount1', indexed: false },
+    ],
+  },
+  // EIP-3009 - AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)
+  '0x98de503528ee59b575ef0c0a2576a82497bfc029a5685b209e9ec333479b10a5': {
+    name: 'AuthorizationUsed',
+    inputs: [
+      { name: 'authorizer', indexed: true },
+      { name: 'nonce', indexed: true },
+    ],
+  },
 }
 
 function decodeLog(log: {
@@ -198,7 +242,9 @@ function decodeLog(log: {
         input.name === 'reserve0' ||
         input.name === 'reserve1' ||
         input.name === 'liquidity' ||
-        input.name === 'sqrtPriceX96'
+        input.name === 'sqrtPriceX96' ||
+        input.name === 'amount' ||
+        input.name === 'tokenId'
       ) {
         try {
           decoded[input.name] = BigInt(rawHex).toString()
@@ -236,7 +282,11 @@ export function registerDecodeLogsTool(server: McpServer) {
       to_block: z.number().optional().describe('Ending block number'),
       addresses: z.array(z.string()).optional().describe('Contract addresses to filter'),
       event_types: z
-        .array(z.enum(['Transfer', 'Approval', 'ApprovalForAll', 'Swap', 'Sync', 'Deposit', 'Withdrawal', 'all']))
+        .array(z.enum([
+          'Transfer', 'Approval', 'ApprovalForAll', 'Swap', 'Sync',
+          'Deposit', 'Withdrawal', 'Burn', 'Mint',
+          'IncreaseLiquidity', 'DecreaseLiquidity', 'all',
+        ]))
         .optional()
         .default(['all'])
         .describe('Event types to decode'),
@@ -273,8 +323,12 @@ export function registerDecodeLogsTool(server: McpServer) {
           ApprovalForAll: EVENT_SIGNATURES.APPROVAL_FOR_ALL,
           Swap: EVENT_SIGNATURES.UNISWAP_V2_SWAP,
           Sync: EVENT_SIGNATURES.SYNC,
-          Deposit: '0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c',
-          Withdrawal: '0x7fcf532c15f0a6db0bd6d0e038bea71d30d808c7d98cb3bf7268a95bf5081b65',
+          Deposit: EVENT_SIGNATURES.DEPOSIT,
+          Withdrawal: EVENT_SIGNATURES.WITHDRAWAL,
+          Burn: EVENT_SIGNATURES.BURN,
+          Mint: EVENT_SIGNATURES.MINT,
+          IncreaseLiquidity: EVENT_SIGNATURES.INCREASE_LIQUIDITY,
+          DecreaseLiquidity: EVENT_SIGNATURES.DECREASE_LIQUIDITY,
         }
         for (const et of event_types || []) {
           if (eventToSig[et]) {

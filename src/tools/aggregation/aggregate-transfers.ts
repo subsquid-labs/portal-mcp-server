@@ -90,14 +90,18 @@ export function registerAggregateTransfersTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      // Aggregation downloads full log data, so allow higher byte cap for dense chains
+      // Cap streaming at 500 blocks max to prevent OOM on dense chains like Base (~160 txs/block).
+      // Returns partial results with a notice rather than crashing.
+      const blockRange = resolvedToBlock - resolvedFromBlock
+      const maxBlocks = Math.min(blockRange, 500)
       const results = await portalFetchStream(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         query,
         undefined,
-        0,
+        maxBlocks,
         100 * 1024 * 1024,
       )
+      const wasPartial = blockRange > 500
 
       // Extract transfers
       const allLogs = results.flatMap((block: any) =>
@@ -194,9 +198,16 @@ export function registerAggregateTransfersTool(server: McpServer) {
         response.top_count = grouped.length
       }
 
+      if (wasPartial) {
+        response.partial = true
+        response.blocks_capped = 500
+        response.total_requested_blocks = blockRange
+      }
+
+      const partialNote = wasPartial ? ` (partial: ${results.length}/${blockRange} blocks sampled)` : ''
       return formatResult(
         response,
-        `Aggregated ${totalTransfers.toLocaleString()} transfers: ${senders.size} senders, ${receivers.size} receivers, ${tokens.size} tokens`,
+        `Aggregated ${totalTransfers.toLocaleString()} transfers: ${senders.size} senders, ${receivers.size} receivers, ${tokens.size} tokens${partialNote}`,
         {
           metadata: {
             dataset,

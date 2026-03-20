@@ -35,6 +35,7 @@ import { registerQuerySolanaInstructionsTool } from './solana/query-instructions
 import { registerQuerySolanaLogsTool } from './solana/query-logs.js'
 import { registerQuerySolanaRewardsTool } from './solana/query-rewards.js'
 import { registerQuerySolanaTokenBalancesTool } from './solana/query-token-balances.js'
+import { registerQuerySolanaTransactionsTool } from './solana/query-transactions.js'
 import { registerDecodeLogsTool } from './utilities/decode-logs.js'
 // Utility tools
 import { registerStreamTool } from './utilities/stream.js'
@@ -59,8 +60,9 @@ export function registerAllTools(server: McpServer) {
   registerGetErc20TransfersTool(server)
   registerGetNftTransfersTool(server)
 
-  // Solana tools (5)
+  // Solana tools (6)
   registerQuerySolanaInstructionsTool(server)
+  registerQuerySolanaTransactionsTool(server)
   registerQuerySolanaBalancesTool(server)
   registerQuerySolanaTokenBalancesTool(server)
   registerQuerySolanaLogsTool(server)

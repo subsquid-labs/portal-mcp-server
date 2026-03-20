@@ -5,6 +5,7 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import {
   buildSolanaBalanceFields,
   buildSolanaInstructionFields,
@@ -25,12 +26,17 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
     "Query instruction data from a Solana dataset with advanced filters. Wrapper for Portal API POST /datasets/{dataset}/stream with type: 'solana'.",
     {
       dataset: z.string().describe('Dataset name or alias'),
-      from_block: z.number().describe('Starting slot number'),
+      timeframe: z
+        .string()
+        .optional()
+        .describe("Time range (e.g., '1h', '24h'). Alternative to from_block/to_block. Solana slots are ~400ms."),
+      from_block: z.number().optional().describe('Starting slot number (use this OR timeframe)'),
       to_block: z.number().optional().describe('Ending slot number. Keep ranges reasonable for performance.'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
       program_id: z.array(z.string()).optional().describe('Program IDs'),
       d1: z.array(z.string()).optional().describe('1-byte discriminator filter (0x-prefixed hex)'),
       d2: z.array(z.string()).optional().describe('2-byte discriminator filter (0x-prefixed hex)'),
+      d3: z.array(z.string()).optional().describe('3-byte discriminator filter (0x-prefixed hex)'),
       d4: z.array(z.string()).optional().describe('4-byte discriminator filter (0x-prefixed hex)'),
       d8: z.array(z.string()).optional().describe('8-byte discriminator filter - Anchor (0x-prefixed hex)'),
       a0: z.array(z.string()).optional().describe('Account at index 0'),
@@ -62,15 +68,22 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         .describe('Include token balance changes'),
       include_inner_instructions: z.boolean().optional().default(false).describe('Include inner (CPI) instructions'),
       include_logs: z.boolean().optional().default(false).describe('Include program logs'),
+      include_transaction_instructions: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('Include all instructions from the parent transaction (sibling instructions)'),
     },
     async ({
       dataset,
+      timeframe,
       from_block,
       to_block,
       finalized_only,
       program_id,
       d1,
       d2,
+      d3,
       d4,
       d8,
       a0,
@@ -98,6 +111,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       include_transaction_token_balances,
       include_inner_instructions,
       include_logs,
+      include_transaction_instructions,
     }) => {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
@@ -106,16 +120,24 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         throw new Error('portal_query_solana_instructions is only for Solana chains')
       }
 
+      // Resolve timeframe or use explicit blocks
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+        dataset,
+        timeframe,
+        from_block,
+        to_block,
+      })
+
       const { validatedToBlock: endBlock } = await validateBlockRange(
         dataset,
-        from_block,
-        to_block ?? Number.MAX_SAFE_INTEGER,
+        resolvedFromBlock,
+        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
 
-      const hasFilters = !!(program_id || d1 || d2 || d4 || d8 || a0 || mentions_account || transaction_fee_payer)
+      const hasFilters = !!(program_id || d1 || d2 || d3 || d4 || d8 || a0 || mentions_account || transaction_fee_payer)
       const validation = validateSolanaQuerySize({
-        slotRange: endBlock - from_block,
+        slotRange: endBlock - resolvedFromBlock,
         hasFilters,
         queryType: 'instructions',
         limit,
@@ -128,6 +150,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       if (program_id) instructionFilter.programId = program_id
       if (d1) instructionFilter.d1 = d1
       if (d2) instructionFilter.d2 = d2
+      if (d3) instructionFilter.d3 = d3
       if (d4) instructionFilter.d4 = d4
       if (d8) instructionFilter.d8 = d8
       if (a0) instructionFilter.a0 = a0
@@ -154,8 +177,9 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       if (include_transaction_token_balances) instructionFilter.transactionTokenBalances = true
       if (include_inner_instructions) instructionFilter.innerInstructions = true
       if (include_logs) instructionFilter.logs = true
+      if (include_transaction_instructions) instructionFilter.transactionInstructions = true
 
-      const hasDiscriminators = d1 || d2 || d4 || d8
+      const hasDiscriminators = d1 || d2 || d3 || d4 || d8
       const fields: Record<string, unknown> = {
         block: { number: true, hash: true, timestamp: true },
         instruction: buildSolanaInstructionFields(!!hasDiscriminators),
@@ -175,13 +199,17 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
 
       const query = {
         type: 'solana',
-        fromBlock: from_block,
+        fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields,
         instructions: [instructionFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Solana slots are extremely dense — cap maxBlocks to prevent OOM.
+      // Unfiltered: 5 slots is enough for limit results. Filtered: allow more.
+      const maxBlocks = hasFilters ? 0 : Math.max(5, Math.ceil(limit / 50))
+
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks)
 
       const allInstructions = results
         .flatMap((block: unknown) => (block as { instructions?: unknown[] }).instructions || [])

@@ -21,6 +21,11 @@ const BLOCK_TIMES: Record<string, number> = {
   'linea-mainnet': 2,
   'zksync-mainnet': 1,
   'mantle-mainnet': 2,
+  // Solana (~400ms per slot)
+  'solana-mainnet': 0.4,
+  // Hyperliquid (~1s per block)
+  'hyperliquid-fills': 1,
+  'hyperliquid-replica-cmds': 1,
   // Default fallback
   default: 12,
 }

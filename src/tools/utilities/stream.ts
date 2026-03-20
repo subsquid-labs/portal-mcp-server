@@ -31,6 +31,8 @@ export function registerStreamTool(server: McpServer) {
           balances: z.array(z.record(z.unknown())).optional().describe('Balance filters (Solana only)'),
           tokenBalances: z.array(z.record(z.unknown())).optional().describe('Token balance filters (Solana only)'),
           rewards: z.array(z.record(z.unknown())).optional().describe('Reward filters (Solana only)'),
+          fills: z.array(z.record(z.unknown())).optional().describe('Fill filters (Hyperliquid only)'),
+          actions: z.array(z.record(z.unknown())).optional().describe('Action filters (Hyperliquid replica cmds only)'),
         })
         .passthrough() // Allow additional properties like 'type'
         .describe("Query object. NOTE: 'type' field is automatically added - do not include it"),

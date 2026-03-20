@@ -5,6 +5,7 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
 // Tool: Query Hyperliquid Replica Commands
@@ -13,14 +14,18 @@ import { formatResult } from '../../helpers/format.js'
 export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
   server.tool(
     'portal_query_hyperliquid_replica_cmds',
-    'Query Hyperliquid order actions — orders, cancels, transfers, leverage updates. Filter by user, action type, vault, or status.',
+    'Query Hyperliquid order actions — orders, cancels, transfers, leverage updates. Filter by user, action type, vault, or status. NOTE: Requires hyperliquid-replica-cmds dataset (check availability with portal_list_datasets).',
     {
       dataset: z
         .string()
         .optional()
         .default('hyperliquid-replica-cmds')
         .describe("Dataset name (default: 'hyperliquid-replica-cmds')"),
-      from_block: z.number().describe('Starting block number'),
+      timeframe: z
+        .string()
+        .optional()
+        .describe("Time range (e.g., '1h', '24h'). Alternative to from_block/to_block."),
+      from_block: z.number().optional().describe('Starting block number (use this OR timeframe)'),
       to_block: z.number().optional().describe('Ending block number'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
       action_type: z
@@ -34,6 +39,7 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
     },
     async ({
       dataset,
+      timeframe,
       from_block,
       to_block,
       finalized_only,
@@ -46,10 +52,18 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
 
+      // Resolve timeframe or use explicit blocks
+      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+        dataset,
+        timeframe,
+        from_block,
+        to_block,
+      })
+
       const { validatedToBlock: endBlock } = await validateBlockRange(
         dataset,
-        from_block,
-        to_block ?? Number.MAX_SAFE_INTEGER,
+        resolvedFromBlock,
+        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
 
@@ -62,7 +76,7 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
 
       const query = {
         type: 'hyperliquidReplicaCmds',
-        fromBlock: from_block,
+        fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields: {
           block: { number: true, timestamp: true },
@@ -103,7 +117,7 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
           warnOnTruncation: false,
           metadata: {
             dataset,
-            from_block,
+            from_block: resolvedFromBlock,
             to_block: endBlock,
             query_start_time: queryStartTime,
           },
