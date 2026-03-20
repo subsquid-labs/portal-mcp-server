@@ -83,15 +83,18 @@ export function registerCountEventsTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      // count_events downloads full log data to count client-side, so cap bytes at 100MB
-      // to handle dense chains like Base (~160 txs/block)
+      // Cap at 500 blocks to prevent OOM on dense chains like Base (~160 txs/block).
+      // Returns partial results with a notice rather than crashing.
+      const blockRange = resolvedToBlock - resolvedFromBlock
+      const maxBlocks = Math.min(blockRange, 500)
       const results = await portalFetchStream(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         query,
         undefined,
-        0,
+        maxBlocks,
         100 * 1024 * 1024,
       )
+      const wasPartial = blockRange > 500
 
       // Count events
       const allLogs = results.flatMap((block: any) =>
@@ -132,7 +135,7 @@ export function registerCountEventsTool(server: McpServer) {
 
       // Calculate blocks analyzed
       const blocks = allLogs.map((l: any) => l.blockNumber).filter(Boolean)
-      const blockRange =
+      const blockRangeInfo =
         blocks.length > 0
           ? {
               from: Math.min(...blocks),
@@ -143,7 +146,7 @@ export function registerCountEventsTool(server: McpServer) {
 
       const response: any = {
         total_events: totalCount,
-        block_range: blockRange,
+        block_range: blockRangeInfo,
       }
 
       if (grouped) {
@@ -161,7 +164,14 @@ export function registerCountEventsTool(server: McpServer) {
         }
       }
 
-      let message = `Counted ${totalCount.toLocaleString()} events across ${results.length} blocks`
+      if (wasPartial) {
+        response.partial = true
+        response.blocks_capped = 500
+        response.total_requested_blocks = blockRange
+      }
+
+      const partialNote = wasPartial ? ` (partial: ${results.length}/${blockRange} blocks sampled)` : ''
+      let message = `Counted ${totalCount.toLocaleString()} events across ${results.length} blocks${partialNote}`
       if (grouped && response.hidden_groups) {
         message += ` (showing top ${response.showing_top} of ${response.total_groups} groups)`
       }

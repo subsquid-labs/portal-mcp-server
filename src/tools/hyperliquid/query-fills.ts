@@ -96,7 +96,6 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         tid: true,
         crossed: true,
         hash: true,
-        nonce: true,
         cloid: true,
         feeToken: true,
       }

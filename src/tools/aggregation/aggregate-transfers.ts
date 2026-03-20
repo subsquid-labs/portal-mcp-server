@@ -90,10 +90,11 @@ export function registerAggregateTransfersTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      // Cap streaming at 500 blocks max to prevent OOM on dense chains like Base (~160 txs/block).
+      // Cap streaming at 200 blocks max to prevent OOM on dense chains like Base (~160 txs/block).
+      // Transfer events are especially dense — 500 blocks exceeded 100MB on Base.
       // Returns partial results with a notice rather than crashing.
       const blockRange = resolvedToBlock - resolvedFromBlock
-      const maxBlocks = Math.min(blockRange, 500)
+      const maxBlocks = Math.min(blockRange, 200)
       const results = await portalFetchStream(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         query,
@@ -101,7 +102,7 @@ export function registerAggregateTransfersTool(server: McpServer) {
         maxBlocks,
         100 * 1024 * 1024,
       )
-      const wasPartial = blockRange > 500
+      const wasPartial = blockRange > 200
 
       // Extract transfers
       const allLogs = results.flatMap((block: any) =>
