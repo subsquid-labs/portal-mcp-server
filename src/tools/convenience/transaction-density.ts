@@ -6,6 +6,7 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
+import { formatTimestamp, formatNumber } from '../../helpers/formatting.js'
 
 // ============================================================================
 // Tool: Get Transaction Density
@@ -59,11 +60,15 @@ export function registerGetTransactionDensityTool(server: McpServer) {
       const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
       // Calculate tx density per block
-      const densityData = results.map((block: any) => ({
-        block_number: block.header?.number ?? block.number,
-        timestamp: block.header?.timestamp ?? block.timestamp,
-        transaction_count: block.transactions?.length || 0,
-      }))
+      const densityData = results.map((block: any) => {
+        const ts = block.header?.timestamp ?? block.timestamp
+        return {
+          block_number: block.header?.number ?? block.number,
+          timestamp: ts,
+          timestamp_human: ts ? formatTimestamp(ts) : undefined,
+          transaction_count: block.transactions?.length || 0,
+        }
+      })
 
       const totalTxs = densityData.reduce((sum, b) => sum + b.transaction_count, 0)
       const avgTxsPerBlock = densityData.length > 0 ? (totalTxs / densityData.length).toFixed(2) : 0

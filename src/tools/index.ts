@@ -7,6 +7,8 @@ import {
   registerQueryBitcoinTransactionsTool,
   registerQueryBitcoinInputsTool,
   registerQueryBitcoinOutputsTool,
+  registerBitcoinAnalyticsTool,
+  registerBitcoinTimeSeresTool,
 } from './bitcoin/index.js'
 // Convenience tools
 import {
@@ -29,6 +31,7 @@ import {
   registerQueryHyperliquidReplicaCmdsTool,
   registerAggregateHyperliquidFillsTool,
   registerHyperliquidTimeSeriesFilsTool,
+  registerHyperliquidAnalyticsTool,
 } from './hyperliquid/index.js'
 import { registerBlockAtTimestampTool } from './evm/block-at-timestamp.js'
 // EVM tools
@@ -47,6 +50,8 @@ import { registerQuerySolanaLogsTool } from './solana/query-logs.js'
 import { registerQuerySolanaRewardsTool } from './solana/query-rewards.js'
 import { registerQuerySolanaTokenBalancesTool } from './solana/query-token-balances.js'
 import { registerQuerySolanaTransactionsTool } from './solana/query-transactions.js'
+import { registerSolanaAnalyticsTool } from './solana/analytics.js'
+import { registerSolanaTimeSeriesool } from './solana/time-series.js'
 import { registerDecodeLogsTool } from './utilities/decode-logs.js'
 // Utility tools
 import { registerStreamTool } from './utilities/stream.js'
@@ -71,24 +76,29 @@ export function registerAllTools(server: McpServer) {
   registerGetErc20TransfersTool(server)
   registerGetNftTransfersTool(server)
 
-  // Solana tools (6)
+  // Solana tools (8)
   registerQuerySolanaInstructionsTool(server)
   registerQuerySolanaTransactionsTool(server)
   registerQuerySolanaBalancesTool(server)
   registerQuerySolanaTokenBalancesTool(server)
   registerQuerySolanaLogsTool(server)
   registerQuerySolanaRewardsTool(server)
+  registerSolanaAnalyticsTool(server)
+  registerSolanaTimeSeriesool(server)
 
-  // Bitcoin tools (3)
+  // Bitcoin tools (5)
   registerQueryBitcoinTransactionsTool(server)
   registerQueryBitcoinInputsTool(server)
   registerQueryBitcoinOutputsTool(server)
+  registerBitcoinAnalyticsTool(server)
+  registerBitcoinTimeSeresTool(server)
 
-  // Hyperliquid tools (4)
+  // Hyperliquid tools (5)
   registerQueryHyperliquidFillsTool(server)
   registerQueryHyperliquidReplicaCmdsTool(server)
   registerAggregateHyperliquidFillsTool(server)
   registerHyperliquidTimeSeriesFilsTool(server)
+  registerHyperliquidAnalyticsTool(server)
 
   // Utility tools (2)
   registerStreamTool(server)

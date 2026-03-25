@@ -5,7 +5,7 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
-import { formatTimestamp } from '../../helpers/formatting.js'
+import { formatTimestamp, formatUSD, formatNumber, formatPct } from '../../helpers/formatting.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
@@ -86,9 +86,9 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
         fills: [fillFilter],
       }
 
-      // Cap streaming to avoid OOM
+      // Cap streaming to avoid OOM — HL blocks are ~0.083s, 500k ≈ ~12h
       const blockRange = endBlock - resolvedFromBlock
-      const maxBlocks = Math.min(blockRange, 50000) // HL blocks are ~1s, 50k ≈ ~14h
+      const maxBlocks = Math.min(blockRange, 500000)
       const results = await portalFetchStream(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         query,
@@ -96,7 +96,7 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
         maxBlocks,
         100 * 1024 * 1024,
       )
-      const wasPartial = blockRange > 50000
+      const wasPartial = blockRange > 500000
 
       // Extract all fills
       const allFills = results.flatMap((block: any) =>
@@ -148,10 +148,14 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
             fill_count: data.fills,
             unique_traders: data.traders.size,
             volume_usd: parseFloat(data.volume.toFixed(2)),
+            volume_formatted: formatUSD(data.volume),
+            market_share_pct: formatPct((data.volume / totalVolume) * 100),
             realized_pnl: parseFloat(data.pnl.toFixed(2)),
+            realized_pnl_formatted: (data.pnl >= 0 ? '+' : '') + formatUSD(data.pnl),
           }))
           .sort((a, b) => b.volume_usd - a.volume_usd)
           .slice(0, 30)
+          .map((item, i) => ({ rank: i + 1, ...item }))
       } else if (group_by === 'user') {
         const byUser = new Map<string, { fills: number; volume: number; coins: Set<string>; pnl: number }>()
         allFills.forEach((fill: any) => {
@@ -170,23 +174,41 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
             fill_count: data.fills,
             coins_traded: data.coins.size,
             volume_usd: parseFloat(data.volume.toFixed(2)),
+            volume_formatted: formatUSD(data.volume),
+            market_share_pct: formatPct((data.volume / totalVolume) * 100),
             realized_pnl: parseFloat(data.pnl.toFixed(2)),
+            realized_pnl_formatted: (data.pnl >= 0 ? '+' : '') + formatUSD(data.pnl),
           }))
           .sort((a, b) => b.volume_usd - a.volume_usd)
           .slice(0, 30)
+          .map((item, i) => ({ rank: i + 1, ...item }))
       } else if (group_by === 'direction') {
         grouped = Object.entries(dirCounts)
           .map(([direction, count]) => ({ direction, fill_count: count }))
           .sort((a, b) => b.fill_count - a.fill_count)
       }
 
+      // Compute additional metrics
+      const liquidationCount = (dirCounts['Short > Long'] || 0) + (dirCounts['Long > Short'] || 0)
+      const openLongs = dirCounts['Open Long'] || 0
+      const openShorts = dirCounts['Open Short'] || 0
+      const longShortRatio = openShorts > 0 ? parseFloat((openLongs / openShorts).toFixed(3)) : openLongs > 0 ? Infinity : 0
+
       const response: any = {
         total_fills: allFills.length,
+        total_fills_formatted: formatNumber(allFills.length),
         unique_traders: traders.size,
         unique_coins: coins.size,
         total_volume_usd: parseFloat(totalVolume.toFixed(2)),
+        total_volume_formatted: formatUSD(totalVolume),
         total_fees_usd: parseFloat(totalFees.toFixed(2)),
+        total_fees_formatted: formatUSD(totalFees),
         total_realized_pnl: parseFloat(totalPnl.toFixed(2)),
+        total_realized_pnl_formatted: (totalPnl >= 0 ? '+' : '') + formatUSD(totalPnl),
+        liquidation_count: liquidationCount,
+        liquidation_pct: formatPct((liquidationCount / allFills.length) * 100),
+        long_short_ratio: longShortRatio,
+        long_short_label: longShortRatio > 1.05 ? 'Long-biased' : longShortRatio < 0.95 ? 'Short-biased' : 'Balanced',
         direction_breakdown: dirCounts,
         blocks_analyzed: results.length,
       }

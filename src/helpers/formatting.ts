@@ -198,6 +198,68 @@ export function formatTransactionFields(tx: Record<string, unknown>): Record<str
   return result
 }
 
+// ============================================================================
+// Human-friendly number formatting
+// ============================================================================
+
+/**
+ * Format a number into compact human-readable form.
+ * 1234 → "1.2K", 1234567 → "1.23M", 1234567890 → "1.23B"
+ */
+export function formatNumber(n: number): string {
+  if (n === 0) return '0'
+  const abs = Math.abs(n)
+  const sign = n < 0 ? '-' : ''
+  if (abs >= 1e12) return sign + (abs / 1e12).toFixed(2) + 'T'
+  if (abs >= 1e9) return sign + (abs / 1e9).toFixed(2) + 'B'
+  if (abs >= 1e6) return sign + (abs / 1e6).toFixed(2) + 'M'
+  if (abs >= 1e4) return sign + (abs / 1e3).toFixed(1) + 'K'
+  if (abs >= 1000) return sign + abs.toLocaleString('en-US', { maximumFractionDigits: 0 })
+  if (abs >= 1) return sign + abs.toFixed(2)
+  if (abs >= 0.01) return sign + abs.toFixed(4)
+  return sign + abs.toFixed(8)
+}
+
+/**
+ * Format a USD value: "$1.23M", "$456.7K", "$12.34"
+ */
+export function formatUSD(n: number): string {
+  if (n === 0) return '$0'
+  const abs = Math.abs(n)
+  const sign = n < 0 ? '-' : ''
+  if (abs >= 1e12) return sign + '$' + (abs / 1e12).toFixed(2) + 'T'
+  if (abs >= 1e9) return sign + '$' + (abs / 1e9).toFixed(2) + 'B'
+  if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(2) + 'M'
+  if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'K'
+  return sign + '$' + abs.toFixed(2)
+}
+
+/**
+ * Format a percentage: "42.5%"
+ */
+export function formatPct(n: number): string {
+  return n.toFixed(1) + '%'
+}
+
+/**
+ * Format BTC value: "0.00508750 BTC" or "508,750 sats"
+ */
+export function formatBTC(btc: number): string {
+  if (btc === 0) return '0 BTC'
+  if (Math.abs(btc) < 0.001) return Math.round(btc * 1e8).toLocaleString('en-US') + ' sats'
+  return btc.toFixed(8) + ' BTC'
+}
+
+/**
+ * Format seconds to human duration: "10m 23s", "2h 15m", "1d 6h"
+ */
+export function formatDuration(seconds: number): string {
+  if (seconds < 60) return Math.round(seconds) + 's'
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm ' + Math.round(seconds % 60) + 's'
+  if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm'
+  return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h'
+}
+
 /**
  * Shorten address for display (0x1234...5678)
  */

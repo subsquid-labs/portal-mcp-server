@@ -7,6 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildBitcoinBlockFields, buildBitcoinTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 export function registerQueryBitcoinTransactionsTool(server: McpServer) {
@@ -33,9 +34,10 @@ EXAMPLES:
         .optional()
         .describe("Time range (e.g., '1h', '24h'). Alternative to from_block/to_block."),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (stats only, ~90% smaller), 'compact' (hash+size+weight only, ~50% smaller), 'full' (all fields)"),
       limit: z.number().optional().default(50).describe('Max transactions to return (default: 50)'),
     },
-    async ({ dataset, from_block, to_block, timeframe, finalized_only, limit }) => {
+    async ({ dataset, from_block, to_block, timeframe, finalized_only, response_format, limit }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
@@ -69,14 +71,22 @@ EXAMPLES:
         transactions: [{}],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Cap blocks to prevent OOM — Bitcoin blocks are very dense (~4k txs each)
+      const blockRange = endBlock - resolvedFromBlock
+      const maxBlocks = Math.min(blockRange, Math.max(20, Math.ceil(limit / 100)))
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
 
       const allTxs = results.flatMap(
         (block: unknown) => (block as { transactions?: unknown[] }).transactions || [],
       )
       const limitedTxs = allTxs.slice(0, limit)
+      const formattedData = applyResponseFormat(limitedTxs, response_format as ResponseFormat, 'bitcoin_transactions')
 
-      return formatResult(limitedTxs, `Retrieved ${limitedTxs.length} Bitcoin transactions`, {
+      const message = response_format === 'summary'
+        ? `Summary of ${limitedTxs.length} Bitcoin transactions`
+        : `Retrieved ${limitedTxs.length} Bitcoin transactions`
+
+      return formatResult(formattedData, message, {
         maxItems: limit,
         warnOnTruncation: false,
         metadata: {

@@ -21,8 +21,8 @@ const BLOCK_TIME_ESTIMATES: Record<string, number> = {
   evm: 12, // Ethereum mainnet default (~12s)
   solana: 0.4, // Solana slots (~400ms)
   bitcoin: 600, // Bitcoin (~10 min)
-  hyperliquidFills: 1,
-  hyperliquidReplicaCmds: 1,
+  hyperliquidFills: 0.083, // ~12 blocks/second
+  hyperliquidReplicaCmds: 0.083,
 }
 
 /**

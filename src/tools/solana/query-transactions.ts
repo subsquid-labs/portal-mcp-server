@@ -14,6 +14,7 @@ import {
   buildSolanaTransactionFields,
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -56,6 +57,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         .default(false)
         .describe('Include program logs'),
       limit: z.number().optional().default(50).describe('Max transactions'),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (aggregated stats, ~90% smaller), 'compact' (signature+fee+error only, ~70% smaller), 'full' (all fields)"),
     },
     async ({
       dataset,
@@ -70,6 +72,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
       include_token_balances,
       include_logs,
       limit,
+      response_format,
     }) => {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
@@ -142,7 +145,9 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         .flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
         .slice(0, limit)
 
-      return formatResult(allTxs, `Retrieved ${allTxs.length} Solana transactions`)
+      const formattedData = applyResponseFormat(allTxs, response_format as ResponseFormat, 'solana_transactions')
+
+      return formatResult(formattedData, `Retrieved ${allTxs.length} Solana transactions`)
     },
   )
 }

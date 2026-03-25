@@ -10,6 +10,7 @@ import {
   buildBitcoinTransactionFields,
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 export function registerQueryBitcoinOutputsTool(server: McpServer) {
@@ -38,9 +39,10 @@ EXAMPLES:
       address: z.array(z.string()).optional().describe('Filter by recipient address. Tracks payments TO this address.'),
       script_type: z.array(z.string()).optional().describe('Filter by output script type (e.g., "witness_v1_taproot", "witness_v0_keyhash")'),
       include_transaction: z.boolean().optional().default(false).describe('Include parent transaction data'),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (stats only, ~90% smaller), 'compact' (index+address+value only, ~50% smaller), 'full' (all fields)"),
       limit: z.number().optional().default(50).describe('Max outputs to return (default: 50)'),
     },
-    async ({ dataset, from_block, to_block, timeframe, finalized_only, address, script_type, include_transaction, limit }) => {
+    async ({ dataset, from_block, to_block, timeframe, finalized_only, address, script_type, include_transaction, response_format, limit }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
@@ -78,14 +80,23 @@ EXAMPLES:
         outputs: [outputFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Cap blocks to prevent OOM on large unfiltered ranges
+      const hasFilters = !!(address || script_type)
+      const blockRange = endBlock - resolvedFromBlock
+      const maxBlocks = hasFilters ? 0 : Math.min(blockRange, Math.max(50, limit * 5))
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
 
       const allOutputs = results.flatMap(
         (block: unknown) => (block as { outputs?: unknown[] }).outputs || [],
       )
       const limitedOutputs = allOutputs.slice(0, limit)
+      const formattedData = applyResponseFormat(limitedOutputs, response_format as ResponseFormat, 'bitcoin_outputs')
 
-      return formatResult(limitedOutputs, `Retrieved ${limitedOutputs.length} Bitcoin outputs`, {
+      const message = response_format === 'summary'
+        ? `Summary of ${limitedOutputs.length} Bitcoin outputs`
+        : `Retrieved ${limitedOutputs.length} Bitcoin outputs`
+
+      return formatResult(formattedData, message, {
         maxItems: limit,
         warnOnTruncation: false,
         metadata: { dataset, from_block: resolvedFromBlock, to_block: endBlock, query_start_time: queryStartTime },

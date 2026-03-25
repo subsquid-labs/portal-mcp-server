@@ -5,6 +5,7 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
+import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
@@ -37,6 +38,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       limit: z.number().optional().default(50).describe('Max fills to return'),
       include_pnl: z.boolean().optional().default(true).describe('Include closedPnl and startPosition fields'),
       include_builder_info: z.boolean().optional().default(false).describe('Include builder and builderFee fields'),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (aggregated stats, ~90% smaller), 'compact' (essential trade fields only, ~60% smaller), 'full' (all fields)"),
     },
     async ({
       dataset,
@@ -53,6 +55,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       limit,
       include_pnl,
       include_builder_info,
+      response_format,
     }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
@@ -122,7 +125,11 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         fills: [fillFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // HL blocks are ~0.083s — cap to prevent OOM on unfiltered queries
+      const hasFilters = !!(user || coin || dir || builder || cloid)
+      const blockRange = endBlock - resolvedFromBlock
+      const maxBlocks = hasFilters ? 0 : Math.min(blockRange, Math.max(5000, limit * 100))
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
 
       const allFills = results
         .flatMap((block: unknown) => {
@@ -138,8 +145,10 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         })
         .slice(0, limit)
 
+      const formattedData = applyResponseFormat(allFills, response_format as ResponseFormat, 'hyperliquid_fills')
+
       return formatResult(
-        allFills,
+        formattedData,
         `Retrieved ${allFills.length} Hyperliquid fills`,
         {
           maxItems: limit,

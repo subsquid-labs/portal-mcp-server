@@ -10,6 +10,7 @@ import {
   buildBitcoinTransactionFields,
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 export function registerQueryBitcoinInputsTool(server: McpServer) {
@@ -39,9 +40,10 @@ EXAMPLES:
       prevout_address: z.array(z.string()).optional().describe('Filter by address of the spent output. Tracks spending FROM this address.'),
       prevout_script_type: z.array(z.string()).optional().describe('Filter by script type (e.g., "witness_v1_taproot", "witness_v0_keyhash")'),
       include_transaction: z.boolean().optional().default(false).describe('Include parent transaction data'),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (stats only, ~90% smaller), 'compact' (txid+address+value only, ~50% smaller), 'full' (all fields)"),
       limit: z.number().optional().default(50).describe('Max inputs to return (default: 50)'),
     },
-    async ({ dataset, from_block, to_block, timeframe, finalized_only, type, prevout_address, prevout_script_type, include_transaction, limit }) => {
+    async ({ dataset, from_block, to_block, timeframe, finalized_only, type, prevout_address, prevout_script_type, include_transaction, response_format, limit }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
@@ -80,14 +82,23 @@ EXAMPLES:
         inputs: [inputFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // Cap blocks to prevent OOM on large unfiltered ranges
+      const hasFilters = !!(type || prevout_address || prevout_script_type)
+      const blockRange = endBlock - resolvedFromBlock
+      const maxBlocks = hasFilters ? 0 : Math.min(blockRange, Math.max(50, limit * 5))
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
 
       const allInputs = results.flatMap(
         (block: unknown) => (block as { inputs?: unknown[] }).inputs || [],
       )
       const limitedInputs = allInputs.slice(0, limit)
+      const formattedData = applyResponseFormat(limitedInputs, response_format as ResponseFormat, 'bitcoin_inputs')
 
-      return formatResult(limitedInputs, `Retrieved ${limitedInputs.length} Bitcoin inputs`, {
+      const message = response_format === 'summary'
+        ? `Summary of ${limitedInputs.length} Bitcoin inputs`
+        : `Retrieved ${limitedInputs.length} Bitcoin inputs`
+
+      return formatResult(formattedData, message, {
         maxItems: limit,
         warnOnTruncation: false,
         metadata: { dataset, from_block: resolvedFromBlock, to_block: endBlock, query_start_time: queryStartTime },

@@ -93,7 +93,11 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
         actions: [actionFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      // HL blocks are ~0.083s — cap to prevent OOM
+      const hasFilters = !!(action_type || user || vault_address || status)
+      const blockRange = endBlock - resolvedFromBlock
+      const maxBlocks = hasFilters ? 0 : Math.min(blockRange, 500000)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
 
       const allActions = results
         .flatMap((block: unknown) => {
