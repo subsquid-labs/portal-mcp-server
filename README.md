@@ -1,6 +1,6 @@
 # SQD Portal MCP Server
 
-MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperliquid via the [SQD Portal API](https://beta.docs.sqd.dev/portal/).
+MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperliquid via the [SQD Portal API](https://beta.docs.sqd.dev/en/portal/overview).
 
 ## How it works
 
