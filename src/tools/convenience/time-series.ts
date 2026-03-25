@@ -37,9 +37,27 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
+      const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
 
-      if (chainType !== 'evm') {
-        throw new Error('portal_get_time_series is only for EVM chains')
+      if (isHyperliquid) {
+        throw new Error(
+          'portal_get_time_series does not support Hyperliquid. Use portal_query_hyperliquid_fills instead.',
+        )
+      }
+
+      // Gas-related metrics are EVM-only
+      const gasMetrics = ['avg_gas_price', 'gas_used', 'block_utilization']
+      if (gasMetrics.includes(metric) && chainType !== 'evm') {
+        throw new Error(
+          `Metric '${metric}' is EVM-only. For ${dataset}, use: transaction_count, unique_addresses.`,
+        )
+      }
+
+      // unique_addresses requires from/to fields — not available on Bitcoin
+      if (metric === 'unique_addresses' && chainType === 'bitcoin') {
+        throw new Error(
+          "Metric 'unique_addresses' is not supported for Bitcoin (UTXO model has no simple from/to). Use: transaction_count.",
+        )
       }
 
       // Get block range using Portal's /timestamps/ API
@@ -51,24 +69,35 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const numBuckets = Math.ceil(durationSeconds / intervalSeconds)
       const bucketSize = Math.ceil((toBlock - fromBlock + 1) / numBuckets)
 
-      // Build base query fields based on metric
+      // Build chain-specific query
+      const queryType = chainType === 'solana' ? 'solana' : chainType === 'bitcoin' ? 'bitcoin' : 'evm'
+      const blockFieldKey = 'block'
+
       const baseFields: any = {
-        block: { number: true, timestamp: true },
+        [blockFieldKey]: { number: true, timestamp: true },
       }
       const queryExtras: any = {}
 
       if (metric === 'transaction_count' || metric === 'unique_addresses') {
         baseFields.transaction = { transactionIndex: true }
         if (metric === 'unique_addresses') {
-          baseFields.transaction.from = true
-          baseFields.transaction.to = true
+          if (chainType === 'solana') {
+            baseFields.transaction.feePayer = true
+          } else {
+            baseFields.transaction.from = true
+            baseFields.transaction.to = true
+          }
         }
-        queryExtras.transactions = address ? [{ to: [address.toLowerCase()] }] : [{}]
+        if (address && chainType === 'evm') {
+          queryExtras.transactions = [{ to: [address.toLowerCase()] }]
+        } else {
+          queryExtras.transactions = [{}]
+        }
       } else if (metric === 'avg_gas_price') {
-        baseFields.block.baseFeePerGas = true
+        baseFields[blockFieldKey].baseFeePerGas = true
       } else if (metric === 'gas_used' || metric === 'block_utilization') {
-        baseFields.block.gasUsed = true
-        baseFields.block.gasLimit = true
+        baseFields[blockFieldKey].gasUsed = true
+        baseFields[blockFieldKey].gasLimit = true
       }
 
       // Chunk large ranges to avoid Portal API size limits
@@ -80,7 +109,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       if (totalBlocks <= chunkSize) {
         // Single query
         const query = {
-          type: 'evm',
+          type: queryType,
           fromBlock,
           toBlock,
           includeAllBlocks: true,
@@ -99,7 +128,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         for (let start = fromBlock; start < toBlock; start += chunkSize) {
           const end = Math.min(start + chunkSize, toBlock)
           const query = {
-            type: 'evm',
+            type: queryType,
             fromBlock: start,
             toBlock: end,
             includeAllBlocks: true,
@@ -192,8 +221,9 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             const addresses = new Set<string>()
             blocks.forEach((block) => {
               block.transactions?.forEach((tx: any) => {
-                if (tx.from) addresses.add(tx.from.toLowerCase())
-                if (tx.to) addresses.add(tx.to.toLowerCase())
+                if (tx.feePayer) addresses.add(tx.feePayer) // Solana
+                if (tx.from) addresses.add(tx.from.toLowerCase()) // EVM
+                if (tx.to) addresses.add(tx.to.toLowerCase()) // EVM
               })
             })
             value = addresses.size

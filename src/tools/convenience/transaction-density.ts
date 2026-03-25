@@ -32,8 +32,10 @@ export function registerGetTransactionDensityTool(server: McpServer) {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
-      if (chainType !== 'evm') {
-        throw new Error('portal_get_transaction_density is only for EVM chains')
+      if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
+        throw new Error(
+          'portal_get_transaction_density does not support Hyperliquid. Use portal_query_hyperliquid_fills instead.',
+        )
       }
 
       // Get latest block
@@ -41,16 +43,17 @@ export function registerGetTransactionDensityTool(server: McpServer) {
       const latestBlock = head.number
       const fromBlock = Math.max(0, latestBlock - num_blocks + 1)
 
-      // Query with minimal transaction data - just need to count them
+      // Build chain-specific query — only need block metadata + tx count
+      const blockFieldKey = 'block'
       const query = {
-        type: 'evm',
+        type: chainType === 'solana' ? 'solana' : chainType === 'bitcoin' ? 'bitcoin' : 'evm',
         fromBlock,
         toBlock: latestBlock,
         fields: {
-          block: { number: true, timestamp: true },
-          transaction: { transactionIndex: true }, // Minimal field
+          [blockFieldKey]: { number: true, timestamp: true },
+          transaction: { transactionIndex: true },
         },
-        transactions: [{}], // Get all transactions
+        transactions: [{}],
       }
 
       const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)

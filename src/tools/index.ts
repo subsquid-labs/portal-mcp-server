@@ -24,7 +24,12 @@ import { registerListDatasetsTool } from './datasets/list.js'
 // Enrichment tools
 import { registerGetTokenInfoTool } from './enrichment/index.js'
 // Hyperliquid tools
-import { registerQueryHyperliquidFillsTool, registerQueryHyperliquidReplicaCmdsTool } from './hyperliquid/index.js'
+import {
+  registerQueryHyperliquidFillsTool,
+  registerQueryHyperliquidReplicaCmdsTool,
+  registerAggregateHyperliquidFillsTool,
+  registerHyperliquidTimeSeriesFilsTool,
+} from './hyperliquid/index.js'
 import { registerBlockAtTimestampTool } from './evm/block-at-timestamp.js'
 // EVM tools
 import { registerGetBlockNumberTool } from './evm/block-number.js'
@@ -79,9 +84,11 @@ export function registerAllTools(server: McpServer) {
   registerQueryBitcoinInputsTool(server)
   registerQueryBitcoinOutputsTool(server)
 
-  // Hyperliquid tools (2)
+  // Hyperliquid tools (4)
   registerQueryHyperliquidFillsTool(server)
   registerQueryHyperliquidReplicaCmdsTool(server)
+  registerAggregateHyperliquidFillsTool(server)
+  registerHyperliquidTimeSeriesFilsTool(server)
 
   // Utility tools (2)
   registerStreamTool(server)

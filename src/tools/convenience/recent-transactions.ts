@@ -17,10 +17,7 @@ import { getQueryExamples, normalizeAddresses, validateQuerySize } from '../../h
 
 /**
  * Convenience wrapper that auto-calculates block ranges for recent activity.
- * Eliminates the need to:
- * 1. Query HEAD block
- * 2. Calculate block range based on time
- * 3. Handle block-per-second conversions
+ * Supports EVM, Solana, and Bitcoin chains.
  */
 export function registerGetRecentTransactionsTool(server: McpServer) {
   server.tool(
@@ -46,8 +43,10 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
-      if (chainType !== 'evm') {
-        throw new Error('portal_get_recent_transactions is only for EVM chains')
+      if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
+        throw new Error(
+          'portal_get_recent_transactions does not support Hyperliquid. Use portal_query_hyperliquid_fills instead.',
+        )
       }
 
       // Resolve block range — numeric values are exact block counts,
@@ -69,6 +68,17 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
 
       const blockRange = toBlock - fromBlock
 
+      // Build chain-specific query
+      if (chainType === 'bitcoin') {
+        return await queryBitcoinRecent(dataset, fromBlock, toBlock, blockRange, timeframe, limit, queryStartTime)
+      }
+      if (chainType === 'solana') {
+        return await querySolanaRecent(
+          dataset, fromBlock, toBlock, blockRange, timeframe, from_addresses, limit, queryStartTime,
+        )
+      }
+
+      // EVM path
       const includeL2 = isL2Chain(dataset)
       const normalizedFrom = normalizeAddresses(from_addresses, chainType)
       const normalizedTo = normalizeAddresses(to_addresses, chainType)
@@ -98,7 +108,6 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
       }
 
       // Use standard preset (no 'input' field) to prevent response size explosions.
-      // The 'input' field contains arbitrary-length hex data that dominates response size.
       const fields = {
         block: { number: true, timestamp: true, hash: true },
         transaction: { ...TRANSACTION_FIELD_PRESETS.standard.transaction, gasUsed: true, status: true, sighash: true },
@@ -109,12 +118,10 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         fromBlock,
         toBlock,
         fields,
-        // ALWAYS include transactions field - empty array means "return all transactions"
         transactions: txFilters.length > 0 ? txFilters : [{}],
       }
 
-      // Use maxBlocks to stop streaming early — on dense chains like Base,
-      // even 100 blocks can have 16K+ txs, so we only need enough blocks to fill the limit
+      // Use maxBlocks to stop streaming early on dense chains
       const maxBlocksNeeded = Math.min(blockRange, Math.max(limit * 2, 100))
       const results = await portalFetchStream(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
@@ -142,6 +149,134 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
           },
         },
       )
+    },
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Bitcoin recent transactions
+// ---------------------------------------------------------------------------
+
+async function queryBitcoinRecent(
+  dataset: string,
+  fromBlock: number,
+  toBlock: number,
+  blockRange: number,
+  timeframe: string,
+  limit: number,
+  queryStartTime: number,
+) {
+  const query = {
+    type: 'bitcoin',
+    fromBlock,
+    toBlock,
+    fields: {
+      block: { number: true, timestamp: true },
+      transaction: {
+        transactionIndex: true,
+        hash: true,
+        size: true,
+        vsize: true,
+        weight: true,
+        version: true,
+        locktime: true,
+      },
+    },
+    transactions: [{}],
+  }
+
+  const maxBlocksNeeded = Math.min(blockRange, Math.max(limit * 2, 20))
+  const results = await portalFetchStream(
+    `${PORTAL_URL}/datasets/${dataset}/stream`,
+    query,
+    undefined,
+    maxBlocksNeeded,
+  )
+
+  const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
+  const limitedTxs = allTxs.slice(0, limit)
+
+  return formatResult(
+    limitedTxs,
+    `Retrieved ${limitedTxs.length} recent Bitcoin transactions${
+      allTxs.length > limit ? ` (total found: ${allTxs.length})` : ''
+    } from last ${timeframe}`,
+    {
+      maxItems: limit,
+      warnOnTruncation: false,
+      metadata: {
+        dataset,
+        from_block: fromBlock,
+        to_block: toBlock,
+        query_start_time: queryStartTime,
+      },
+    },
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Solana recent transactions
+// ---------------------------------------------------------------------------
+
+async function querySolanaRecent(
+  dataset: string,
+  fromBlock: number,
+  toBlock: number,
+  blockRange: number,
+  timeframe: string,
+  from_addresses: string[] | undefined,
+  limit: number,
+  queryStartTime: number,
+) {
+  const txFilters: Record<string, unknown>[] = []
+  if (from_addresses?.length) {
+    txFilters.push({ feePayer: from_addresses })
+  }
+  const hasFilters = txFilters.length > 0
+
+  const query = {
+    type: 'solana',
+    fromBlock,
+    toBlock,
+    fields: {
+      block: { number: true, timestamp: true },
+      transaction: {
+        transactionIndex: true,
+        signatures: true,
+        fee: true,
+        feePayer: true,
+        err: true,
+        computeUnitsConsumed: true,
+      },
+    },
+    transactions: hasFilters ? txFilters : [{}],
+  }
+
+  const maxBlocksNeeded = Math.min(blockRange, Math.max(limit * 2, 100))
+  const results = await portalFetchStream(
+    `${PORTAL_URL}/datasets/${dataset}/stream`,
+    query,
+    undefined,
+    hasFilters ? 0 : maxBlocksNeeded,
+  )
+
+  const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
+  const limitedTxs = allTxs.slice(0, limit)
+
+  return formatResult(
+    limitedTxs,
+    `Retrieved ${limitedTxs.length} recent Solana transactions${
+      allTxs.length > limit ? ` (total found: ${allTxs.length})` : ''
+    } from last ${timeframe}`,
+    {
+      maxItems: limit,
+      warnOnTruncation: false,
+      metadata: {
+        dataset,
+        from_block: fromBlock,
+        to_block: toBlock,
+        query_start_time: queryStartTime,
+      },
     },
   )
 }

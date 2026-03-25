@@ -1,2 +1,4 @@
 export { registerQueryHyperliquidFillsTool } from './query-fills.js'
 export { registerQueryHyperliquidReplicaCmdsTool } from './query-replica-cmds.js'
+export { registerAggregateHyperliquidFillsTool } from './aggregate-fills.js'
+export { registerHyperliquidTimeSeriesFilsTool } from './time-series-fills.js'
