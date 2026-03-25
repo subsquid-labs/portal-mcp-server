@@ -92,8 +92,16 @@ export function parsePortalError(
   if (status === 404) {
     message = `Resource not found: ${errorText}`
 
-    if (context?.url?.includes('/datasets/')) {
-      const datasetMatch = context.url.match(/\/datasets\/([^/]+)/)
+    if (context?.url && String(context.url).includes('/timestamps/')) {
+      // Timestamp-to-block lookup failed — the indexer hasn't caught up
+      const tsMatch = String(context.url).match(/\/timestamps\/(\d+)\/block/)
+      suggestions.push(
+        `Timestamp ${tsMatch?.[1] ?? 'unknown'} is not yet indexed (indexer may lag ~1-2h behind the chain head)`,
+      )
+      suggestions.push('Use a longer timeframe (e.g., "24h" instead of "1h") or explicit from_block')
+      suggestions.push('Use portal_get_block_number to get the latest block and query by block range')
+    } else if (context?.url && String(context.url).includes('/datasets/')) {
+      const datasetMatch = String(context.url).match(/\/datasets\/([^/]+)/)
       if (datasetMatch) {
         suggestions.push(`Dataset '${datasetMatch[1]}' not found or not available`)
         suggestions.push('Use portal_list_datasets to see available datasets')

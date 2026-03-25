@@ -1,5 +1,6 @@
 // Timeframe parsing for ergonomic queries
 // Converts "24h", "7d" etc. into block numbers using Portal's /timestamps/ API
+// Falls back to per-chain block time estimation when the endpoint is unavailable.
 
 import { getBlockHead } from '../cache/datasets.js'
 import { PORTAL_URL } from '../constants/index.js'
@@ -8,10 +9,93 @@ import { portalFetch, portalFetchStream } from './fetch.js'
 
 export type Timeframe = '1h' | '6h' | '12h' | '24h' | '3d' | '7d' | '14d' | '30d'
 
+// ---------------------------------------------------------------------------
+// Block time estimates
+// ---------------------------------------------------------------------------
+
 /**
- * Block time estimates — ONLY used for Hyperliquid (which lacks /timestamps/ endpoint)
+ * Block time estimates (seconds) by chain type — used as fallback when
+ * the /timestamps/ endpoint fails or is known to be down.
  */
-const HYPERLIQUID_BLOCK_TIME = 1 // ~1s per block
+const BLOCK_TIME_ESTIMATES: Record<string, number> = {
+  evm: 12, // Ethereum mainnet default (~12s)
+  solana: 0.4, // Solana slots (~400ms)
+  bitcoin: 600, // Bitcoin (~10 min)
+  hyperliquidFills: 1,
+  hyperliquidReplicaCmds: 1,
+}
+
+/**
+ * More specific block time estimates for known fast chains.
+ * Checked by dataset name prefix before falling back to chain-type defaults.
+ */
+const DATASET_BLOCK_TIMES: Record<string, number> = {
+  'base-': 2,
+  'optimism-': 2,
+  'arbitrum-': 0.25,
+  'polygon-': 2,
+  'bsc-': 3,
+  'avalanche-': 2,
+  'fantom-': 1,
+  'gnosis-': 5,
+  'zksync-': 1,
+  'linea-': 2,
+  'scroll-': 3,
+  'blast-': 2,
+  'mantle-': 2,
+  'mode-': 2,
+  'zora-': 2,
+  'celo-': 5,
+}
+
+function estimateBlockTime(dataset: string, chainType: string): number {
+  const lower = dataset.toLowerCase()
+  for (const [prefix, blockTime] of Object.entries(DATASET_BLOCK_TIMES)) {
+    if (lower.startsWith(prefix)) return blockTime
+  }
+  return BLOCK_TIME_ESTIMATES[chainType] ?? 12
+}
+
+function estimateFromBlock(latestBlock: number, seconds: number, dataset: string, chainType: string) {
+  const blockTime = estimateBlockTime(dataset, chainType)
+  const blockCount = Math.floor(seconds / blockTime)
+  return {
+    from_block: Math.max(0, latestBlock - blockCount + 1),
+    to_block: latestBlock,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Timestamp endpoint failure cache
+// ---------------------------------------------------------------------------
+// The Portal /timestamps/ endpoint can lag ~1-2h behind the chain head.
+// When it fails for a dataset, we cache that failure to skip the attempt
+// entirely on subsequent calls (avoiding wasted retries + timeout).
+
+const TIMESTAMP_FAILURE_TTL = 5 * 60 * 1000 // 5 minutes
+const timestampFailures = new Map<string, number>() // dataset → failure timestamp
+
+function isTimestampEndpointDown(dataset: string): boolean {
+  const failedAt = timestampFailures.get(dataset)
+  if (!failedAt) return false
+  if (Date.now() - failedAt > TIMESTAMP_FAILURE_TTL) {
+    timestampFailures.delete(dataset)
+    return false
+  }
+  return true
+}
+
+function markTimestampEndpointDown(dataset: string): void {
+  timestampFailures.set(dataset, Date.now())
+}
+
+function markTimestampEndpointUp(dataset: string): void {
+  timestampFailures.delete(dataset)
+}
+
+// ---------------------------------------------------------------------------
+// Timeframe parsing
+// ---------------------------------------------------------------------------
 
 /**
  * Parse timeframe string to seconds
@@ -37,13 +121,31 @@ export function parseTimeframeToSeconds(timeframe: string): number {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Timestamp-to-block conversion
+// ---------------------------------------------------------------------------
+
+/** Timeout for the /timestamps/ endpoint — fast-fail since we have a fallback. */
+const TIMESTAMP_TIMEOUT = 3000
+
+/**
+ * The Portal /timestamps/ endpoint can't resolve timestamps within ~2h of the
+ * chain head (the indexer lags behind). Skip the attempt entirely for
+ * timeframes shorter than this threshold — go straight to estimation.
+ */
+const TIMESTAMP_INDEXER_LAG = 2 * 3600 // 2 hours in seconds
+
 /**
  * Convert a Unix timestamp to a block number using Portal's /timestamps/ endpoint.
  * Works for all EVM, Solana, and Bitcoin chains. NOT supported for Hyperliquid.
+ *
+ * Uses a short timeout and zero retries — the caller should fall back to
+ * block time estimation on failure.
  */
 export async function timestampToBlock(dataset: string, timestamp: number): Promise<number> {
   const result = await portalFetch<{ block_number: number }>(
     `${PORTAL_URL}/datasets/${dataset}/timestamps/${Math.floor(timestamp)}/block`,
+    { timeout: TIMESTAMP_TIMEOUT, retries: 0 },
   )
   return result.block_number
 }
@@ -84,7 +186,11 @@ async function getHeadTimestamp(dataset: string, headBlock: number): Promise<num
     },
   }
 
-  const response = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+  const response = await portalFetchStream(
+    `${PORTAL_URL}/datasets/${dataset}/stream`,
+    query,
+    TIMESTAMP_TIMEOUT,
+  )
 
   if (!response || response.length === 0) {
     throw new Error(`Could not get timestamp for head block ${headBlock}`)
@@ -94,11 +200,20 @@ async function getHeadTimestamp(dataset: string, headBlock: number): Promise<num
   return block.timestamp
 }
 
+// ---------------------------------------------------------------------------
+// Main resolver
+// ---------------------------------------------------------------------------
+
 /**
- * Resolve timeframe to from_block/to_block using Portal's /timestamps/ API.
+ * Resolve timeframe to from_block/to_block.
  *
- * For EVM, Solana, and Bitcoin chains: uses the accurate /timestamps/{ts}/block endpoint.
- * For Hyperliquid: falls back to block time estimation (no /timestamps/ support).
+ * Strategy:
+ * 1. Hyperliquid → always estimate (no /timestamps/ support)
+ * 2. Short timeframes (≤ 2h) → always estimate (indexer can't resolve recent timestamps)
+ * 3. Cached failure for this dataset → estimate (avoid known-broken endpoint)
+ * 4. Otherwise → try /timestamps/ with fast timeout (3s, 0 retries)
+ *    - On success → return accurate block range
+ *    - On failure → cache failure for 5 min, return estimated range
  */
 export async function resolveTimeframeOrBlocks(params: {
   dataset: string
@@ -112,27 +227,33 @@ export async function resolveTimeframeOrBlocks(params: {
     const head = await getBlockHead(dataset)
     const latestBlock = head.number
     const chainType = detectChainType(dataset)
-    const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
+    const seconds = parseTimeframeToSeconds(timeframe)
 
-    if (isHyperliquid) {
-      // Hyperliquid: no /timestamps/ endpoint, use estimation
-      const seconds = parseTimeframeToSeconds(timeframe)
-      const blockCount = Math.floor(seconds / HYPERLIQUID_BLOCK_TIME)
-      return {
-        from_block: Math.max(0, latestBlock - blockCount + 1),
-        to_block: latestBlock,
-      }
+    const useEstimation =
+      chainType === 'hyperliquidFills' ||
+      chainType === 'hyperliquidReplicaCmds' ||
+      seconds <= TIMESTAMP_INDEXER_LAG ||
+      isTimestampEndpointDown(dataset)
+
+    if (useEstimation) {
+      return estimateFromBlock(latestBlock, seconds, dataset, chainType)
     }
 
-    // EVM, Solana, Bitcoin: use Portal's /timestamps/ endpoint for accurate conversion
-    const seconds = parseTimeframeToSeconds(timeframe)
-    const headTimestamp = await getHeadTimestamp(dataset, latestBlock)
-    const targetTimestamp = headTimestamp - seconds
-    const fromBlock = await timestampToBlock(dataset, targetTimestamp)
-
-    return {
-      from_block: fromBlock,
-      to_block: latestBlock,
+    // Timeframe is long enough that the target timestamp should be indexed.
+    // Try the accurate /timestamps/ path with fast-fail.
+    try {
+      const headTimestamp = await getHeadTimestamp(dataset, latestBlock)
+      const targetTimestamp = headTimestamp - seconds
+      const fromBlock = await timestampToBlock(dataset, targetTimestamp)
+      markTimestampEndpointUp(dataset)
+      return {
+        from_block: fromBlock,
+        to_block: latestBlock,
+      }
+    } catch {
+      // Cache the failure so subsequent calls skip straight to estimation
+      markTimestampEndpointDown(dataset)
+      return estimateFromBlock(latestBlock, seconds, dataset, chainType)
     }
   } else if (from_block !== undefined) {
     return {
@@ -145,14 +266,15 @@ export async function resolveTimeframeOrBlocks(params: {
 }
 
 /**
- * Convert timeframe to approximate block count — ONLY for Hyperliquid.
- * All other chains should use resolveTimeframeOrBlocks() which uses the /timestamps/ API.
+ * Convert timeframe to approximate block count using per-chain block time estimates.
  *
  * @deprecated Use resolveTimeframeOrBlocks() instead for accurate conversion.
  */
 export function timeframeToBlocks(timeframe: string, dataset: string): number {
   const seconds = parseTimeframeToSeconds(timeframe)
-  return Math.floor(seconds / HYPERLIQUID_BLOCK_TIME)
+  const chainType = detectChainType(dataset)
+  const blockTime = estimateBlockTime(dataset, chainType)
+  return Math.floor(seconds / blockTime)
 }
 
 /**
