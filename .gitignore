@@ -61,38 +61,11 @@ examples/
 cache/
 data/
 
-# Markdown files (except README and core docs)
+# Markdown files (except README)
 *.md
 !README.md
-!CLAUDE.md
 !LICENSE.md
 !CONTRIBUTING.md
-!CHANGELOG.md
-
-# Specifically exclude all the documentation files you've accumulated
-BLOCK-TIME-SOLUTION.md
-BUG-FIXES-COMPLETED.md
-COMPLETE_IMPROVEMENTS_SUMMARY.md
-ENRICHMENT_SUMMARY.md
-ERROR_IMPROVEMENTS_SUMMARY.md
-EXECUTIVE_SUMMARY.md
-FILES_CHANGED.md
-IMPROVEMENTS_IMPLEMENTED.md
-IMPROVEMENTS.md
-MEMORY_LEAK_FIX.md
-NEW_TOOLS_SUMMARY.md
-PERFORMANCE_GUIDE.md
-QUERY_LIMITS_SUMMARY.md
-QUICK_REFERENCE.md
-REMOVED_TOOLS.md
-TIMESERIES_TEST_RESULTS.md
-TIMESERIES_VERIFICATION.md
-TIMESTAMP-BASED-APPROACH.md
-TIMESTAMP-ENDPOINT-DETAILED-ANALYSIS.md
-TIMESTAMP-ENDPOINT-TEST-RESULTS.md
-USAGE_EXAMPLES.md
-UX-IMPROVEMENTS.md
-WISHLIST_PROGRESS.md
 
 # Environment files with secrets
 .env
@@ -114,3 +87,7 @@ coverage/
 *.backup
 *.bak
 *.old
+
+# Local dev files
+.mcp.json
+charts-demo.html

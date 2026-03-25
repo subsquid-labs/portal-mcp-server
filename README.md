@@ -1,6 +1,6 @@
 # SQD Portal MCP Server
 
-MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperliquid via the [SQD Portal API](https://docs.sqd.dev/portal/).
+MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperliquid via the [SQD Portal API](https://beta.docs.sqd.dev/portal/).
 
 ## How it works
 
@@ -8,14 +8,14 @@ MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperli
 MCP Client  ->  MCP Tools (this server)  ->  Portal API (portal.sqd.dev)
 ```
 
-This server provides 34 MCP tools that wrap Portal's streaming API. Each tool validates parameters, constructs a Portal request, and returns formatted results — all blockchain data comes from Portal's infrastructure.
+This server provides 41 MCP tools that wrap Portal's streaming API. Each tool validates parameters, constructs a Portal request, and returns formatted results — all blockchain data comes from Portal's infrastructure.
 
 ## Supported chains
 
 - **EVM** — Ethereum, Base, Arbitrum, Polygon, and 100+ more
 - **Solana** — mainnet and devnet
 - **Bitcoin** — mainnet
-- **Hyperliquid** — trade fills
+- **Hyperliquid** — trade fills, volume, trader analytics
 
 ## Tools
 
@@ -40,7 +40,7 @@ This server provides 34 MCP tools that wrap Portal's streaming API. Each tool va
 | `portal_get_erc20_transfers` | Get ERC20 token transfers |
 | `portal_get_nft_transfers` | Get ERC721/ERC1155 NFT transfers |
 
-### Solana tools (6)
+### Solana tools (8)
 
 | Tool | Description |
 |------|-------------|
@@ -50,21 +50,28 @@ This server provides 34 MCP tools that wrap Portal's streaming API. Each tool va
 | `portal_query_solana_token_balances` | Query SPL token balance changes |
 | `portal_query_solana_logs` | Query program log messages |
 | `portal_query_solana_rewards` | Query block rewards |
+| `portal_solana_analytics` | Transaction stats, program rankings, fee analysis |
+| `portal_solana_time_series` | Transaction density and fee trends over time |
 
-### Bitcoin tools (3)
+### Bitcoin tools (5)
 
 | Tool | Description |
 |------|-------------|
 | `portal_query_bitcoin_transactions` | Query Bitcoin transactions |
 | `portal_query_bitcoin_inputs` | Query transaction inputs |
 | `portal_query_bitcoin_outputs` | Query transaction outputs |
+| `portal_bitcoin_analytics` | Transaction stats, fee analysis, size distribution |
+| `portal_bitcoin_time_series` | Transaction density and fee trends over time |
 
-### Hyperliquid tools (2)
+### Hyperliquid tools (5)
 
 | Tool | Description |
 |------|-------------|
 | `portal_query_hyperliquid_fills` | Query trade fills with PnL, fees, routing |
 | `portal_query_hyperliquid_replica_cmds` | Query replica commands |
+| `portal_aggregate_hyperliquid_fills` | Volume, PnL, and trader stats by coin with market share |
+| `portal_hyperliquid_time_series` | Volume, trades, and unique traders over time buckets |
+| `portal_hyperliquid_analytics` | Trading volume, top coins, trader rankings |
 
 ### Convenience tools (7)
 
@@ -77,7 +84,7 @@ Higher-level tools that combine multiple queries for common tasks.
 | `portal_get_contract_activity` | Contract interaction count, callers, events |
 | `portal_get_gas_analytics` | Gas prices, percentiles, cost estimates |
 | `portal_get_top_contracts` | Most active contracts by transaction count |
-| `portal_get_transaction_density` | Transaction count per block |
+| `portal_get_transaction_density` | Transaction count per block (EVM, Bitcoin, Solana) |
 | `portal_get_time_series` | Aggregate metrics over time intervals |
 
 ### Aggregation tools (2)
@@ -102,7 +109,11 @@ Higher-level tools that combine multiple queries for common tasks.
 
 ## Time ranges
 
-Most tools support a `timeframe` parameter (`1h`, `24h`, `7d`, etc.) as an alternative to specifying block numbers. The server converts timeframes to block ranges automatically using Portal's timestamp-to-block API.
+Most tools support a `timeframe` parameter (`1h`, `24h`, `7d`, etc.) as an alternative to specifying block numbers. The server converts timeframes to block ranges automatically using Portal's timestamp-to-block API, with fast estimation fallback for recent timeframes.
+
+## Hosted endpoint
+
+A hosted version is available at `https://portal.sqd.dev/mcp` — use it directly in Claude Desktop or any MCP client without running the server locally.
 
 ## Setup
 
