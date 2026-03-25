@@ -7,7 +7,7 @@ import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, weiToGwei } from '../../helpers/formatting.js'
-import { getBlockRangeForDuration, getDurationSeconds } from '../../helpers/timestamp-to-block.js'
+import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
 // Tool: Get Time Series Data
@@ -42,12 +42,12 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         throw new Error('portal_get_time_series is only for EVM chains')
       }
 
-      // Get block range using Portal's timestamp-to-block API (no guessing needed!)
-      const { fromBlock, toBlock } = await getBlockRangeForDuration(dataset, duration)
+      // Get block range using Portal's /timestamps/ API
+      const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({ dataset, timeframe: duration })
 
       // Calculate bucket size based on interval duration
-      const intervalSeconds = getDurationSeconds(interval)
-      const durationSeconds = getDurationSeconds(duration)
+      const intervalSeconds = parseTimeframeToSeconds(interval)
+      const durationSeconds = parseTimeframeToSeconds(duration)
       const numBuckets = Math.ceil(durationSeconds / intervalSeconds)
       const bucketSize = Math.ceil((toBlock - fromBlock + 1) / numBuckets)
 

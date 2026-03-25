@@ -227,3 +227,56 @@ export function buildSolanaRewardFields() {
     commission: true,
   }
 }
+
+// ============================================================================
+// Bitcoin Field Builders
+// ============================================================================
+
+export function buildBitcoinBlockFields() {
+  return {
+    number: true,
+    hash: true,
+    timestamp: true,
+  }
+}
+
+export function buildBitcoinTransactionFields() {
+  return {
+    transactionIndex: true,
+    hash: true,
+    version: true,
+    size: true,
+    vsize: true,
+    weight: true,
+    locktime: true,
+  }
+}
+
+export function buildBitcoinInputFields() {
+  return {
+    transactionIndex: true,
+    inputIndex: true,
+    txid: true,
+    vout: true,
+    sequence: true,
+    scriptSig: true,
+    txinwitness: true,
+    prevoutScriptPubKeyAddress: true,
+    prevoutScriptPubKeyType: true,
+    prevoutValue: true,
+    prevoutGenerated: true,
+    type: true,
+  }
+}
+
+export function buildBitcoinOutputFields() {
+  return {
+    transactionIndex: true,
+    outputIndex: true,
+    value: true,
+    scriptPubKeyAddress: true,
+    scriptPubKeyType: true,
+    scriptPubKeyAsm: true,
+    scriptPubKeyHex: true,
+  }
+}

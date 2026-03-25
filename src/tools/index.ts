@@ -2,6 +2,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 // Aggregation tools
 import { registerAggregateTransfersTool, registerCountEventsTool } from './aggregation/index.js'
+// Bitcoin tools
+import {
+  registerQueryBitcoinTransactionsTool,
+  registerQueryBitcoinInputsTool,
+  registerQueryBitcoinOutputsTool,
+} from './bitcoin/index.js'
 // Convenience tools
 import {
   registerGetContractActivityTool,
@@ -18,7 +24,7 @@ import { registerListDatasetsTool } from './datasets/list.js'
 // Enrichment tools
 import { registerGetTokenInfoTool } from './enrichment/index.js'
 // Hyperliquid tools
-import { registerQueryHyperliquidFillsTool } from './hyperliquid/index.js'
+import { registerQueryHyperliquidFillsTool, registerQueryHyperliquidReplicaCmdsTool } from './hyperliquid/index.js'
 import { registerBlockAtTimestampTool } from './evm/block-at-timestamp.js'
 // EVM tools
 import { registerGetBlockNumberTool } from './evm/block-number.js'
@@ -68,8 +74,14 @@ export function registerAllTools(server: McpServer) {
   registerQuerySolanaLogsTool(server)
   registerQuerySolanaRewardsTool(server)
 
-  // Hyperliquid tools (1)
+  // Bitcoin tools (3)
+  registerQueryBitcoinTransactionsTool(server)
+  registerQueryBitcoinInputsTool(server)
+  registerQueryBitcoinOutputsTool(server)
+
+  // Hyperliquid tools (2)
   registerQueryHyperliquidFillsTool(server)
+  registerQueryHyperliquidReplicaCmdsTool(server)
 
   // Utility tools (2)
   registerStreamTool(server)

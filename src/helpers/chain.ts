@@ -18,5 +18,8 @@ export function detectChainType(dataset: string): ChainType {
   if (lower === 'hyperliquid-replica-cmds') {
     return 'hyperliquidReplicaCmds'
   }
+  if (lower.includes('bitcoin')) {
+    return 'bitcoin'
+  }
   return 'evm'
 }

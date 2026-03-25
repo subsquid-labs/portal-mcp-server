@@ -10,9 +10,8 @@ import { getKnownTokenDecimals } from '../../helpers/conversions.js'
 import { buildEvmLogFields, buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatTokenAmount, formatTransactionFields, hexToBigInt } from '../../helpers/formatting.js'
-import { getBlockRangeForDuration } from '../../helpers/timestamp-to-block.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
-import type { BlockHead } from '../../types/index.js'
 
 // ============================================================================
 // Tool: Get Wallet Summary (Convenience Wrapper)
@@ -37,7 +36,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         .enum(['1h', '24h', '7d', '1000', '5000'])
         .optional()
         .default('1000')
-        .describe("Look-back period: '1h'=~1800 blocks, '24h'=~43200, '7d'=~302400, or block count"),
+        .describe("Look-back period: '1h'=~1 hour, '24h'=~1 day, '7d'=~1 week, or block count"),
       include_tokens: z.boolean().optional().default(true).describe('Include ERC20 token transfers'),
       include_nfts: z.boolean().optional().default(false).describe('Include NFT transfers (ERC721/1155)'),
       limit_per_type: z.number().optional().default(10).describe('Max items per category (txs, tokens, nfts)'),
@@ -53,20 +52,22 @@ export function registerGetWalletSummaryTool(server: McpServer) {
 
       const normalizedAddress = normalizeEvmAddress(address)
 
-      // Get block range using Portal's timestamp-to-block API
+      // Resolve block range — numeric values are exact block counts,
+      // time-based values use Portal's /timestamps/ API
       let fromBlock: number
       let toBlock: number
+      const isBlockCount = /^\d+$/.test(timeframe)
 
-      if (timeframe === '1h' || timeframe === '24h' || timeframe === '7d') {
-        const range = await getBlockRangeForDuration(dataset, timeframe)
-        fromBlock = range.fromBlock
-        toBlock = range.toBlock
-      } else {
-        // Custom block range (number string)
+      if (isBlockCount) {
+        const { getBlockHead } = await import('../../cache/datasets.js')
+        const head = await getBlockHead(dataset)
         const blockRange = parseInt(timeframe)
-        const range = await getBlockRangeForDuration(dataset, '1h') // Get current block
-        toBlock = range.toBlock
+        toBlock = head.number
         fromBlock = Math.max(0, toBlock - blockRange)
+      } else {
+        const resolved = await resolveTimeframeOrBlocks({ dataset, timeframe })
+        fromBlock = resolved.from_block
+        toBlock = resolved.to_block
       }
       const includeL2 = isL2Chain(dataset)
 

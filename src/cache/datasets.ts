@@ -116,7 +116,9 @@ const CHAIN_ALIASES: Record<string, string[]> = {
   'zora-mainnet': ['zora'],
   'hyperliquid-mainnet': ['hyperevm', 'hyperl', 'hyper'],
   'hyperliquid-fills': ['hl-fills', 'hlfills'],
+  'hyperliquid-replica-cmds': ['hl-replica', 'hlreplica', 'hl-cmds'],
   'solana-mainnet': ['solana', 'sol'],
+  'bitcoin-mainnet': ['bitcoin', 'btc'],
 }
 
 /**

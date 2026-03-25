@@ -5,11 +5,11 @@ import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { EVENT_NAMES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
-import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
-import type { BlockHead } from '../../types/index.js'
 
 // ============================================================================
 // Tool: Get Contract Activity Summary (Convenience Wrapper)
@@ -34,7 +34,7 @@ export function registerGetContractActivityTool(server: McpServer) {
         .enum(['1h', '24h', '7d', '1000', '5000'])
         .optional()
         .default('1000')
-        .describe("Analysis period: '1h'=~1800 blocks, '24h'=~43200, '7d'=~302400, or block count"),
+        .describe("Analysis period: '1h'=~1 hour, '24h'=~1 day, '7d'=~1 week, or block count"),
       include_events: z.boolean().optional().default(true).describe('Include event log summary'),
     },
     async ({ dataset, contract_address, timeframe, include_events }) => {
@@ -48,28 +48,22 @@ export function registerGetContractActivityTool(server: McpServer) {
 
       const normalizedContract = normalizeEvmAddress(contract_address)
 
-      // Get latest block (cached for 30s)
-      const head = await getBlockHead(dataset)
-      const latestBlock = head.number
+      // Resolve block range — numeric values are exact block counts,
+      // time-based values (1h, 24h, etc.) use Portal's /timestamps/ API
+      let fromBlock: number
+      let toBlock: number
+      const isBlockCount = /^\d+$/.test(timeframe)
 
-      // Calculate block range
-      let blockRange: number
-      switch (timeframe) {
-        case '1h':
-          blockRange = 1800
-          break
-        case '24h':
-          blockRange = 43200
-          break
-        case '7d':
-          blockRange = 302400
-          break
-        default:
-          blockRange = parseInt(timeframe)
+      if (isBlockCount) {
+        const head = await getBlockHead(dataset)
+        const blockRange = parseInt(timeframe)
+        toBlock = head.number
+        fromBlock = Math.max(0, toBlock - blockRange)
+      } else {
+        const resolved = await resolveTimeframeOrBlocks({ dataset, timeframe })
+        fromBlock = resolved.from_block
+        toBlock = resolved.to_block
       }
-
-      const fromBlock = Math.max(0, latestBlock - blockRange)
-      const toBlock = latestBlock
 
       // Query 1: Transactions to contract (standard preset — no input hex bloat)
       const txQuery = {

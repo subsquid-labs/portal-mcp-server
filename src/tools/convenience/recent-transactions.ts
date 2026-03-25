@@ -5,11 +5,11 @@ import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
-import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTransactionFields } from '../../helpers/formatting.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { getQueryExamples, normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
-import type { BlockHead } from '../../types/index.js'
 
 // ============================================================================
 // Tool: Get Recent Transactions (Convenience Wrapper)
@@ -50,31 +50,24 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         throw new Error('portal_get_recent_transactions is only for EVM chains')
       }
 
-      // Get latest block (cached for 30s)
-      const head = await getBlockHead(dataset)
-      const latestBlock = head.number
+      // Resolve block range — numeric values are exact block counts,
+      // time-based values (1h, 6h, etc.) use Portal's /timestamps/ API
+      let fromBlock: number
+      let toBlock: number
+      const isBlockCount = /^\d+$/.test(timeframe)
 
-      // Calculate block range based on timeframe
-      let blockRange: number
-      switch (timeframe) {
-        case '1h':
-          blockRange = 1800 // ~1 hour (2s per block)
-          break
-        case '6h':
-          blockRange = 10800 // ~6 hours
-          break
-        case '24h':
-          blockRange = 43200 // ~24 hours
-          break
-        case '7d':
-          blockRange = 302400 // ~7 days
-          break
-        default:
-          blockRange = parseInt(timeframe) // Exact block count
+      if (isBlockCount) {
+        const head = await getBlockHead(dataset)
+        const blockRange = parseInt(timeframe)
+        toBlock = head.number
+        fromBlock = Math.max(0, toBlock - blockRange)
+      } else {
+        const resolved = await resolveTimeframeOrBlocks({ dataset, timeframe })
+        fromBlock = resolved.from_block
+        toBlock = resolved.to_block
       }
 
-      const fromBlock = Math.max(0, latestBlock - blockRange)
-      const toBlock = latestBlock
+      const blockRange = toBlock - fromBlock
 
       const includeL2 = isL2Chain(dataset)
       const normalizedFrom = normalizeAddresses(from_addresses, chainType)

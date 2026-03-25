@@ -6,7 +6,7 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
-import { getBlockRangeForDuration } from '../../helpers/timestamp-to-block.js'
+import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
 // Tool: Get Gas Analytics
@@ -37,8 +37,8 @@ export function registerGetGasAnalyticsTool(server: McpServer) {
         throw new Error('portal_get_gas_analytics is only for EVM chains')
       }
 
-      // Get block range using Portal's timestamp-to-block API
-      const { fromBlock, toBlock } = await getBlockRangeForDuration(dataset, timeframe)
+      // Get block range using Portal's /timestamps/ API
+      const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({ dataset, timeframe })
 
       // Query block data with gas fields
       const query = {
