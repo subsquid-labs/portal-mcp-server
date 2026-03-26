@@ -10,6 +10,7 @@ import {
   buildSolanaBalanceFields,
   buildSolanaInstructionFields,
   buildSolanaLogFields,
+  buildSolanaRewardFields,
   buildSolanaTokenBalanceFields,
   buildSolanaTransactionFields,
 } from '../../helpers/fields.js'
@@ -56,6 +57,11 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         .optional()
         .default(false)
         .describe('Include program logs'),
+      include_rewards: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe('Include block rewards (validator staking rewards). Filter by pubkey using mentions_account.'),
       limit: z.number().optional().default(50).describe('Max transactions'),
       response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (aggregated stats, ~90% smaller), 'compact' (signature+fee+error only, ~70% smaller), 'full' (all fields)"),
     },
@@ -71,6 +77,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
       include_balances,
       include_token_balances,
       include_logs,
+      include_rewards,
       limit,
       response_format,
     }) => {
@@ -127,13 +134,19 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
       if (include_logs) {
         fields.log = buildSolanaLogFields()
       }
+      if (include_rewards) {
+        fields.reward = buildSolanaRewardFields()
+      }
 
-      const query = {
+      const query: Record<string, unknown> = {
         type: 'solana',
         fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields,
         transactions: [txFilter],
+      }
+      if (include_rewards) {
+        query.rewards = [{}]
       }
 
       // Solana slots are extremely dense — cap maxBlocks to prevent OOM.

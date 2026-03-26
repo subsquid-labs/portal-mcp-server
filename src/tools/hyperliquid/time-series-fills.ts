@@ -83,61 +83,21 @@ EXAMPLES:
       if (coin) fillFilter.coin = coin
       if (user) fillFilter.user = user.map((u) => u.toLowerCase())
 
-      // Need closedPnl for pnl metric, dir for liquidation detection
-      const fillFields: Record<string, boolean> = {
-        user: true,
-        coin: true,
-        px: true,
-        sz: true,
-        time: true,
+      // Only request fields actually needed for the metric — reduces payload 2-5x
+      const fillFields: Record<string, boolean> = { time: true }
+      if (metric === 'volume' || metric === 'liquidation_volume') {
+        fillFields.px = true
+        fillFields.sz = true
       }
+      if (metric === 'unique_traders') fillFields.user = true
       if (metric === 'realized_pnl') fillFields.closedPnl = true
       if (metric === 'liquidation_volume') fillFields.dir = true
-
-      const query = {
-        type: 'hyperliquidFills',
-        fromBlock,
-        toBlock: endBlock,
-        fields: {
-          block: { number: true, timestamp: true },
-          fill: fillFields,
-        },
-        fills: [fillFilter],
-      }
-
-      // HL blocks are ~0.083s. Cap to prevent OOM.
-      // 500k blocks ≈ ~12h. For longer durations, data will be partial.
-      const blockRange = endBlock - fromBlock
-      const maxBlocks = Math.min(blockRange, 500000)
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-        undefined,
-        maxBlocks,
-        200 * 1024 * 1024,
-      )
-      const wasPartial = blockRange > 500000
-
-      if (results.length === 0) {
-        throw new Error('No data available for this time period')
-      }
-
-      // Extract fills with timestamps — avoid spread operators on large arrays
-      let startTimestamp = Infinity
-      let fillCount = 0
-
-      // First pass: find startTimestamp
-      results.forEach((block: any) => {
-        const blockTs = toSeconds(block.header?.timestamp || 0)
-        ;(block.fills || []).forEach((fill: any) => {
-          const ts = toSeconds(fill.time || block.header?.timestamp || 0)
-          if (ts > 0 && ts < startTimestamp) startTimestamp = ts
-          fillCount++
-        })
-      })
-
-      if (fillCount === 0) {
-        throw new Error('No fills found for the specified filters')
+      if (group_by === 'coin' || coin) fillFields.coin = true
+      // volume needs user for group_by coin tracking
+      if (group_by === 'coin') {
+        fillFields.user = true
+        fillFields.px = true
+        fillFields.sz = true
       }
 
       // Bucket definition
@@ -170,38 +130,89 @@ EXAMPLES:
         return d
       }
 
-      // Second pass: bucket everything in one iteration
-      results.forEach((block: any) => {
-        ;(block.fills || []).forEach((fill: any) => {
-          const ts = toSeconds(fill.time || block.header?.timestamp || 0)
-          if (!ts) return
-          const elapsed = ts - startTimestamp
-          const bucketIndex = Math.floor(elapsed / intervalSeconds)
-          if (bucketIndex >= expectedBuckets || bucketIndex < 0) return
+      // HL blocks are ~0.083s (~12/sec). Long durations need millions of blocks.
+      // Fetch in chunks to avoid OOM, aggregating into buckets incrementally.
+      const CHUNK_SIZE = 40000 // ~55 min of HL blocks per chunk (~480k fills, ~96MB)
+      const totalBlockRange = endBlock - fromBlock
+      const chunks = Math.ceil(totalBlockRange / CHUNK_SIZE)
 
-          const bucket = getOrCreateBucket(bucketIndex)
-          const notional = (fill.px || 0) * (fill.sz || 0)
-          const isLiquidation =
-            fill.dir === 'Short > Long' || fill.dir === 'Long > Short'
+      // We calculate bucket index from the start of the time range.
+      // Use block timestamps directly — the first fill's timestamp anchors bucket 0.
+      let startTimestamp = 0
+      let fillCount = 0
 
-          bucket.fills++
-          bucket.volume += notional
-          if (fill.user) bucket.traders.add(fill.user)
-          bucket.pnl += fill.closedPnl || 0
-          if (isLiquidation) bucket.liqVolume += notional
+      // First chunk: discover startTimestamp, then process
+      // Subsequent chunks: just process
+      for (let chunkIdx = 0; chunkIdx < chunks; chunkIdx++) {
+        const chunkFrom = fromBlock + chunkIdx * CHUNK_SIZE
+        const chunkTo = Math.min(chunkFrom + CHUNK_SIZE, endBlock)
 
-          // Per-coin tracking (for group_by)
-          if (group_by === 'coin') {
-            const coinKey = TOP_COINS.includes(fill.coin) ? fill.coin : 'Others'
-            const cd = getOrCreateCoinData(bucket.byCoin, coinKey)
-            cd.fills++
-            cd.volume += notional
-            if (fill.user) cd.traders.add(fill.user)
-            cd.pnl += fill.closedPnl || 0
-            if (isLiquidation) cd.liqVolume += notional
+        const chunkQuery = {
+          type: 'hyperliquidFills',
+          fromBlock: chunkFrom,
+          toBlock: chunkTo,
+          fields: {
+            block: { number: true, timestamp: true },
+            fill: fillFields,
+          },
+          fills: [fillFilter],
+        }
+
+        let chunkResults: any[]
+        try {
+          chunkResults = await portalFetchStream(
+            `${PORTAL_URL}/datasets/${dataset}/stream`,
+            chunkQuery,
+            undefined,
+            0, // no block limit per chunk
+            150 * 1024 * 1024,
+          ) as any[]
+        } catch (err) {
+          throw new Error(`Failed to fetch Hyperliquid time-series chunk: ${err instanceof Error ? err.message : String(err)}`)
+        }
+
+        // Process this chunk's fills into buckets
+        for (const block of chunkResults) {
+          for (const fill of block.fills || []) {
+            const ts = toSeconds(fill.time || block.header?.timestamp || 0)
+            if (!ts) continue
+
+            // Anchor startTimestamp from the very first fill
+            if (startTimestamp === 0) startTimestamp = ts
+
+            fillCount++
+            const elapsed = ts - startTimestamp
+            const bucketIndex = Math.floor(elapsed / intervalSeconds)
+            if (bucketIndex >= expectedBuckets || bucketIndex < 0) continue
+
+            const bucket = getOrCreateBucket(bucketIndex)
+            const notional = (fill.px || 0) * (fill.sz || 0)
+            const isLiquidation =
+              fill.dir === 'Short > Long' || fill.dir === 'Long > Short'
+
+            bucket.fills++
+            bucket.volume += notional
+            if (fill.user) bucket.traders.add(fill.user)
+            bucket.pnl += fill.closedPnl || 0
+            if (isLiquidation) bucket.liqVolume += notional
+
+            // Per-coin tracking (for group_by)
+            if (group_by === 'coin') {
+              const coinKey = TOP_COINS.includes(fill.coin) ? fill.coin : 'Others'
+              const cd = getOrCreateCoinData(bucket.byCoin, coinKey)
+              cd.fills++
+              cd.volume += notional
+              if (fill.user) cd.traders.add(fill.user)
+              cd.pnl += fill.closedPnl || 0
+              if (isLiquidation) cd.liqVolume += notional
+            }
           }
-        })
-      })
+        }
+      }
+
+      if (fillCount === 0) {
+        throw new Error('No fills found for the specified filters')
+      }
 
       // Helper to extract metric value
       function getMetricValue(data: { fills: number; volume: number; traders: Set<string>; pnl: number; liqVolume: number }): number {
@@ -281,10 +292,7 @@ EXAMPLES:
 
       if (coin) summary.filtered_by_coin = coin
       if (group_by === 'coin') summary.grouped_by = 'coin'
-      if (wasPartial) {
-        summary.partial = true
-        summary.note = `Data capped at ~12h of blocks. For ${duration}, results show the most recent ~12h.`
-      }
+      if (chunks > 1) summary.chunks_fetched = chunks
 
       return formatResult(
         { summary, time_series: timeSeries },

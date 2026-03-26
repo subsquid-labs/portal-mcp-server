@@ -1,5 +1,4 @@
 export { registerGetContractActivityTool } from './contract-activity.js'
-export { registerGetGasAnalyticsTool } from './gas-analytics.js'
 export { registerGetRecentTransactionsTool } from './recent-transactions.js'
 export { registerGetTimeSeriesDataTool } from './time-series.js'
 export { registerGetTopContractsTool } from './top-contracts.js'

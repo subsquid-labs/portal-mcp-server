@@ -133,7 +133,11 @@ export async function portalFetchStream(
   timeout: number = STREAM_TIMEOUT,
   maxBlocks: number = 0,
   maxBytes: number = 50 * 1024 * 1024,
+  _retries: number = DEFAULT_RETRIES,
 ): Promise<unknown[]> {
+  let lastError: Error | null = null
+
+  for (let attempt = 0; attempt <= _retries; attempt++) {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeout)
 
@@ -158,16 +162,27 @@ export async function portalFetchStream(
     }
 
     if (response.status === 409) {
-      throw new Error(
+      lastError = new Error(
         'Chain reorganization detected (409 Conflict). The requested block range may have been affected by a reorg. Try with a different fromBlock or use finalized blocks.',
       )
+      await sleep(Math.pow(2, attempt) * 1000)
+      continue
     }
 
     if (response.status === 429) {
       const retryAfter = response.headers.get('Retry-After')
-      throw new Error(
+      const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.pow(2, attempt) * 1000
+      lastError = new Error(
         `Rate limited (429). ${retryAfter ? `Retry after ${retryAfter}s.` : 'Please wait before retrying.'}`,
       )
+      await sleep(delay)
+      continue
+    }
+
+    if (response.status === 503) {
+      lastError = parsePortalError(503, await response.text(), { url, query: body })
+      await sleep(Math.pow(2, attempt) * 1000)
+      continue
     }
 
     if (!response.ok) {
@@ -244,6 +259,19 @@ export async function portalFetchStream(
       throw createTimeoutError(timeout, { url, query: body })
     }
 
-    throw wrapError(error, { url, query: body })
+    // Don't retry on client errors
+    const errMsg = error instanceof Error ? error.message : String(error)
+    if (errMsg.includes('HTTP 4') && !errMsg.includes('409') && !errMsg.includes('429')) {
+      throw wrapError(error, { url, query: body })
+    }
+
+    lastError = wrapError(error, { url, query: body }) as Error
+
+    if (attempt < _retries) {
+      await sleep(Math.pow(2, attempt) * 1000)
+    }
   }
+  } // end for loop
+
+  throw lastError || new Error('Stream request failed after retries')
 }

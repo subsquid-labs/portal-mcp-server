@@ -61,44 +61,14 @@ EXAMPLES:
       const durationSeconds = parseTimeframeToSeconds(duration)
       const expectedBuckets = Math.ceil(durationSeconds / intervalSeconds)
 
-      // Solana is extremely dense — cap total slots
       const slotRange = endBlock - fromBlock
-      const maxSlots = Math.min(slotRange, 50000) // ~5.5 hours at 400ms/slot
-      const effectiveFrom = slotRange > maxSlots ? endBlock - maxSlots : fromBlock
-
-      // Query transactions with all needed fields
-      const txQuery = {
-        type: 'solana',
-        fromBlock: effectiveFrom,
-        toBlock: endBlock,
-        includeAllBlocks: true,
-        fields: {
-          block: { number: true, timestamp: true },
-          transaction: {
-            transactionIndex: true,
-            fee: true,
-            feePayer: true,
-            err: true,
-          },
-        },
-        transactions: [{}],
+      if (slotRange > 250000) {
+        throw new Error(
+          `Slot range too large for Solana time series (${slotRange.toLocaleString()} slots, max 250k). ` +
+          `Use a shorter duration (e.g., '1h', '6h', or '24h') or a larger interval.`
+        )
       }
-
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        txQuery,
-        undefined,
-        maxSlots,
-        200 * 1024 * 1024,
-      )
-
-      if (results.length === 0) {
-        throw new Error('No data available for this time period')
-      }
-
-      // Get start timestamp
-      const firstBlock = results[0] as any
-      const startTimestamp = firstBlock.header?.timestamp ?? firstBlock.timestamp
+      const effectiveFrom = fromBlock
 
       // Bucket data
       type BucketData = {
@@ -122,26 +92,78 @@ EXAMPLES:
         return b
       }
 
-      results.forEach((block: any) => {
-        const ts = block.header?.timestamp ?? block.timestamp
-        if (!ts) return
-        const elapsed = ts - startTimestamp
-        const bucketIndex = Math.floor(elapsed / intervalSeconds)
-        if (bucketIndex >= expectedBuckets || bucketIndex < 0) return
+      // Solana blocks are extremely dense (~500 txs/slot with minimal fields).
+      // Larger chunks = fewer HTTP round-trips = much faster.
+      // 5000 slots × ~500 txs × ~50 bytes ≈ 125MB per chunk (within 150MB limit).
+      const CHUNK_SIZE = 5000
+      const chunks = Math.ceil(slotRange / CHUNK_SIZE)
+      let startTimestamp = 0
+      let totalSlotsProcessed = 0
 
-        const bucket = getOrCreateBucket(bucketIndex)
-        bucket.slots++
-        if (ts < bucket.minTimestamp) bucket.minTimestamp = ts
-        if (ts > bucket.maxTimestamp) bucket.maxTimestamp = ts
+      for (let chunkIdx = 0; chunkIdx < chunks; chunkIdx++) {
+        const chunkFrom = effectiveFrom + chunkIdx * CHUNK_SIZE
+        const chunkTo = Math.min(chunkFrom + CHUNK_SIZE, endBlock)
 
-        const txs = block.transactions || []
-        bucket.txCount += txs.length
-        txs.forEach((tx: any) => {
-          bucket.totalFees += parseInt(tx.fee || '0') || 0
-          if (tx.feePayer) bucket.wallets.add(tx.feePayer)
-          if (tx.err) bucket.errorCount++
-        })
-      })
+        const txQuery = {
+          type: 'solana',
+          fromBlock: chunkFrom,
+          toBlock: chunkTo,
+          includeAllBlocks: true,
+          fields: {
+            block: { number: true, timestamp: true },
+            transaction: {
+              transactionIndex: true,
+              fee: true,
+              feePayer: true,
+              err: true,
+            },
+          },
+          transactions: [{}],
+        }
+
+        let chunkResults: any[]
+        try {
+          chunkResults = await portalFetchStream(
+            `${PORTAL_URL}/datasets/${dataset}/stream`,
+            txQuery,
+            undefined,
+            0,
+            150 * 1024 * 1024,
+          ) as any[]
+        } catch (err) {
+          throw new Error(`Failed to fetch Solana time-series chunk: ${err instanceof Error ? err.message : String(err)}`)
+        }
+
+        for (const block of chunkResults) {
+          const ts = block.header?.timestamp ?? block.timestamp
+          if (!ts) continue
+
+          // Anchor startTimestamp from the very first block
+          if (startTimestamp === 0) startTimestamp = ts
+
+          totalSlotsProcessed++
+          const elapsed = ts - startTimestamp
+          const bucketIndex = Math.floor(elapsed / intervalSeconds)
+          if (bucketIndex >= expectedBuckets || bucketIndex < 0) continue
+
+          const bucket = getOrCreateBucket(bucketIndex)
+          bucket.slots++
+          if (ts < bucket.minTimestamp) bucket.minTimestamp = ts
+          if (ts > bucket.maxTimestamp) bucket.maxTimestamp = ts
+
+          const txs = block.transactions || []
+          bucket.txCount += txs.length
+          txs.forEach((tx: any) => {
+            bucket.totalFees += parseInt(tx.fee || '0') || 0
+            if (tx.feePayer) bucket.wallets.add(tx.feePayer)
+            if (tx.err) bucket.errorCount++
+          })
+        }
+      }
+
+      if (totalSlotsProcessed === 0) {
+        throw new Error('No data available for this time period')
+      }
 
       // Compute metric per bucket
       const unitMap: Record<string, string> = {
@@ -214,8 +236,6 @@ EXAMPLES:
       if (!isFinite(min)) min = 0
       if (!isFinite(max)) max = 0
 
-      const wasPartial = slotRange > maxSlots
-
       const summary: any = {
         metric,
         unit,
@@ -223,7 +243,7 @@ EXAMPLES:
         duration,
         total_buckets: timeSeries.length,
         expected_buckets: expectedBuckets,
-        total_slots: results.length,
+        total_slots: totalSlotsProcessed,
         from_block: effectiveFrom,
         to_block: endBlock,
         statistics: {
@@ -234,9 +254,8 @@ EXAMPLES:
         },
       }
 
-      if (wasPartial) {
-        summary.partial = true
-        summary.note = `Data capped at ~${Math.round(maxSlots * 0.4 / 3600)}h of slots. For ${duration}, results show the most recent portion.`
+      if (chunks > 1) {
+        summary.chunks_fetched = chunks
       }
 
       return formatResult(

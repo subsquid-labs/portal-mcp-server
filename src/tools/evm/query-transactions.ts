@@ -92,7 +92,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       include_traces: z.boolean().optional().default(false).describe('Include traces for transactions'),
       include_state_diffs: z.boolean().optional().default(false).describe('Include state diffs caused by transactions'),
       include_l2_fields: z.boolean().optional().default(false).describe('Include L2-specific fields'),
-      include_receipt: z.boolean().optional().default(false).describe('Include receipt fields (logsBloom)'),
+      // include_receipt removed: logsBloom is not in TransactionFieldSelection per OpenAPI spec
     },
     async ({
       dataset,
@@ -112,7 +112,6 @@ export function registerQueryTransactionsTool(server: McpServer) {
       include_traces,
       include_state_diffs,
       include_l2_fields,
-      include_receipt,
     }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
@@ -178,9 +177,9 @@ export function registerQueryTransactionsTool(server: McpServer) {
       const presetFields = getTransactionFields(field_preset || 'standard')
       const fields: Record<string, unknown> = { ...presetFields }
 
-      // Merge L2/receipt fields if requested (but keep preset as base)
-      if (include_l2_fields || include_receipt) {
-        const additionalFields = buildEvmTransactionFields(includeL2, include_receipt)
+      // Merge L2 fields if requested (but keep preset as base)
+      if (include_l2_fields) {
+        const additionalFields = buildEvmTransactionFields(includeL2)
         fields.transaction = {
           ...(fields.transaction as Record<string, boolean>),
           ...additionalFields,

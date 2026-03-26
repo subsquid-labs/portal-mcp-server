@@ -6,7 +6,7 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
-import { formatTimestamp, weiToGwei } from '../../helpers/formatting.js'
+import { formatDuration, formatTimestamp, weiToGwei } from '../../helpers/formatting.js'
 import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
@@ -124,7 +124,8 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           100 * 1024 * 1024,
         ))
       } else {
-        // Chunked queries
+        // Parallel chunked queries for faster response
+        const chunkPromises: Promise<unknown[]>[] = []
         for (let start = fromBlock; start < toBlock; start += chunkSize) {
           const end = Math.min(start + chunkSize, toBlock)
           const query = {
@@ -135,15 +136,18 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             fields: baseFields,
             ...queryExtras,
           }
-          const chunk = await portalFetchStream(
-            `${PORTAL_URL}/datasets/${dataset}/stream`,
-            query,
-            undefined,
-            0,
-            100 * 1024 * 1024,
+          chunkPromises.push(
+            portalFetchStream(
+              `${PORTAL_URL}/datasets/${dataset}/stream`,
+              query,
+              undefined,
+              0,
+              100 * 1024 * 1024,
+            ),
           )
-          results.push(...chunk)
         }
+        const chunks = await Promise.all(chunkPromises)
+        chunks.forEach((chunk) => results.push(...chunk))
       }
 
       if (results.length === 0) {
@@ -264,6 +268,16 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const dataCompleteness = (timeSeries.length / expectedBuckets) * 100
       const hasPartialData = dataCompleteness < 80 // Less than 80% of expected buckets
 
+      // Detect chain head staleness (most relevant for Bitcoin/slow chains)
+      const lastResult = results[results.length - 1] as any
+      const lastBlockTimestamp = lastResult.timestamp || lastResult.header?.timestamp
+      const nowUnix = Math.floor(Date.now() / 1000)
+      const headAgeSec = lastBlockTimestamp ? nowUnix - lastBlockTimestamp : 0
+      const headAgeWarning =
+        headAgeSec > 1800
+          ? `Chain head is ${formatDuration(headAgeSec)} behind wall-clock time (last block: ${formatTimestamp(lastBlockTimestamp)}, now: ${formatTimestamp(nowUnix)}). Empty buckets near the end mean no blocks were produced yet, not missing data.`
+          : undefined
+
       const summary: any = {
         metric,
         interval,
@@ -280,8 +294,10 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         },
       }
 
-      // Add warning if data is incomplete
-      if (hasPartialData) {
+      // Add warnings
+      if (headAgeWarning) {
+        summary.warning = headAgeWarning
+      } else if (hasPartialData) {
         summary.warning = `Partial data returned: Got ${timeSeries.length}/${expectedBuckets} expected buckets (${dataCompleteness.toFixed(0)}%). Portal API may have hit size limits. Results may be incomplete.`
       }
 

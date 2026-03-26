@@ -26,6 +26,12 @@ export function registerGetBlockNumberTool(server: McpServer) {
           ? `${PORTAL_URL}/datasets/${dataset}/finalized-head`
           : `${PORTAL_URL}/datasets/${dataset}/head`
       const head = await portalFetch<BlockHead>(endpoint)
+      if (!head || typeof head !== 'object' || !('number' in head) || head.number == null) {
+        throw new Error(
+          `No head block available for dataset '${dataset}'. The dataset may be temporarily unavailable or syncing. ` +
+          `Try again in a moment, or use portal_list_datasets to verify the dataset exists.`,
+        )
+      }
       return formatResult({ ...head, type })
     },
   )

@@ -136,8 +136,17 @@ export function parsePortalError(
     suggestions.push('Consider caching results')
   }
 
-  // 500 Server Error
-  if (status >= 500) {
+  // 503 Worker unavailable
+  if (status === 503) {
+    message = `Portal worker temporarily unavailable (503): ${errorText}`
+    suggestions.push('IMPORTANT: This is a transient error — retry the same request immediately')
+    suggestions.push('Portal workers rotate frequently; the next attempt will likely hit a different worker')
+    suggestions.push('If retries fail, try a slightly different block range (e.g., shift by 100 blocks)')
+    suggestions.push('Check Portal status at https://status.sqd.dev')
+  }
+
+  // Other 5xx Server Errors
+  if (status >= 500 && status !== 503) {
     message = `Portal server error (${status}): ${errorText}`
     suggestions.push('This is a Portal API infrastructure issue')
     suggestions.push('Wait a few minutes and retry')

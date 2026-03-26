@@ -8,7 +8,7 @@ MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperli
 MCP Client  ->  MCP Tools (this server)  ->  Portal API (portal.sqd.dev)
 ```
 
-This server provides 41 MCP tools that wrap Portal's streaming API. Each tool validates parameters, constructs a Portal request, and returns formatted results — all blockchain data comes from Portal's infrastructure.
+This server provides 29 MCP tools that wrap Portal's streaming API. Each tool validates parameters, constructs a Portal request, and returns formatted results — all blockchain data comes from Portal's infrastructure.
 
 ## Supported chains
 
@@ -19,14 +19,14 @@ This server provides 41 MCP tools that wrap Portal's streaming API. Each tool va
 
 ## Tools
 
-### Dataset tools (2)
+### Dataset discovery (2)
 
 | Tool | Description |
 |------|-------------|
 | `portal_list_datasets` | Search and filter available datasets |
 | `portal_get_dataset_info` | Get dataset metadata, tables, and latest block |
 
-### EVM tools (9)
+### EVM (13)
 
 | Tool | Description |
 |------|-------------|
@@ -34,26 +34,26 @@ This server provides 41 MCP tools that wrap Portal's streaming API. Each tool va
 | `portal_block_at_timestamp` | Convert Unix timestamp to block number |
 | `portal_query_blocks` | Query block data with field presets |
 | `portal_query_logs` | Query event logs with address/topic filters |
-| `portal_query_transactions` | Query transactions by sender, recipient, or sighash |
-| `portal_query_traces` | Query internal transactions and traces |
-| `portal_query_state_diffs` | Query storage state changes |
+| `portal_query_transactions` | Query transactions (includes traces and state diffs via flags) |
 | `portal_get_erc20_transfers` | Get ERC20 token transfers |
-| `portal_get_nft_transfers` | Get ERC721/ERC1155 NFT transfers |
+| `portal_decode_logs` | Decode event logs (Transfer, Swap, etc.) |
+| `portal_get_recent_transactions` | Get recent transactions without manual block math |
+| `portal_get_wallet_summary` | Wallet activity: transactions, tokens, NFTs |
+| `portal_get_contract_activity` | Contract interaction count, callers, events |
+| `portal_get_top_contracts` | Most active contracts by transaction count |
+| `portal_get_transaction_density` | Transaction count per block |
+| `portal_get_time_series` | Aggregate metrics over time intervals |
 
-### Solana tools (8)
+### Solana (4)
 
 | Tool | Description |
 |------|-------------|
-| `portal_query_solana_transactions` | Query transactions by fee payer or account |
+| `portal_query_solana_transactions` | Query transactions (includes balances, token balances, logs, rewards via flags) |
 | `portal_query_solana_instructions` | Query program instructions with account filters |
-| `portal_query_solana_balances` | Query SOL balance changes |
-| `portal_query_solana_token_balances` | Query SPL token balance changes |
-| `portal_query_solana_logs` | Query program log messages |
-| `portal_query_solana_rewards` | Query block rewards |
 | `portal_solana_analytics` | Transaction stats, program rankings, fee analysis |
-| `portal_solana_time_series` | Transaction density and fee trends over time |
+| `portal_solana_time_series` | TPS, fee, and wallet trends over time |
 
-### Bitcoin tools (5)
+### Bitcoin (5)
 
 | Tool | Description |
 |------|-------------|
@@ -61,51 +61,17 @@ This server provides 41 MCP tools that wrap Portal's streaming API. Each tool va
 | `portal_query_bitcoin_inputs` | Query transaction inputs |
 | `portal_query_bitcoin_outputs` | Query transaction outputs |
 | `portal_bitcoin_analytics` | Transaction stats, fee analysis, size distribution |
-| `portal_bitcoin_time_series` | Transaction density and fee trends over time |
+| `portal_bitcoin_time_series` | Block size, fees, and transaction trends over time |
 
-### Hyperliquid tools (5)
+### Hyperliquid (5)
 
 | Tool | Description |
 |------|-------------|
 | `portal_query_hyperliquid_fills` | Query trade fills with PnL, fees, routing |
 | `portal_query_hyperliquid_replica_cmds` | Query replica commands |
-| `portal_aggregate_hyperliquid_fills` | Volume, PnL, and trader stats by coin with market share |
-| `portal_hyperliquid_time_series` | Volume, trades, and unique traders over time buckets |
+| `portal_aggregate_hyperliquid_fills` | Volume, PnL, and trader stats by coin |
+| `portal_hyperliquid_time_series` | Volume, trades, and unique traders over time |
 | `portal_hyperliquid_analytics` | Trading volume, top coins, trader rankings |
-
-### Convenience tools (7)
-
-Higher-level tools that combine multiple queries for common tasks.
-
-| Tool | Description |
-|------|-------------|
-| `portal_get_recent_transactions` | Get recent transactions without manual block math |
-| `portal_get_wallet_summary` | Wallet activity: transactions, tokens, NFTs |
-| `portal_get_contract_activity` | Contract interaction count, callers, events |
-| `portal_get_gas_analytics` | Gas prices, percentiles, cost estimates |
-| `portal_get_top_contracts` | Most active contracts by transaction count |
-| `portal_get_transaction_density` | Transaction count per block (EVM, Bitcoin, Solana) |
-| `portal_get_time_series` | Aggregate metrics over time intervals |
-
-### Aggregation tools (2)
-
-| Tool | Description |
-|------|-------------|
-| `portal_count_events` | Count events by contract or event type |
-| `portal_aggregate_transfers` | ERC20 transfer volume and unique address stats |
-
-### Enrichment tools (1)
-
-| Tool | Description |
-|------|-------------|
-| `portal_get_token_info` | Token metadata from CoinGecko (name, symbol, decimals) |
-
-### Utility tools (2)
-
-| Tool | Description |
-|------|-------------|
-| `portal_stream` | Raw Portal API streaming queries |
-| `portal_decode_logs` | Decode event logs (Transfer, Swap, etc.) |
 
 ## Time ranges
 

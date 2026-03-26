@@ -36,7 +36,6 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       program_id: z.array(z.string()).optional().describe('Program IDs'),
       d1: z.array(z.string()).optional().describe('1-byte discriminator filter (0x-prefixed hex)'),
       d2: z.array(z.string()).optional().describe('2-byte discriminator filter (0x-prefixed hex)'),
-      d3: z.array(z.string()).optional().describe('3-byte discriminator filter (0x-prefixed hex)'),
       d4: z.array(z.string()).optional().describe('4-byte discriminator filter (0x-prefixed hex)'),
       d8: z.array(z.string()).optional().describe('8-byte discriminator filter - Anchor (0x-prefixed hex)'),
       a0: z.array(z.string()).optional().describe('Account at index 0'),
@@ -83,7 +82,6 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       program_id,
       d1,
       d2,
-      d3,
       d4,
       d8,
       a0,
@@ -135,7 +133,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         finalized_only,
       )
 
-      const hasFilters = !!(program_id || d1 || d2 || d3 || d4 || d8 || a0 || mentions_account || transaction_fee_payer)
+      const hasFilters = !!(program_id || d1 || d2 || d4 || d8 || a0 || mentions_account || transaction_fee_payer)
       const validation = validateSolanaQuerySize({
         slotRange: endBlock - resolvedFromBlock,
         hasFilters,
@@ -150,7 +148,6 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       if (program_id) instructionFilter.programId = program_id
       if (d1) instructionFilter.d1 = d1
       if (d2) instructionFilter.d2 = d2
-      if (d3) instructionFilter.d3 = d3
       if (d4) instructionFilter.d4 = d4
       if (d8) instructionFilter.d8 = d8
       if (a0) instructionFilter.a0 = a0
@@ -179,7 +176,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       if (include_logs) instructionFilter.logs = true
       if (include_transaction_instructions) instructionFilter.transactionInstructions = true
 
-      const hasDiscriminators = d1 || d2 || d3 || d4 || d8
+      const hasDiscriminators = d1 || d2 || d4 || d8
       const fields: Record<string, unknown> = {
         block: { number: true, hash: true, timestamp: true },
         instruction: buildSolanaInstructionFields(!!hasDiscriminators),

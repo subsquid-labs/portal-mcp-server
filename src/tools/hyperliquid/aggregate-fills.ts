@@ -86,17 +86,20 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
         fills: [fillFilter],
       }
 
-      // Cap streaming to avoid OOM — HL blocks are ~0.083s, 500k ≈ ~12h
       const blockRange = endBlock - resolvedFromBlock
-      const maxBlocks = Math.min(blockRange, 500000)
+      if (blockRange > 1000000) {
+        throw new Error(
+          `Block range too large for Hyperliquid aggregation (${blockRange.toLocaleString()} blocks, max 1M). ` +
+          `Use a shorter timeframe (e.g., '1h' or '6h' instead of '24h') or add coin/user filters.`
+        )
+      }
       const results = await portalFetchStream(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         query,
         undefined,
-        maxBlocks,
+        0,
         100 * 1024 * 1024,
       )
-      const wasPartial = blockRange > 500000
 
       // Extract all fills
       const allFills = results.flatMap((block: any) =>
@@ -218,17 +221,10 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
         response.top_count = grouped.length
       }
 
-      if (wasPartial) {
-        response.partial = true
-        response.blocks_capped = maxBlocks
-        response.total_requested_blocks = blockRange
-      }
-
       const coinNote = coin ? ` for ${coin.join(', ')}` : ''
-      const partialNote = wasPartial ? ` (partial: ${results.length}/${blockRange} blocks)` : ''
       return formatResult(
         response,
-        `${allFills.length.toLocaleString()} fills${coinNote}: ${traders.size} traders, $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} volume${partialNote}`,
+        `${allFills.length.toLocaleString()} fills${coinNote}: ${traders.size} traders, $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} volume`,
         {
           metadata: {
             dataset,

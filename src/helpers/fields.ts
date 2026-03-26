@@ -32,7 +32,7 @@ export function buildEvmBlockFields(includeL2: boolean = false) {
   return fields
 }
 
-export function buildEvmTransactionFields(includeL2: boolean = false, includeReceipt: boolean = false) {
+export function buildEvmTransactionFields(includeL2: boolean = false) {
   const fields: Record<string, boolean> = {
     transactionIndex: true,
     hash: true,
@@ -54,6 +54,7 @@ export function buildEvmTransactionFields(includeL2: boolean = false, includeRec
     contractAddress: true,
     chainId: true,
     // v, r, s, yParity REMOVED: signature components waste ~192 bytes per tx with no analytical value
+    // logsBloom REMOVED: not in TransactionFieldSelection per OpenAPI spec (only in BlockFieldSelection)
   }
 
   if (includeL2) {
@@ -64,10 +65,6 @@ export function buildEvmTransactionFields(includeL2: boolean = false, includeRec
     fields.l1BlobBaseFee = true
     fields.l1BlobBaseFeeScalar = true
     fields.l1BaseFeeScalar = true
-  }
-
-  if (includeReceipt) {
-    fields.logsBloom = true
   }
 
   return fields
@@ -89,10 +86,10 @@ export function buildEvmTraceFields() {
     traceAddress: true,
     subtraces: true,
     transactionIndex: true,
-    // transactionHash: true,  // REMOVED: Not a valid field in Portal API trace schema
     type: true,
     error: true,
-    revertReason: true,
+    // revertReason REMOVED: not in OpenAPI TraceFieldSelection
+    // callType REMOVED: not in OpenAPI TraceFieldSelection
     // Call fields
     callFrom: true,
     callTo: true,
@@ -100,7 +97,6 @@ export function buildEvmTraceFields() {
     callGas: true,
     callSighash: true,
     callInput: true,
-    callType: true,
     callResultGasUsed: true,
     callResultOutput: true,
     // Create fields
@@ -125,7 +121,6 @@ export function buildEvmTraceFields() {
 export function buildEvmStateDiffFields() {
   return {
     transactionIndex: true,
-    // transactionHash: true,  // REMOVED: Not a valid field in Portal API stateDiff schema
     address: true,
     key: true,
     kind: true,
@@ -154,7 +149,7 @@ export function buildSolanaInstructionFields(includeDiscriminators: boolean = fa
   if (includeDiscriminators) {
     fields.d1 = true
     fields.d2 = true
-    fields.d3 = true
+    // d3 REMOVED: not in OpenAPI InstructionFieldSelection (only d1, d2, d4, d8)
     fields.d4 = true
     fields.d8 = true
   }
@@ -165,19 +160,20 @@ export function buildSolanaInstructionFields(includeDiscriminators: boolean = fa
 export function buildSolanaTransactionFields() {
   return {
     transactionIndex: true,
-    signature: true,
     version: true,
     fee: true,
     feePayer: true,
     err: true,
     computeUnitsConsumed: true,
-    isCommitted: true,
     hasDroppedLogMessages: true,
     signatures: true,
     accountKeys: true,
     recentBlockhash: true,
     addressTableLookups: true,
     loadedAddresses: true,
+    numReadonlySignedAccounts: true,
+    numReadonlyUnsignedAccounts: true,
+    numRequiredSignatures: true,
   }
 }
 
@@ -220,7 +216,7 @@ export function buildSolanaLogFields() {
 
 export function buildSolanaRewardFields() {
   return {
-    pubkey: true,
+    pubKey: true,
     lamports: true,
     postBalance: true,
     rewardType: true,
@@ -236,19 +232,33 @@ export function buildBitcoinBlockFields() {
   return {
     number: true,
     hash: true,
+    parentHash: true,
     timestamp: true,
+    medianTime: true,
+    version: true,
+    merkleRoot: true,
+    nonce: true,
+    target: true,
+    bits: true,
+    difficulty: true,
+    chainWork: true,
+    strippedSize: true,
+    size: true,
+    weight: true,
   }
 }
 
 export function buildBitcoinTransactionFields() {
   return {
     transactionIndex: true,
+    txid: true,
     hash: true,
-    version: true,
     size: true,
     vsize: true,
     weight: true,
+    version: true,
     locktime: true,
+    // hex REMOVED: raw transaction hex is very large and wastes context
   }
 }
 
@@ -256,17 +266,20 @@ export function buildBitcoinInputFields() {
   return {
     transactionIndex: true,
     inputIndex: true,
+    type: true,
     txid: true,
     vout: true,
-    sequence: true,
     scriptSigHex: true,
+    scriptSigAsm: true,
+    sequence: true,
+    coinbase: true,
     txInWitness: true,
-    prevoutScriptPubKeyAddress: true,
-    prevoutScriptPubKeyType: true,
-    prevoutValue: true,
-    prevoutHeight: true,
     prevoutGenerated: true,
-    type: true,
+    prevoutHeight: true,
+    prevoutValue: true,
+    prevoutScriptPubKeyType: true,
+    prevoutScriptPubKeyAddress: true,
+    // prevoutScriptPubKeyHex, prevoutScriptPubKeyAsm, prevoutScriptPubKeyDesc REMOVED: verbose, rarely needed
   }
 }
 
@@ -279,5 +292,6 @@ export function buildBitcoinOutputFields() {
     scriptPubKeyType: true,
     scriptPubKeyAsm: true,
     scriptPubKeyHex: true,
+    // scriptPubKeyDesc REMOVED: descriptor format rarely needed in MCP context
   }
 }

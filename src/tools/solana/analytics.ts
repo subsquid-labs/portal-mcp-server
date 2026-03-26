@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
-import { getBlockHead, resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
@@ -86,66 +86,95 @@ EXAMPLES:
         false,
       )
 
-      // Cap slots for performance — Solana is extremely dense
+      // Solana blocks are extremely dense (~2000+ txs/slot).
+      // Fetch in chunks to avoid OOM, aggregating stats incrementally.
+      const CHUNK_SIZE = 500 // ~3.5 min of Solana slots per chunk — stays under 100MB
       const slotRange = endBlock - fromBlock
-      const maxSlots = Math.min(slotRange, 5000) // ~33 min at 400ms/slot
-      const effectiveFrom = slotRange > maxSlots ? endBlock - maxSlots : fromBlock
+      const totalSlots = Math.min(slotRange, 9000) // Cap at ~1h worth of slots
+      const effectiveFrom = slotRange > totalSlots ? endBlock - totalSlots : fromBlock
+      const chunks = Math.ceil(totalSlots / CHUNK_SIZE)
 
-      // Query 1: Transactions (TPS, fees, wallets, success rate)
-      const txQuery = {
-        type: 'solana',
-        fromBlock: effectiveFrom,
-        toBlock: endBlock,
-        includeAllBlocks: true,
-        fields: {
-          block: { number: true, timestamp: true },
-          transaction: {
-            transactionIndex: true,
-            fee: true,
-            feePayer: true,
-            err: true,
-            computeUnitsConsumed: true,
-          },
-        },
-        transactions: [{}],
-      }
-
-      const txResults = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        txQuery,
-        undefined,
-        maxSlots,
-        100 * 1024 * 1024,
-      )
-
-      // Compute stats
+      // Aggregate stats across chunks
       const feePayers = new Set<string>()
       let totalTxs = 0
       let totalFees = 0
       let totalComputeUnits = 0
       let errorCount = 0
-      let slotCount = txResults.length
+      let slotCount = 0
       const slotTimes: number[] = []
+      let lastChunkLastTs: number | undefined
+      let firstTimestamp: number | undefined
+      let lastTimestamp: number | undefined
 
-      for (let i = 0; i < txResults.length; i++) {
-        const block = txResults[i] as any
-        const txs = block.transactions || []
-        totalTxs += txs.length
+      for (let chunkIdx = 0; chunkIdx < chunks; chunkIdx++) {
+        const chunkFrom = effectiveFrom + chunkIdx * CHUNK_SIZE
+        const chunkTo = Math.min(chunkFrom + CHUNK_SIZE, endBlock)
 
-        txs.forEach((tx: any) => {
-          if (tx.feePayer) feePayers.add(tx.feePayer)
-          totalFees += parseInt(tx.fee || '0') || 0
-          totalComputeUnits += tx.computeUnitsConsumed || 0
-          if (tx.err) errorCount++
-        })
+        const txQuery = {
+          type: 'solana',
+          fromBlock: chunkFrom,
+          toBlock: chunkTo,
+          includeAllBlocks: true,
+          fields: {
+            block: { number: true, timestamp: true },
+            transaction: {
+              transactionIndex: true,
+              fee: true,
+              feePayer: true,
+              err: true,
+              computeUnitsConsumed: true,
+            },
+          },
+          transactions: [{}],
+        }
 
-        // Slot time
-        if (i > 0) {
-          const prevTs = (txResults[i - 1] as any).header?.timestamp
+        let chunkResults: any[]
+        try {
+          chunkResults = await portalFetchStream(
+            `${PORTAL_URL}/datasets/${dataset}/stream`,
+            txQuery,
+            undefined,
+            0,
+            150 * 1024 * 1024,
+          ) as any[]
+        } catch (err) {
+          throw new Error(`Failed to fetch Solana analytics chunk: ${err instanceof Error ? err.message : String(err)}`)
+        }
+
+        for (let i = 0; i < chunkResults.length; i++) {
+          const block = chunkResults[i] as any
+          const txs = block.transactions || []
+          totalTxs += txs.length
+          slotCount++
+
+          txs.forEach((tx: any) => {
+            if (tx.feePayer) feePayers.add(tx.feePayer)
+            totalFees += parseInt(tx.fee || '0') || 0
+            totalComputeUnits += Number(tx.computeUnitsConsumed) || 0
+            if (tx.err) errorCount++
+          })
+
+          // Track first/last timestamps for time range calculation
           const curTs = block.header?.timestamp
-          if (prevTs && curTs && curTs > prevTs) {
-            slotTimes.push(curTs - prevTs)
+          if (curTs) {
+            if (firstTimestamp === undefined) firstTimestamp = curTs
+            lastTimestamp = curTs
           }
+
+          // Slot time — track across chunk boundaries
+          if (i === 0 && lastChunkLastTs && curTs && curTs > lastChunkLastTs) {
+            slotTimes.push(curTs - lastChunkLastTs)
+          } else if (i > 0) {
+            const prevTs = (chunkResults[i - 1] as any).header?.timestamp
+            if (prevTs && curTs && curTs > prevTs) {
+              slotTimes.push(curTs - prevTs)
+            }
+          }
+        }
+
+        // Remember last timestamp for cross-chunk slot time tracking
+        if (chunkResults.length > 0) {
+          lastChunkLastTs = (chunkResults[chunkResults.length - 1] as any).header?.timestamp
         }
       }
 
@@ -157,9 +186,7 @@ EXAMPLES:
       const avgComputeUnits = totalTxs > 0 ? totalComputeUnits / totalTxs : 0
 
       // Time range
-      const firstTs = (txResults[0] as any)?.header?.timestamp
-      const lastTs = (txResults[txResults.length - 1] as any)?.header?.timestamp
-      const timeSpanSeconds = firstTs && lastTs ? lastTs - firstTs : slotCount * 0.4
+      const timeSpanSeconds = firstTimestamp && lastTimestamp ? lastTimestamp - firstTimestamp : slotCount * 0.4
 
       const slotsPerHour = timeSpanSeconds > 0 ? (slotCount / timeSpanSeconds) * 3600 : 0
 
@@ -198,46 +225,61 @@ EXAMPLES:
       }
 
       // Query 2: Top programs by instruction count (optional)
+      // Sample up to 1000 slots, fetched in chunks
       if (include_programs) {
-        const programSlots = Math.min(slotCount, 1000) // Sample fewer slots for programs
+        const programSlots = Math.min(slotCount, 1000)
         const programFrom = endBlock - programSlots
+        const PROGRAM_CHUNK_SIZE = 250 // Instructions are even denser than transactions
+        const programChunks = Math.ceil(programSlots / PROGRAM_CHUNK_SIZE)
 
         try {
-          const instrQuery = {
-            type: 'solana',
-            fromBlock: programFrom,
-            toBlock: endBlock,
-            fields: {
-              block: { number: true },
-              instruction: {
-                programId: true,
-                computeUnitsConsumed: true,
-              },
-            },
-            instructions: [{}],
-          }
-
-          const instrResults = await portalFetchStream(
-            `${PORTAL_URL}/datasets/${dataset}/stream`,
-            instrQuery,
-            undefined,
-            programSlots,
-            100 * 1024 * 1024,
-          )
-
           const programCounts = new Map<string, { calls: number; computeUnits: number }>()
           let totalInstructions = 0
+          let programSlotsAnalyzed = 0
 
-          instrResults.forEach((block: any) => {
-            ;(block.instructions || []).forEach((instr: any) => {
-              totalInstructions++
-              const pid = instr.programId || 'unknown'
-              const existing = programCounts.get(pid) || { calls: 0, computeUnits: 0 }
-              existing.calls++
-              existing.computeUnits += instr.computeUnitsConsumed || 0
-              programCounts.set(pid, existing)
+          for (let pChunk = 0; pChunk < programChunks; pChunk++) {
+            const pFrom = programFrom + pChunk * PROGRAM_CHUNK_SIZE
+            const pTo = Math.min(pFrom + PROGRAM_CHUNK_SIZE, endBlock)
+
+            const instrQuery = {
+              type: 'solana',
+              fromBlock: pFrom,
+              toBlock: pTo,
+              fields: {
+                block: { number: true },
+                instruction: {
+                  programId: true,
+                  computeUnitsConsumed: true,
+                },
+              },
+              instructions: [{}],
+            }
+
+            let instrResults: any[]
+            try {
+              instrResults = await portalFetchStream(
+                `${PORTAL_URL}/datasets/${dataset}/stream`,
+                instrQuery,
+                undefined,
+                0,
+                150 * 1024 * 1024,
+              ) as any[]
+            } catch {
+              continue // Skip failed chunks
+            }
+
+            programSlotsAnalyzed += instrResults.length
+            instrResults.forEach((block: any) => {
+              ;(block.instructions || []).forEach((instr: any) => {
+                totalInstructions++
+                const pid = instr.programId || 'unknown'
+                const existing = programCounts.get(pid) || { calls: 0, computeUnits: 0 }
+                existing.calls++
+                existing.computeUnits += Number(instr.computeUnitsConsumed) || 0
+                programCounts.set(pid, existing)
+              })
             })
-          })
+          }
 
           const topPrograms = Array.from(programCounts.entries())
             .map(([programId, data]) => ({
@@ -253,7 +295,7 @@ EXAMPLES:
             .map((item, i) => ({ rank: i + 1, ...item }))
 
           response.top_programs = {
-            slots_sampled: programSlots,
+            slots_sampled: programSlotsAnalyzed,
             total_instructions: totalInstructions,
             total_instructions_formatted: formatNumber(totalInstructions),
             programs: topPrograms,
@@ -263,9 +305,12 @@ EXAMPLES:
         }
       }
 
-      const wasPartial = slotRange > maxSlots
+      const wasPartial = slotRange > totalSlots
       if (wasPartial) {
         response._note = `Analyzed ${slotCount} of ${slotRange} requested slots (capped for performance)`
+      }
+      if (chunks > 1) {
+        response._chunks_fetched = chunks
       }
 
       return formatResult(

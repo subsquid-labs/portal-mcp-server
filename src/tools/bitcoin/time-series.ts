@@ -6,7 +6,7 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
-import { formatTimestamp } from '../../helpers/formatting.js'
+import { formatDuration, formatTimestamp } from '../../helpers/formatting.js'
 import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
@@ -235,6 +235,11 @@ EXAMPLES:
         buckets.get(bucketIndex)!.push(bn)
       })
 
+      // Fill empty buckets so we always return expectedBuckets entries
+      for (let i = 0; i < expectedBuckets; i++) {
+        if (!buckets.has(i)) buckets.set(i, [])
+      }
+
       // Compute metric per bucket
       let timeSeries = Array.from(buckets.entries())
         .map(([bucketIndex, blockNumbers]) => {
@@ -341,6 +346,16 @@ EXAMPLES:
       }
       const unit = unitMap[metric] || ''
 
+      // Detect chain head staleness — Bitcoin blocks are stochastic (~10 min avg)
+      // so the head block can be significantly behind wall-clock time
+      const lastBlockTimestamp = Math.max(...Array.from(blockData.values()).map((d) => d.timestamp))
+      const nowUnix = Math.floor(Date.now() / 1000)
+      const headAgeSec = nowUnix - lastBlockTimestamp
+      const headAgeWarning =
+        headAgeSec > 1800
+          ? `Chain head is ${formatDuration(headAgeSec)} behind wall-clock time (last block: ${formatTimestamp(lastBlockTimestamp)}, now: ${formatTimestamp(nowUnix)}). Bitcoin blocks are stochastic — empty buckets near the end mean no blocks were mined yet, not missing data.`
+          : undefined
+
       const summary: any = {
         metric,
         unit,
@@ -356,6 +371,10 @@ EXAMPLES:
           min: parseFloat(min.toFixed(metric === 'fee_per_block' ? 8 : 2)),
           max: parseFloat(max.toFixed(metric === 'fee_per_block' ? 8 : 2)),
         },
+      }
+
+      if (headAgeWarning) {
+        summary.warning = headAgeWarning
       }
 
       return formatResult(
