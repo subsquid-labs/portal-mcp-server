@@ -2,11 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
-import { PORTAL_URL } from '../../constants/index.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatUSD, formatNumber, formatPct, shortenAddress } from '../../helpers/formatting.js'
+import { hashString53 } from '../../helpers/hash.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { visitHyperliquidFillBlocks } from './fill-stream.js'
 
 // ============================================================================
 // Tool: Hyperliquid Analytics Dashboard
@@ -21,6 +21,7 @@ const TOP_COINS = ['BTC', 'ETH', 'SOL', 'HYPE']
 const MAX_VOLUME_COINS = 12
 const MAX_TOP_TRADERS = 8
 const MAX_TOP_PNL = 5
+const MAX_ANALYTICS_BLOCKS = 500000
 
 export function registerHyperliquidAnalyticsTool(server: McpServer) {
   server.tool(
@@ -71,38 +72,13 @@ EXAMPLES:
       const fillFilter: Record<string, unknown> = {}
       if (coin) fillFilter.coin = coin
 
-      const query = {
-        type: 'hyperliquidFills',
-        fromBlock,
-        toBlock: endBlock,
-        fields: {
-          block: { number: true, timestamp: true },
-          fill: {
-            user: true,
-            coin: true,
-            px: true,
-            sz: true,
-            side: true,
-            dir: true,
-            fee: true,
-            closedPnl: true,
-          },
-        },
-        fills: [fillFilter],
-      }
-
-      const blockRange = endBlock - fromBlock
-      const maxBlocks = Math.min(blockRange, 500000)
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-        undefined,
-        maxBlocks,
-        200 * 1024 * 1024,
-      )
+      const requestedBlockRange = endBlock - fromBlock + 1
+      const effectiveFrom = requestedBlockRange > MAX_ANALYTICS_BLOCKS
+        ? endBlock - MAX_ANALYTICS_BLOCKS + 1
+        : fromBlock
 
       // Single-pass aggregation
-      const traders = new Set<string>()
+      const traders = new Set<number>()
       const allCoins = new Set<string>()
       let totalVolume = 0
       let totalFees = 0
@@ -118,7 +94,7 @@ EXAMPLES:
         {
           fills: number
           volume: number
-          traders: Set<string>
+          traders: Set<number>
           pnl: number
           fees: number
           longs: number
@@ -134,58 +110,82 @@ EXAMPLES:
         { fills: number; volume: number; pnl: number; coins: Set<string> }
       >()
 
-      results.forEach((block: any) => {
-        ;(block.fills || []).forEach((fill: any) => {
-          totalFills++
-          const notional = (fill.px || 0) * (fill.sz || 0)
-          const isLiquidation = fill.dir === 'Short > Long' || fill.dir === 'Long > Short'
+      const { chunksFetched, chunkSizeReduced } = await visitHyperliquidFillBlocks({
+        dataset,
+        fromBlock: effectiveFrom,
+        toBlock: endBlock,
+        fillFilter,
+        fillFields: {
+          user: true,
+          coin: true,
+          px: true,
+          sz: true,
+          dir: true,
+          fee: true,
+          closedPnl: true,
+        },
+        initialChunkSize: Math.min(MAX_ANALYTICS_BLOCKS, 40000),
+        maxBytes: 150 * 1024 * 1024,
+        concurrency: 2,
+        onBlock: (block) => {
+          const fills = block.fills || []
+          for (let index = 0; index < fills.length; index += 1) {
+            const fill = fills[index]
+            const userKey = typeof fill.user === 'string' ? fill.user : undefined
+            const coinKey = typeof fill.coin === 'string' ? fill.coin : 'unknown'
+            const notional = Number(fill.px || 0) * Number(fill.sz || 0)
+            const fee = Math.abs(Number(fill.fee || 0))
+            const pnl = Number(fill.closedPnl || 0)
+            const direction = typeof fill.dir === 'string' ? fill.dir : 'Unknown'
+            const isLiquidation = direction === 'Short > Long' || direction === 'Long > Short'
 
-          if (fill.user) traders.add(fill.user)
-          if (fill.coin) allCoins.add(fill.coin)
-          totalVolume += notional
-          totalFees += Math.abs(fill.fee || 0)
-          totalPnl += fill.closedPnl || 0
-          if (isLiquidation) {
-            liquidationCount++
-            liquidationVolume += notional
-          }
-
-          const direction = fill.dir || 'Unknown'
-          dirCounts[direction] = (dirCounts[direction] || 0) + 1
-
-          // Per-coin
-          const c = fill.coin || 'unknown'
-          let cd = coinData.get(c)
-          if (!cd) {
-            cd = { fills: 0, volume: 0, traders: new Set(), pnl: 0, fees: 0, longs: 0, shorts: 0, liquidations: 0, liqVolume: 0 }
-            coinData.set(c, cd)
-          }
-          cd.fills++
-          cd.volume += notional
-          if (fill.user) cd.traders.add(fill.user)
-          cd.pnl += fill.closedPnl || 0
-          cd.fees += Math.abs(fill.fee || 0)
-          if (fill.dir === 'Open Long') cd.longs++
-          if (fill.dir === 'Open Short') cd.shorts++
-          if (isLiquidation) {
-            cd.liquidations++
-            cd.liqVolume += notional
-          }
-
-          // Per-trader
-          if (fill.user) {
-            let td = traderData.get(fill.user)
-            if (!td) {
-              td = { fills: 0, volume: 0, pnl: 0, coins: new Set() }
-              traderData.set(fill.user, td)
+            totalFills += 1
+            if (userKey) traders.add(hashString53(userKey))
+            if (coinKey) allCoins.add(coinKey)
+            totalVolume += notional
+            totalFees += fee
+            totalPnl += pnl
+            if (isLiquidation) {
+              liquidationCount += 1
+              liquidationVolume += notional
             }
-            td.fills++
-            td.volume += notional
-            td.pnl += fill.closedPnl || 0
-            if (fill.coin) td.coins.add(fill.coin)
+            dirCounts[direction] = (dirCounts[direction] || 0) + 1
+
+            let cd = coinData.get(coinKey)
+            if (!cd) {
+              cd = { fills: 0, volume: 0, traders: new Set<number>(), pnl: 0, fees: 0, longs: 0, shorts: 0, liquidations: 0, liqVolume: 0 }
+              coinData.set(coinKey, cd)
+            }
+            cd.fills += 1
+            cd.volume += notional
+            if (userKey) cd.traders.add(hashString53(userKey))
+            cd.pnl += pnl
+            cd.fees += fee
+            if (direction === 'Open Long') cd.longs += 1
+            if (direction === 'Open Short') cd.shorts += 1
+            if (isLiquidation) {
+              cd.liquidations += 1
+              cd.liqVolume += notional
+            }
+
+            if (userKey) {
+              let td = traderData.get(userKey)
+              if (!td) {
+                td = { fills: 0, volume: 0, pnl: 0, coins: new Set() }
+                traderData.set(userKey, td)
+              }
+              td.fills += 1
+              td.volume += notional
+              td.pnl += pnl
+              if (coinKey) td.coins.add(coinKey)
+            }
           }
-        })
+        },
       })
+
+      if (totalFills === 0) {
+        throw new Error('No Hyperliquid fills found for the specified filters')
+      }
 
       // Build volume by coin (top coins + others)
       const volumeByCoin = Array.from(coinData.entries())
@@ -228,8 +228,6 @@ EXAMPLES:
 
       const openLongs = dirCounts['Open Long'] || 0
       const openShorts = dirCounts['Open Short'] || 0
-      const wasPartial = blockRange > 500000
-
       const lsRatio = openShorts > 0 ? openLongs / openShorts : 0
 
       const response: any = {
@@ -284,9 +282,9 @@ EXAMPLES:
         })),
       }
 
-      if (wasPartial) {
-        response._note = 'Data capped at ~12h of blocks for performance'
-      }
+      if (effectiveFrom > fromBlock) response._note = `Analyzed the most recent ${MAX_ANALYTICS_BLOCKS.toLocaleString()} blocks for performance`
+      if (chunksFetched > 1) response._chunks_fetched = chunksFetched
+      if (chunkSizeReduced) response._chunk_size_reduced = true
 
       const coinNote = coin ? ` for ${coin.join(', ')}` : ''
       return formatResult(
@@ -295,7 +293,7 @@ EXAMPLES:
         {
           metadata: {
             dataset,
-            from_block: fromBlock,
+            from_block: effectiveFrom,
             to_block: endBlock,
             query_start_time: queryStartTime,
           },

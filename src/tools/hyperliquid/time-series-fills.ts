@@ -2,11 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
-import { PORTAL_URL } from '../../constants/index.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp } from '../../helpers/formatting.js'
+import { hashString53 } from '../../helpers/hash.js'
 import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { visitHyperliquidFillBlocks } from './fill-stream.js'
 
 // ============================================================================
 // Tool: Hyperliquid Fill Time Series
@@ -104,10 +104,10 @@ EXAMPLES:
       type BucketData = {
         fills: number
         volume: number
-        traders: Set<string>
+        traders: Set<number>
         pnl: number
         liqVolume: number
-        byCoin: Map<string, { fills: number; volume: number; traders: Set<string>; pnl: number; liqVolume: number }>
+        byCoin: Map<string, { fills: number; volume: number; traders: Set<number>; pnl: number; liqVolume: number }>
       }
 
       const buckets = new Map<number, BucketData>()
@@ -132,74 +132,51 @@ EXAMPLES:
 
       // HL blocks are ~0.083s (~12/sec). Long durations need millions of blocks.
       // Fetch in chunks to avoid OOM, aggregating into buckets incrementally.
-      const CHUNK_SIZE = 40000 // ~55 min of HL blocks per chunk (~480k fills, ~96MB)
-      const totalBlockRange = endBlock - fromBlock
-      const chunks = Math.ceil(totalBlockRange / CHUNK_SIZE)
-
       let latestTimestamp = 0
       let fillCount = 0
-
-      for (let chunkIdx = 0; chunkIdx < chunks; chunkIdx++) {
-        const chunkFrom = fromBlock + chunkIdx * CHUNK_SIZE
-        const chunkTo = Math.min(chunkFrom + CHUNK_SIZE, endBlock)
-
-        const chunkQuery = {
-          type: 'hyperliquidFills',
-          fromBlock: chunkFrom,
-          toBlock: chunkTo,
-          fields: {
-            block: { number: true, timestamp: true },
-            fill: fillFields,
-          },
-          fills: [fillFilter],
-        }
-
-        let chunkResults: any[]
-        try {
-          chunkResults = await portalFetchStream(
-            `${PORTAL_URL}/datasets/${dataset}/stream`,
-            chunkQuery,
-            undefined,
-            0, // no block limit per chunk
-            150 * 1024 * 1024,
-          ) as any[]
-        } catch (err) {
-          throw new Error(`Failed to fetch Hyperliquid time-series chunk: ${err instanceof Error ? err.message : String(err)}`)
-        }
-
-        // Process this chunk's fills into buckets
-        for (const block of chunkResults) {
-          for (const fill of block.fills || []) {
-            const ts = toSeconds(fill.time || block.header?.timestamp || 0)
+      const { chunksFetched, chunkSizeReduced } = await visitHyperliquidFillBlocks({
+        dataset,
+        fromBlock,
+        toBlock: endBlock,
+        fillFilter,
+        fillFields,
+        maxBytes: 150 * 1024 * 1024,
+        concurrency: 3,
+        onBlock: (block) => {
+          const fills = block.fills || []
+          for (let index = 0; index < fills.length; index += 1) {
+            const fill = fills[index]
+            const ts = toSeconds(Number(fill.time || 0))
             if (!ts) continue
 
             latestTimestamp = Math.max(latestTimestamp, ts)
-            fillCount++
+            fillCount += 1
             const bucketTimestamp = Math.floor(ts / intervalSeconds) * intervalSeconds
             const bucket = getOrCreateBucket(bucketTimestamp)
-            const notional = (fill.px || 0) * (fill.sz || 0)
-            const isLiquidation =
-              fill.dir === 'Short > Long' || fill.dir === 'Long > Short'
+            const notional = Number(fill.px || 0) * Number(fill.sz || 0)
+            const pnl = Number(fill.closedPnl || 0)
+            const userKey = typeof fill.user === 'string' ? fill.user : undefined
+            const coinKey = typeof fill.coin === 'string' && TOP_COINS.includes(fill.coin) ? fill.coin : 'Others'
+            const direction = typeof fill.dir === 'string' ? fill.dir : ''
+            const isLiquidation = direction === 'Short > Long' || direction === 'Long > Short'
 
-            bucket.fills++
+            bucket.fills += 1
             bucket.volume += notional
-            if (fill.user) bucket.traders.add(fill.user)
-            bucket.pnl += fill.closedPnl || 0
+            if (userKey) bucket.traders.add(hashString53(userKey))
+            bucket.pnl += pnl
             if (isLiquidation) bucket.liqVolume += notional
 
-            // Per-coin tracking (for group_by)
             if (group_by === 'coin') {
-              const coinKey = TOP_COINS.includes(fill.coin) ? fill.coin : 'Others'
               const cd = getOrCreateCoinData(bucket.byCoin, coinKey)
-              cd.fills++
+              cd.fills += 1
               cd.volume += notional
-              if (fill.user) cd.traders.add(fill.user)
-              cd.pnl += fill.closedPnl || 0
+              if (userKey) cd.traders.add(hashString53(userKey))
+              cd.pnl += pnl
               if (isLiquidation) cd.liqVolume += notional
             }
           }
-        }
-      }
+        },
+      })
 
       if (fillCount === 0) {
         throw new Error('No fills found for the specified filters')
@@ -209,7 +186,7 @@ EXAMPLES:
       const seriesStartTimestamp = seriesEndExclusive - durationSeconds
 
       // Helper to extract metric value
-      function getMetricValue(data: { fills: number; volume: number; traders: Set<string>; pnl: number; liqVolume: number }): number {
+      function getMetricValue(data: { fills: number; volume: number; traders: Set<number>; pnl: number; liqVolume: number }): number {
         switch (metric) {
           case 'fill_count': return data.fills
           case 'volume': return data.volume
@@ -274,7 +251,8 @@ EXAMPLES:
 
       if (coin) summary.filtered_by_coin = coin
       if (group_by === 'coin') summary.grouped_by = 'coin'
-      if (chunks > 1) summary.chunks_fetched = chunks
+      if (chunksFetched > 1) summary.chunks_fetched = chunksFetched
+      if (chunkSizeReduced) summary.chunk_size_reduced = true
 
       return formatResult(
         { summary, time_series: timeSeries },
