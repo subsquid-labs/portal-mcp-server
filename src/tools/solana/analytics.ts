@@ -42,6 +42,18 @@ const INITIAL_SOLANA_PROGRAM_CHUNK_SIZE = 250
 const MIN_SOLANA_PROGRAM_CHUNK_SIZE = 125
 const SOLANA_PROGRAM_CONCURRENCY = 2
 const SOLANA_ANALYTICS_CACHE_TTL_MS = 10_000
+const SOLANA_ANALYTICS_SLOT_BUDGET: Record<SolanaAnalyticsTimeframe, number> = {
+  '15m': 2250,
+  '1h': 9000,
+  '6h': 9000,
+}
+const SOLANA_ANALYTICS_CHUNK_SIZE: Record<SolanaAnalyticsTimeframe, number> = {
+  '15m': 750,
+  '1h': 3000,
+  '6h': 3000,
+}
+
+type SolanaAnalyticsTimeframe = '15m' | '1h' | '6h'
 
 type CachedAnalyticsResult = {
   key: string
@@ -152,10 +164,10 @@ EXAMPLES:
     {
       dataset: z.string().default('solana-mainnet').describe('Dataset name (default: solana-mainnet)'),
       timeframe: z
-        .string()
+        .enum(['15m', '1h', '6h'])
         .optional()
-        .default('1h')
-        .describe("Time range: '1h', '6h'. Default: '1h'. Solana slots are ~400ms so 1h = ~9000 slots."),
+        .default('15m')
+        .describe("Time range: '15m', '1h', '6h'. Default: '15m' for a fast snapshot. Use '1h' for deeper analysis."),
       include_compute_units: z
         .boolean()
         .optional()
@@ -169,6 +181,7 @@ EXAMPLES:
     },
     async ({ dataset, timeframe, include_compute_units, include_programs }) => {
       const queryStartTime = Date.now()
+      const requestedTimeframe: SolanaAnalyticsTimeframe = timeframe ?? '15m'
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
@@ -178,7 +191,7 @@ EXAMPLES:
 
       const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({
         dataset,
-        timeframe,
+        timeframe: requestedTimeframe,
       })
 
       const { validatedToBlock: endBlock } = await validateBlockRange(
@@ -189,9 +202,10 @@ EXAMPLES:
       )
 
       const requestedSlots = endBlock - fromBlock + 1
-      const slotsAnalyzed = Math.min(requestedSlots, MAX_ANALYTICS_SLOTS)
+      const maxSlotsForTimeframe = SOLANA_ANALYTICS_SLOT_BUDGET[requestedTimeframe]
+      const slotsAnalyzed = Math.min(requestedSlots, maxSlotsForTimeframe, MAX_ANALYTICS_SLOTS)
       const effectiveFrom = requestedSlots > slotsAnalyzed ? endBlock - slotsAnalyzed + 1 : fromBlock
-      const cacheKey = `${dataset}:${timeframe || '1h'}:${include_compute_units}:${include_programs}`
+      const cacheKey = `${dataset}:${requestedTimeframe}:${include_compute_units}:${include_programs}`
       const cached =
         cachedAnalyticsResult &&
         cachedAnalyticsResult.key === cacheKey &&
@@ -249,7 +263,8 @@ EXAMPLES:
         transactions: [{}],
       })
 
-      const txRanges = buildSlotRanges(effectiveFrom, endBlock, INITIAL_SOLANA_ANALYTICS_CHUNK_SIZE)
+      const analyticsChunkSize = SOLANA_ANALYTICS_CHUNK_SIZE[requestedTimeframe] || INITIAL_SOLANA_ANALYTICS_CHUNK_SIZE
+      const txRanges = buildSlotRanges(effectiveFrom, endBlock, analyticsChunkSize)
       for (let index = 0; index < txRanges.length; index += SOLANA_ANALYTICS_CONCURRENCY) {
         const rangeBatch = txRanges.slice(index, index + SOLANA_ANALYTICS_CONCURRENCY)
         const batchResults = await Promise.all(
@@ -303,6 +318,7 @@ EXAMPLES:
 
       const response: any = {
         network: {
+          timeframe_requested: requestedTimeframe,
           slots_analyzed: slotsAnalyzed,
           slot_range: `${effectiveFrom}-${endBlock}`,
           time_span_formatted: formatDuration(timeSpanSeconds),
@@ -421,6 +437,8 @@ EXAMPLES:
 
       if (requestedSlots > slotsAnalyzed) {
         response._note = `Analyzed ${slotsAnalyzed} of ${requestedSlots} requested slots (capped for performance)`
+      } else if (requestedTimeframe === '15m') {
+        response._note = 'Fast snapshot mode: default Solana analytics now uses a 15-minute window for better UX'
       }
       if (chunksFetched > 1) {
         response._chunks_fetched = chunksFetched

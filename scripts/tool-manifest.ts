@@ -303,10 +303,11 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'portal_solana_analytics',
     prompt: 'Give me a Solana network snapshot',
-    args: () => ({ dataset: 'solana-mainnet', timeframe: '1h', include_programs: false }),
+    args: () => ({ dataset: 'solana-mainnet', include_programs: false }),
     validate: (text) => {
       const data = extractJson(text)
       assert(data.network !== undefined && data.throughput !== undefined, 'Expected Solana analytics sections')
+      assert(data.network?.timeframe_requested === '15m', 'Expected fast snapshot default timeframe')
     },
   },
   {
