@@ -3,6 +3,41 @@
 
 export type ResponseFormat = 'full' | 'compact' | 'summary'
 
+function getBlockNumber(item: any): number | undefined {
+  return item.block_number ?? item.blockNumber ?? item.slot_number ?? item.block?.number
+}
+
+function getTimestamp(item: any): number | undefined {
+  return item.timestamp ?? item.block?.timestamp
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function pickCommonAliases(item: any): Record<string, unknown> {
+  const aliases: Record<string, unknown> = {}
+
+  for (const key of [
+    'chain_kind',
+    'record_type',
+    'primary_id',
+    'tx_hash',
+    'sender',
+    'recipient',
+    'block_number',
+    'slot_number',
+    'timestamp',
+    'timestamp_human',
+  ]) {
+    if (item?.[key] !== undefined) {
+      aliases[key] = item[key]
+    }
+  }
+
+  return aliases
+}
+
 /**
  * Summarize log data - reduces by ~95%
  * Example: 100 logs → "73 Transfer events, 16 Swap events, 11 other"
@@ -36,7 +71,7 @@ export function summarizeLogs(logs: any[]): any {
     .map(([topic, count]) => ({ topic0: topic, count }))
 
   // Block range
-  const blocks = logs.map((l) => l.blockNumber || l.block?.number).filter(Boolean)
+  const blocks = logs.map((l) => getBlockNumber(l)).filter(isNumber)
   const blockRange =
     blocks.length > 0
       ? {
@@ -85,7 +120,7 @@ export function summarizeTransactions(txs: any[]): any {
   })
 
   // Block range
-  const blocks = txs.map((t) => t.blockNumber || t.block?.number).filter(Boolean)
+  const blocks = txs.map((t) => getBlockNumber(t)).filter(isNumber)
   const blockRange =
     blocks.length > 0
       ? {
@@ -131,12 +166,13 @@ export function summarizeTransactions(txs: any[]): any {
  */
 export function compactLogs(logs: any[]): any[] {
   return logs.map((log) => ({
+    ...pickCommonAliases(log),
     address: log.address,
+    contract_address: log.contract_address || log.address,
     topic0: log.topic0 || log.topics?.[0],
     topics: log.topics,
-    // Exclude: data (large hex string), transactionHash, logIndex, etc.
-    blockNumber: log.blockNumber || log.block?.number,
-    timestamp: log.timestamp || log.block?.timestamp,
+    blockNumber: getBlockNumber(log),
+    timestamp: getTimestamp(log),
   }))
 }
 
@@ -146,13 +182,13 @@ export function compactLogs(logs: any[]): any[] {
  */
 export function compactTransactions(txs: any[]): any[] {
   return txs.map((tx) => ({
+    ...pickCommonAliases(tx),
     hash: tx.hash,
     from: tx.from,
     to: tx.to,
     value: tx.value,
-    // Exclude: input (large hex), nonce, gasPrice details, etc.
-    blockNumber: tx.blockNumber || tx.block?.number,
-    timestamp: tx.timestamp || tx.block?.timestamp,
+    blockNumber: getBlockNumber(tx),
+    timestamp: getTimestamp(tx),
   }))
 }
 
@@ -259,7 +295,8 @@ export function summarizeSolanaTransactions(txs: any[]): any {
  */
 export function compactSolanaTransactions(txs: any[]): any[] {
   return txs.map((tx) => ({
-    signature: tx.signature,
+    ...pickCommonAliases(tx),
+    signature: tx.signature || tx.tx_hash,
     feePayer: tx.feePayer,
     fee: tx.fee,
     computeUnits: tx.computeUnitsConsumed,
@@ -284,7 +321,7 @@ export function summarizeBitcoinTransactions(txs: any[]): any {
     versions.set(v, (versions.get(v) || 0) + 1)
   })
 
-  const blocks = txs.map((t) => t.blockNumber || t.block?.number).filter(Boolean)
+  const blocks = txs.map((t) => getBlockNumber(t)).filter(isNumber)
   const blockRange = blocks.length > 0 ? { from: Math.min(...blocks), to: Math.max(...blocks) } : undefined
 
   return {
@@ -304,7 +341,9 @@ export function summarizeBitcoinTransactions(txs: any[]): any {
  */
 export function compactBitcoinTransactions(txs: any[]): any[] {
   return txs.map((tx) => ({
+    ...pickCommonAliases(tx),
     hash: tx.hash,
+    txid: tx.txid,
     size: tx.size,
     vsize: tx.vsize,
     weight: tx.weight,
@@ -346,7 +385,9 @@ export function summarizeBitcoinInputs(inputs: any[]): any {
  */
 export function compactBitcoinInputs(inputs: any[]): any[] {
   return inputs.map((input) => ({
+    ...pickCommonAliases(input),
     txid: input.txid,
+    input_index: input.inputIndex ?? input.input_index,
     vout: input.vout,
     address: input.prevoutScriptPubKeyAddress,
     value: input.prevoutValue,
@@ -385,6 +426,7 @@ export function summarizeBitcoinOutputs(outputs: any[]): any {
  */
 export function compactBitcoinOutputs(outputs: any[]): any[] {
   return outputs.map((output) => ({
+    ...pickCommonAliases(output),
     index: output.outputIndex,
     address: output.scriptPubKeyAddress,
     value: output.value,

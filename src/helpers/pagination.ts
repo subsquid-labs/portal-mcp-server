@@ -24,6 +24,15 @@ export interface BlockBoundaryCursor {
   skip_inclusive_block: number
 }
 
+export interface RecentPageCursor<TRequest extends Record<string, unknown>> extends BlockBoundaryCursor {
+  [key: string]: unknown
+  tool: string
+  dataset: string
+  request: TRequest
+  window_from_block: number
+  window_to_block: number
+}
+
 export function encodeCursor(payload: Record<string, unknown>): string {
   return Buffer.from(
     JSON.stringify({
@@ -137,4 +146,17 @@ export function buildPaginationInfo(pageSize: number, returned: number, nextCurs
     has_more: Boolean(nextCursor),
     ...(nextCursor ? { next_cursor: nextCursor } : {}),
   }
+}
+
+export function decodeRecentPageCursor<TRequest extends Record<string, unknown>>(
+  cursor: string,
+  expectedTool: string,
+): RecentPageCursor<TRequest> {
+  return decodeCursor<RecentPageCursor<TRequest>>(cursor, expectedTool)
+}
+
+export function encodeRecentPageCursor<TRequest extends Record<string, unknown>>(
+  params: RecentPageCursor<TRequest>,
+): string {
+  return encodeCursor(params)
 }

@@ -149,8 +149,8 @@ export function registerGetWalletSummaryTool(server: McpServer) {
     'portal_get_wallet_summary',
     `Get wallet activity summary: recent transactions, ERC20 token transfers, and optionally NFT transfers for an address over a time period.`,
     {
-      dataset: z.string().describe('Dataset name or alias'),
-      address: z.string().describe('Wallet address to analyze'),
+      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
+      address: z.string().optional().describe('Wallet address to analyze. Optional when continuing with cursor.'),
       timeframe: z
         .string()
         .optional()
@@ -163,7 +163,15 @@ export function registerGetWalletSummaryTool(server: McpServer) {
     },
     async ({ dataset, address, timeframe, include_tokens, include_nfts, limit_per_type, cursor }) => {
       const queryStartTime = Date.now()
-      dataset = await resolveDataset(dataset)
+      const paginationCursor = cursor ? decodeCursor<WalletSummaryCursor>(cursor, 'portal_get_wallet_summary') : undefined
+      const requestedDataset = dataset ? await resolveDataset(dataset) : undefined
+      dataset = paginationCursor?.dataset ?? requestedDataset
+      if (!dataset) {
+        throw new ActionableError('dataset is required unless you are continuing with cursor.', [
+          'Provide dataset for a fresh wallet summary.',
+          'Reuse _pagination.next_cursor from a previous response to continue paging.',
+        ])
+      }
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
@@ -179,24 +187,31 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         })
       }
 
-      const normalizedAddress = normalizeEvmAddress(address)
-      const paginationCursor = cursor ? decodeCursor<WalletSummaryCursor>(cursor, 'portal_get_wallet_summary') : undefined
-      if (paginationCursor && paginationCursor.dataset !== dataset) {
+      const requestedAddress = address ? normalizeEvmAddress(address) : undefined
+      const normalizedAddress = paginationCursor?.address ?? requestedAddress
+      if (!normalizedAddress) {
+        throw new ActionableError('address is required unless you are continuing with cursor.', [
+          'Provide address for a fresh wallet summary.',
+          'Reuse _pagination.next_cursor from a previous response to continue paging.',
+        ])
+      }
+
+      if (paginationCursor && requestedDataset && paginationCursor.dataset !== requestedDataset) {
         throw new ActionableError('This cursor belongs to a different dataset.', [
           'Reuse the cursor with the same dataset and wallet address.',
           'Omit cursor to start a fresh wallet summary.',
         ], {
           cursor_dataset: paginationCursor.dataset,
-          requested_dataset: dataset,
+          requested_dataset: requestedDataset,
         })
       }
-      if (paginationCursor && paginationCursor.address !== normalizedAddress) {
+      if (paginationCursor && requestedAddress && paginationCursor.address !== requestedAddress) {
         throw new ActionableError('This cursor belongs to a different wallet address.', [
           'Reuse the cursor with the same wallet address as the previous response.',
           'Omit cursor to start a fresh wallet summary.',
         ], {
           cursor_address: paginationCursor.address,
-          requested_address: normalizedAddress,
+          requested_address: requestedAddress,
         })
       }
 

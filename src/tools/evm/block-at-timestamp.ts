@@ -5,6 +5,7 @@ import { resolveDataset } from '../../cache/datasets.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { formatResult } from '../../helpers/format.js'
+import { buildBlockLookupFreshness } from '../../helpers/result-metadata.js'
 import { resolveBlockAtTimestamp } from '../../helpers/timeframe.js'
 
 // ============================================================================
@@ -46,7 +47,10 @@ export function registerBlockAtTimestampTool(server: McpServer) {
       return formatResult(
         result,
         `Resolved ${result.timestamp_human} to block ${result.block_number} (${result.resolution}).`,
-        { notices },
+        {
+          notices,
+          freshness: buildBlockLookupFreshness(result),
+        },
       )
     },
   )

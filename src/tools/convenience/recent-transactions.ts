@@ -63,6 +63,7 @@ type RecentTransactionsCursor = {
   tool: 'portal_get_recent_transactions'
   dataset: string
   timeframe: string
+  limit: number
   from_addresses?: string[]
   to_addresses?: string[]
   window_from_block: number
@@ -134,7 +135,8 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
     {
       dataset: z
         .string()
-        .describe("Dataset name (supports short names: 'polygon', 'base', 'ethereum', 'arbitrum', etc.)"),
+        .optional()
+        .describe("Dataset name (supports short names: 'polygon', 'base', 'ethereum', 'arbitrum', etc.). Optional when continuing with cursor."),
       timeframe: z
         .string()
         .optional()
@@ -149,7 +151,15 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
     },
     async ({ dataset, timeframe, from_addresses, to_addresses, limit, cursor }) => {
       const queryStartTime = Date.now()
-      dataset = await resolveDataset(dataset)
+      const paginationCursor = cursor ? decodeCursor<RecentTransactionsCursor>(cursor, 'portal_get_recent_transactions') : undefined
+      const requestedDataset = dataset ? await resolveDataset(dataset) : undefined
+      dataset = paginationCursor?.dataset ?? requestedDataset
+      if (!dataset) {
+        throw new ActionableError('dataset is required unless you are continuing with cursor.', [
+          'Provide dataset for a fresh recent-transactions query.',
+          'Reuse _pagination.next_cursor from a previous response to continue paging.',
+        ])
+      }
       const chainType = detectChainType(dataset)
 
       if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
@@ -162,19 +172,19 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         })
       }
 
-      const paginationCursor = cursor ? decodeCursor<RecentTransactionsCursor>(cursor, 'portal_get_recent_transactions') : undefined
-      if (paginationCursor && paginationCursor.dataset !== dataset) {
+      if (paginationCursor && requestedDataset && paginationCursor.dataset !== requestedDataset) {
         throw new ActionableError('This cursor belongs to a different dataset.', [
           'Reuse the cursor with the same dataset and filters as the previous response.',
           'Omit cursor to start a fresh query window.',
         ], {
           cursor_dataset: paginationCursor.dataset,
-          requested_dataset: dataset,
+          requested_dataset: requestedDataset,
         })
       }
 
       if (paginationCursor) {
         timeframe = paginationCursor.timeframe
+        limit = paginationCursor.limit
         from_addresses = paginationCursor.from_addresses
         to_addresses = paginationCursor.to_addresses
       }
@@ -309,6 +319,7 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         ? createRecentTransactionsCursor({
             dataset,
             timeframe,
+            limit,
             ...(normalizedFrom ? { from_addresses: normalizedFrom } : {}),
             ...(normalizedTo ? { to_addresses: normalizedTo } : {}),
             window_from_block: fromBlock,
@@ -397,6 +408,7 @@ async function queryBitcoinRecent(params: {
     ? createRecentTransactionsCursor({
         dataset,
         timeframe,
+        limit,
         ...(params.cursor?.from_addresses ? { from_addresses: params.cursor.from_addresses } : {}),
         ...(params.cursor?.to_addresses ? { to_addresses: params.cursor.to_addresses } : {}),
         window_from_block: fromBlock,
@@ -491,6 +503,7 @@ async function querySolanaRecent(params: {
     ? createRecentTransactionsCursor({
         dataset,
         timeframe,
+        limit,
         ...(params.cursor?.from_addresses ? { from_addresses: params.cursor.from_addresses } : {}),
         ...(params.cursor?.to_addresses ? { to_addresses: params.cursor.to_addresses } : {}),
         window_from_block: fromBlock,

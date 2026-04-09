@@ -9,6 +9,8 @@ export interface FormatOptions {
   warnOnTruncation?: boolean
   notices?: string[]
   pagination?: Record<string, unknown>
+  freshness?: unknown
+  coverage?: unknown
   metadata?: {
     dataset?: string
     from_block?: number
@@ -117,6 +119,12 @@ export function formatResult(
     }
     if (options?.pagination) {
       payloadRecord._pagination = options.pagination
+    }
+    if (options?.freshness !== undefined) {
+      payloadRecord._freshness = options.freshness
+    }
+    if (options?.coverage !== undefined) {
+      payloadRecord._coverage = options.coverage
     }
     if (notices.length === 1) {
       payloadRecord._notice = notices[0]

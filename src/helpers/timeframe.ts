@@ -5,10 +5,12 @@
 import { getBlockHead } from '../cache/datasets.js'
 import { PORTAL_URL } from '../constants/index.js'
 import { detectChainType } from './chain.js'
+import { ActionableError } from './errors.js'
 import { formatTimestamp } from './formatting.js'
 import { portalFetch, portalFetchStream } from './fetch.js'
 
 export type Timeframe = '1h' | '6h' | '12h' | '24h' | '3d' | '7d' | '14d' | '30d'
+export type TimestampInput = string | number
 
 // ---------------------------------------------------------------------------
 // Block time estimates
@@ -65,6 +67,14 @@ export interface BlockAtTimestampResult extends ParsedTimestampInput {
   head_timestamp?: number
   head_timestamp_human?: string
   estimated_block_time_seconds?: number
+}
+
+export interface ResolvedBlockWindow {
+  from_block: number
+  to_block: number
+  range_kind: 'timeframe' | 'block_range' | 'timestamp_range'
+  from_lookup?: BlockAtTimestampResult
+  to_lookup?: BlockAtTimestampResult
 }
 
 export function estimateBlockTime(dataset: string, chainType: string): number {
@@ -250,6 +260,28 @@ function parseRelativeTimestamp(input: string, nowUnix: number): ParsedTimestamp
     }
   }
 
+  const dayTimeMatch = normalized.match(/^(today|yesterday)\s+(\d{1,2})(?::(\d{2}))?(?::(\d{2}))?$/)
+  if (dayTimeMatch) {
+    const [, keyword, hourText, minuteText = '0', secondText = '0'] = dayTimeMatch
+    const hour = parseInt(hourText, 10)
+    const minute = parseInt(minuteText, 10)
+    const second = parseInt(secondText, 10)
+
+    if (hour > 23 || minute > 59 || second > 59) {
+      throw new Error(`Invalid time in timestamp input: ${input}. Use HH:MM or HH:MM:SS in 24-hour format.`)
+    }
+
+    const now = new Date(nowUnix * 1000)
+    const dayOffset = keyword === 'yesterday' ? 86400 : 0
+    const dayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000 - dayOffset
+
+    return {
+      timestamp: dayStart + hour * 3600 + minute * 60 + second,
+      source: 'keyword',
+      normalized_input: `${keyword} ${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}:${second.toString().padStart(2, '0')}`,
+    }
+  }
+
   const relativeMatch = normalized.match(/^(\d+)\s*([smhdw])(?:\s+ago)?$/)
   if (!relativeMatch) {
     return undefined
@@ -374,8 +406,30 @@ export async function resolveTimeframeOrBlocks(params: {
   timeframe?: string
   from_block?: number
   to_block?: number
-}): Promise<{ from_block: number; to_block: number }> {
-  const { dataset, timeframe, from_block, to_block } = params
+  from_timestamp?: TimestampInput
+  to_timestamp?: TimestampInput
+}): Promise<ResolvedBlockWindow> {
+  const { dataset, timeframe, from_block, to_block, from_timestamp, to_timestamp } = params
+  const hasTimestampWindow = from_timestamp !== undefined || to_timestamp !== undefined
+  const hasBlockWindow = from_block !== undefined || to_block !== undefined
+
+  if (hasTimestampWindow && (timeframe || hasBlockWindow)) {
+    throw new ActionableError(
+      "Use either timeframe, block numbers, or timestamps for the query window.",
+      [
+        "Use timeframe for relative presets like '1h' or '7d'.",
+        "Use from_block/to_block for exact block windows.",
+        "Use from_timestamp/to_timestamp for natural time windows like '1h ago' or ISO datetimes.",
+      ],
+      {
+        timeframe,
+        from_block,
+        to_block,
+        from_timestamp,
+        to_timestamp,
+      },
+    )
+  }
 
   if (timeframe) {
     const head = await getBlockHead(dataset)
@@ -390,7 +444,10 @@ export async function resolveTimeframeOrBlocks(params: {
       isTimestampEndpointDown(dataset)
 
     if (useEstimation) {
-      return estimateFromBlock(latestBlock, seconds, dataset, chainType)
+      return {
+        ...estimateFromBlock(latestBlock, seconds, dataset, chainType),
+        range_kind: 'timeframe',
+      }
     }
 
     // Timeframe is long enough that the target timestamp should be indexed.
@@ -403,20 +460,84 @@ export async function resolveTimeframeOrBlocks(params: {
       return {
         from_block: fromBlock,
         to_block: latestBlock,
+        range_kind: 'timeframe',
       }
     } catch {
       // Cache the failure so subsequent calls skip straight to estimation
       markTimestampEndpointDown(dataset)
-      return estimateFromBlock(latestBlock, seconds, dataset, chainType)
+      return {
+        ...estimateFromBlock(latestBlock, seconds, dataset, chainType),
+        range_kind: 'timeframe',
+      }
+    }
+  } else if (hasTimestampWindow) {
+    const [resolvedFrom, resolvedTo] = await Promise.all([
+      from_timestamp !== undefined ? resolveBlockAtTimestamp(dataset, from_timestamp) : Promise.resolve(undefined),
+      to_timestamp !== undefined ? resolveBlockAtTimestamp(dataset, to_timestamp) : Promise.resolve(undefined),
+    ])
+
+    const head = resolvedTo ? undefined : await getBlockHead(dataset)
+    const resolvedFromBlock = resolvedFrom?.block_number ?? resolvedTo?.block_number
+    const resolvedToBlock = resolvedTo?.block_number ?? head?.number
+
+    if (resolvedFromBlock === undefined || resolvedToBlock === undefined) {
+      throw new Error('Could not resolve timestamp window to block numbers.')
+    }
+
+    if (resolvedFromBlock > resolvedToBlock) {
+      throw new ActionableError(
+        'from_timestamp resolves after to_timestamp.',
+        [
+          'Swap the timestamps so from_timestamp is earlier than to_timestamp.',
+          'Use portal_block_at_timestamp first if you want to inspect the resolved block numbers.',
+        ],
+        {
+          from_timestamp: resolvedFrom?.normalized_input ?? from_timestamp,
+          to_timestamp: resolvedTo?.normalized_input ?? to_timestamp,
+          from_block: resolvedFromBlock,
+          to_block: resolvedToBlock,
+        },
+      )
+    }
+
+    return {
+      from_block: resolvedFromBlock,
+      to_block: resolvedToBlock,
+      range_kind: 'timestamp_range',
+      ...(resolvedFrom ? { from_lookup: resolvedFrom } : {}),
+      ...(resolvedTo ? { to_lookup: resolvedTo } : {}),
     }
   } else if (from_block !== undefined) {
     return {
       from_block,
       to_block: to_block || from_block + 1000,
+      range_kind: 'block_range',
     }
   }
 
-  throw new Error("Either 'timeframe' or 'from_block' must be provided")
+  throw new Error("Provide timeframe, from_block, or from_timestamp/to_timestamp to define the query window.")
+}
+
+export function getTimestampWindowNotices(window: unknown): string[] {
+  const notices: string[] = []
+  const typedWindow = (window && typeof window === 'object' ? window : {}) as {
+    from_lookup?: BlockAtTimestampResult
+    to_lookup?: BlockAtTimestampResult
+  }
+
+  if (typedWindow.from_lookup?.resolution === 'estimated') {
+    notices.push(
+      `from_timestamp (${typedWindow.from_lookup.timestamp_human}) was estimated from the latest indexed block because the exact boundary is not indexed yet.`,
+    )
+  }
+
+  if (typedWindow.to_lookup?.resolution === 'estimated') {
+    notices.push(
+      `to_timestamp (${typedWindow.to_lookup.timestamp_human}) was estimated from the latest indexed block because the exact boundary is not indexed yet.`,
+    )
+  }
+
+  return notices
 }
 
 /**

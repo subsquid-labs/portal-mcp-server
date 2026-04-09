@@ -7,6 +7,8 @@ import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { getTransactionFields } from '../../helpers/field-presets.js'
+import { normalizeEvmTransactionResult } from '../../helpers/normalized-results.js'
+import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
 import {
   buildEvmLogFields,
   buildEvmStateDiffFields,
@@ -15,8 +17,9 @@ import {
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatTransactionFields } from '../../helpers/formatting.js'
+import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
-import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import {
   getQueryExamples,
   getValidationNotices,
@@ -44,17 +47,81 @@ function flattenTransactionsWithBlockContext(results: unknown[]) {
     const timestamp = typedBlock.timestamp ?? typedBlock.header?.timestamp
 
     return (typedBlock.transactions || []).map((tx) =>
-      formatTransactionFields({
-        ...tx,
-        ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
-        ...(timestamp !== undefined
-          ? {
-              timestamp,
-              timestamp_human: formatTimestamp(timestamp),
-            }
-          : {}),
-      }),
+      normalizeEvmTransactionResult(
+        formatTransactionFields({
+          ...tx,
+          ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
+          ...(timestamp !== undefined
+            ? {
+                timestamp,
+                timestamp_human: formatTimestamp(timestamp),
+              }
+            : {}),
+        }),
+      ),
     )
+  })
+}
+
+type QueryTransactionsRequest = {
+  timeframe?: string
+  from_timestamp?: TimestampInput
+  to_timestamp?: TimestampInput
+  limit: number
+  finalized_only: boolean
+  from_addresses?: string[]
+  to_addresses?: string[]
+  sighash?: string[]
+  first_nonce?: number
+  last_nonce?: number
+  field_preset: 'minimal' | 'standard' | 'full'
+  response_format: ResponseFormat
+  include_logs: boolean
+  include_traces: boolean
+  include_state_diffs: boolean
+  include_l2_fields: boolean
+}
+
+type QueryTransactionsCursor = {
+  tool: 'portal_query_transactions'
+  dataset: string
+  request: QueryTransactionsRequest
+  window_from_block: number
+  window_to_block: number
+  page_to_block: number
+  skip_inclusive_block: number
+}
+
+type EvmTransactionItem = Record<string, unknown> & {
+  block_number?: number
+  transactionIndex?: number
+  hash?: string
+}
+
+function getBlockNumber(tx: EvmTransactionItem): number | undefined {
+  return typeof tx.block_number === 'number' ? tx.block_number : undefined
+}
+
+function getTransactionIndex(tx: EvmTransactionItem): number {
+  if (typeof tx.transactionIndex === 'number') return tx.transactionIndex
+  if (typeof tx.transactionIndex === 'string') {
+    const parsed = Number(tx.transactionIndex)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return 0
+}
+
+function sortTransactions(items: EvmTransactionItem[]) {
+  return items.sort((left, right) => {
+    const leftBlock = getBlockNumber(left) ?? 0
+    const rightBlock = getBlockNumber(right) ?? 0
+    if (leftBlock !== rightBlock) return leftBlock - rightBlock
+
+    const leftIndex = getTransactionIndex(left)
+    const rightIndex = getTransactionIndex(right)
+    if (leftIndex !== rightIndex) return leftIndex - rightIndex
+
+    return String(left.hash ?? left.tx_hash ?? '').localeCompare(String(right.hash ?? right.tx_hash ?? ''))
   })
 }
 
@@ -63,7 +130,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
     'portal_query_transactions',
     `Query transactions from EVM chains. Filter by sender, recipient, or function signature. Unfiltered queries >100 blocks need limit <=100.`,
     {
-      dataset: z.string().describe('Dataset name or alias'),
+      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
       timeframe: z
         .string()
         .optional()
@@ -80,6 +147,14 @@ export function registerQueryTransactionsTool(server: McpServer) {
         .describe(
           'Ending block number. RECOMMENDED: <5k blocks for fast (<500ms) responses. Larger ranges may be slow.',
         ),
+      from_timestamp: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe('Starting timestamp. Accepts Unix seconds, Unix milliseconds, ISO datetime, or relative input like "1h ago".'),
+      to_timestamp: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe('Ending timestamp. Accepts Unix seconds, Unix milliseconds, ISO datetime, or relative input like "now".'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
       from_addresses: z
         .array(z.string())
@@ -123,6 +198,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       include_traces: z.boolean().optional().default(false).describe('Include traces for transactions'),
       include_state_diffs: z.boolean().optional().default(false).describe('Include state diffs caused by transactions'),
       include_l2_fields: z.boolean().optional().default(false).describe('Include L2-specific fields'),
+      cursor: z.string().optional().describe('Continuation cursor from a previous response'),
       // include_receipt removed: logsBloom is not in TransactionFieldSelection per OpenAPI spec
     },
     async ({
@@ -130,6 +206,8 @@ export function registerQueryTransactionsTool(server: McpServer) {
       timeframe,
       from_block,
       to_block,
+      from_timestamp,
+      to_timestamp,
       finalized_only,
       from_addresses,
       to_addresses,
@@ -143,9 +221,16 @@ export function registerQueryTransactionsTool(server: McpServer) {
       include_traces,
       include_state_diffs,
       include_l2_fields,
+      cursor,
     }) => {
       const queryStartTime = Date.now()
-      dataset = await resolveDataset(dataset)
+      const paginationCursor = cursor
+        ? decodeRecentPageCursor<QueryTransactionsRequest>(cursor, 'portal_query_transactions')
+        : undefined
+      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : undefined)
+      if (!dataset) {
+        throw new Error('dataset is required unless you are continuing with cursor.')
+      }
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
@@ -161,26 +246,62 @@ export function registerQueryTransactionsTool(server: McpServer) {
         })
       }
 
+      if (paginationCursor) {
+        dataset = paginationCursor.dataset
+        timeframe = paginationCursor.request.timeframe
+        from_timestamp = paginationCursor.request.from_timestamp
+        to_timestamp = paginationCursor.request.to_timestamp
+        limit = paginationCursor.request.limit
+        finalized_only = paginationCursor.request.finalized_only
+        from_addresses = paginationCursor.request.from_addresses
+        to_addresses = paginationCursor.request.to_addresses
+        sighash = paginationCursor.request.sighash
+        first_nonce = paginationCursor.request.first_nonce
+        last_nonce = paginationCursor.request.last_nonce
+        field_preset = paginationCursor.request.field_preset
+        response_format = paginationCursor.request.response_format
+        include_logs = paginationCursor.request.include_logs
+        include_traces = paginationCursor.request.include_traces
+        include_state_diffs = paginationCursor.request.include_state_diffs
+        include_l2_fields = paginationCursor.request.include_l2_fields
+      }
+
       // Resolve timeframe or use explicit blocks
-      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
-        dataset,
-        timeframe,
-        from_block,
-        to_block,
-      })
+      const resolvedBlocks = paginationCursor
+        ? {
+            from_block: paginationCursor.window_from_block,
+            to_block: paginationCursor.window_to_block,
+            range_kind:
+              paginationCursor.request.from_timestamp !== undefined || paginationCursor.request.to_timestamp !== undefined
+                ? 'timestamp_range'
+                : paginationCursor.request.timeframe
+                  ? 'timeframe'
+                  : 'block_range',
+          }
+        : await resolveTimeframeOrBlocks({
+            dataset,
+            timeframe,
+            from_block,
+            to_block,
+            from_timestamp,
+            to_timestamp,
+          })
+      const resolvedFromBlock = resolvedBlocks.from_block
+      const resolvedToBlock = resolvedBlocks.to_block
 
       const normalizedFrom = normalizeAddresses(from_addresses, chainType)
       const normalizedTo = normalizeAddresses(to_addresses, chainType)
-      const { validatedToBlock: endBlock } = await validateBlockRange(
+      const { validatedToBlock: endBlock, head } = await validateBlockRange(
         dataset,
         resolvedFromBlock,
         resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
+      const pageToBlock = paginationCursor?.page_to_block ?? endBlock
       const includeL2 = include_l2_fields || isL2Chain(dataset)
 
       // Validate query size to prevent crashes
-      const blockRange = endBlock - resolvedFromBlock
+      const blockRange = pageToBlock - resolvedFromBlock
       const hasFilters = !!(normalizedFrom || normalizedTo || sighash)
 
       const validation = validateQuerySize({
@@ -209,6 +330,18 @@ export function registerQueryTransactionsTool(server: McpServer) {
       // Use field preset to control response size
       const presetFields = getTransactionFields(field_preset || 'standard')
       const fields: Record<string, unknown> = { ...presetFields }
+      fields.block = {
+        ...((fields.block as Record<string, boolean> | undefined) ?? {}),
+        number: true,
+        timestamp: true,
+      }
+      fields.transaction = {
+        ...((fields.transaction as Record<string, boolean> | undefined) ?? {}),
+        hash: true,
+        transactionIndex: true,
+        from: true,
+        to: true,
+      }
 
       // Merge L2 fields if requested (but keep preset as base)
       if (include_l2_fields) {
@@ -232,36 +365,95 @@ export function registerQueryTransactionsTool(server: McpServer) {
       const query = {
         type: 'evm',
         fromBlock: resolvedFromBlock,
-        toBlock: endBlock,
+        toBlock: pageToBlock,
         fields,
         transactions: [txFilter],
       }
 
+      const cursorSkip = paginationCursor?.skip_inclusive_block ?? 0
+      const fetchLimit = limit + cursorSkip + 1
       const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
         itemKeys: ['transactions'],
-        limit,
+        limit: fetchLimit,
         chunkSize: hasFilters ? 500 : 100,
       })
 
-      const allTxs = flattenTransactionsWithBlockContext(results)
-      const limitedTxs = allTxs.slice(-limit)
+      const allTxs = sortTransactions(flattenTransactionsWithBlockContext(results) as EvmTransactionItem[])
+      const page = paginateAscendingItems(
+        allTxs,
+        limit,
+        getBlockNumber,
+        paginationCursor
+          ? {
+              page_to_block: paginationCursor.page_to_block,
+              skip_inclusive_block: paginationCursor.skip_inclusive_block,
+            }
+          : undefined,
+      )
+      const nextCursor = page.hasMore && page.nextBoundary
+        ? encodeRecentPageCursor<QueryTransactionsRequest>({
+            tool: 'portal_query_transactions',
+            dataset,
+            request: {
+              ...(timeframe ? { timeframe } : {}),
+              ...(from_timestamp !== undefined ? { from_timestamp } : {}),
+              ...(to_timestamp !== undefined ? { to_timestamp } : {}),
+              limit,
+              finalized_only,
+              ...(normalizedFrom ? { from_addresses: normalizedFrom } : {}),
+              ...(normalizedTo ? { to_addresses: normalizedTo } : {}),
+              ...(sighash ? { sighash } : {}),
+              ...(first_nonce !== undefined ? { first_nonce } : {}),
+              ...(last_nonce !== undefined ? { last_nonce } : {}),
+              field_preset,
+              response_format: response_format as ResponseFormat,
+              include_logs,
+              include_traces,
+              include_state_diffs,
+              include_l2_fields,
+            },
+            window_from_block: resolvedFromBlock,
+            window_to_block: endBlock,
+            page_to_block: page.nextBoundary.page_to_block,
+            skip_inclusive_block: page.nextBoundary.skip_inclusive_block,
+          })
+        : undefined
 
       // Apply response format (summary/compact/full)
-      const formattedData = applyResponseFormat(limitedTxs, response_format || 'full', 'transactions')
+      const formattedData = applyResponseFormat(page.pageItems, response_format || 'full', 'transactions')
+      const notices = [...getTimestampWindowNotices(resolvedBlocks), ...getValidationNotices(validation)]
+      if (nextCursor) {
+        notices.push('Older results are available via _pagination.next_cursor.')
+      }
+      const freshness = buildQueryFreshness({
+        finality: finalized_only ? 'finalized' : 'latest',
+        headBlockNumber: head.number,
+        windowToBlock: endBlock,
+        resolvedWindow: resolvedBlocks,
+      })
+      const coverage = buildQueryCoverage({
+        windowFromBlock: resolvedFromBlock,
+        windowToBlock: endBlock,
+        pageToBlock,
+        items: page.pageItems,
+        getBlockNumber,
+        hasMore: page.hasMore,
+      })
 
       const message =
         response_format === 'summary'
-          ? `Transaction summary for ${limitedTxs.length} transactions${allTxs.length > limit ? ' (latest preview)' : ''}`
-          : `Retrieved ${limitedTxs.length} transactions${allTxs.length > limit ? ` from the most recent matching blocks (preview limited to ${limit})` : ''}`
+          ? `Transaction summary for ${page.pageItems.length} transactions${page.hasMore ? ' (latest preview page)' : ''}`
+          : `Retrieved ${page.pageItems.length} transactions${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
       return formatResult(formattedData, message, {
-        maxItems: limit,
-        warnOnTruncation: false,
-        notices: getValidationNotices(validation),
+        notices,
+        pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+        freshness,
+        coverage,
         metadata: {
           dataset,
           from_block: resolvedFromBlock,
-          to_block: endBlock,
+          to_block: pageToBlock,
           query_start_time: queryStartTime,
         },
       })

@@ -58,6 +58,11 @@ function expectKey(text: string, key: string, label: string) {
   return data
 }
 
+function expectWindowMetadata(data: any, label: string) {
+  assert(data?._freshness !== undefined, `${label} should include _freshness`)
+  assert(data?._coverage !== undefined, `${label} should include _coverage`)
+}
+
 async function getHeadNumber(client: Client, dataset: string): Promise<number> {
   const result = await client.callTool({
     name: 'portal_get_block_number',
@@ -124,16 +129,20 @@ export const TOOL_SPECS: ToolSpec[] = [
       assert(typeof data.block_number === 'number' && data.block_number > 0, 'Expected a block number')
       assert(typeof data.timestamp_human === 'string', 'Expected a human-readable timestamp')
       assert(typeof data.resolution === 'string', 'Expected exact vs estimated resolution')
+      assert(data._freshness?.kind === 'timestamp_lookup', 'Expected timestamp lookup freshness metadata')
     },
   },
   {
     name: 'portal_query_blocks',
     prompt: 'Show me the last 3 Base blocks',
-    args: (context) => ({ dataset: 'base', from_block: context.baseHead - 5, limit: 3 }),
+    args: () => ({ dataset: 'base', from_timestamp: '10m ago', to_timestamp: 'now', limit: 3 }),
     validate: (text, context) => {
-      const items = expectItems(text, 'portal_query_blocks')
+      const data = extractJson(text)
+      const items = getItems(data)
       const blockNumbers = items.map((item) => item.number ?? item.header?.number).filter((value) => typeof value === 'number')
       assert(blockNumbers.length === 3, 'Expected block numbers in portal_query_blocks output')
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_blocks')
+      expectWindowMetadata(data, 'portal_query_blocks')
       assert(Math.max(...blockNumbers) >= context.baseHead, 'Expected the preview window to reach the latest known head')
     },
   },
@@ -148,18 +157,28 @@ export const TOOL_SPECS: ToolSpec[] = [
       field_preset: 'minimal',
     }),
     validate: (text, context) => {
-      const items = expectItems(text, 'portal_query_logs')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_logs')
+      expectWindowMetadata(data, 'portal_query_logs')
       assert(items[0].address?.toLowerCase() === context.usdcBase, 'Expected USDC log results')
       assert(typeof items[0].block_number === 'number', 'Expected block_number in log output')
+      assert(typeof items[0].tx_hash === 'string', 'Expected normalized tx_hash in log output')
+      assert(typeof items[0].primary_id === 'string', 'Expected normalized primary_id in log output')
     },
   },
   {
     name: 'portal_query_transactions',
     prompt: 'Show me a few recent Base transactions',
-    args: () => ({ dataset: 'base', timeframe: '1h', limit: 3, field_preset: 'minimal' }),
+    args: () => ({ dataset: 'base', from_timestamp: '1h ago', to_timestamp: 'now', limit: 3, field_preset: 'minimal' }),
     validate: (text, context) => {
-      const items = expectItems(text, 'portal_query_transactions')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_transactions')
+      expectWindowMetadata(data, 'portal_query_transactions')
       assert(items[0].from !== undefined, 'Expected transaction sender field')
+      assert(typeof items[0].tx_hash === 'string', 'Expected normalized tx_hash on recent transactions')
+      assert(typeof items[0].sender === 'string', 'Expected normalized sender on recent transactions')
       const blockNumbers = items.map((item) => item.block_number).filter((value) => typeof value === 'number')
       assert(blockNumbers.length === items.length, 'Expected block_number on recent transactions')
       assert(Math.max(...blockNumbers) >= context.baseHead - 5, 'Expected recent transaction results near chain head')
@@ -176,8 +195,14 @@ export const TOOL_SPECS: ToolSpec[] = [
       include_token_info: true,
     }),
     validate: (text, context) => {
-      const items = expectItems(text, 'portal_get_erc20_transfers')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_get_erc20_transfers')
+      expectWindowMetadata(data, 'portal_get_erc20_transfers')
       assert(items[0].token_address?.toLowerCase() === context.usdcBase, 'Expected USDC transfer results')
+      assert(typeof items[0].tx_hash === 'string', 'Expected normalized tx_hash on ERC20 transfers')
+      assert(typeof items[0].sender === 'string', 'Expected normalized sender on ERC20 transfers')
+      assert(typeof items[0].recipient === 'string', 'Expected normalized recipient on ERC20 transfers')
     },
   },
   {
@@ -238,6 +263,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     validate: (text) => {
       const data = extractJson(text)
       assert(data.interactions?.total_transactions !== undefined, 'Expected contract interaction totals')
+      assert(data._freshness !== undefined || data._coverage !== undefined, 'Expected structured completeness metadata on contract activity')
     },
   },
   {
@@ -288,7 +314,12 @@ export const TOOL_SPECS: ToolSpec[] = [
       limit: 3,
     }),
     validate: (text) => {
-      expectItems(text, 'portal_query_solana_instructions')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_solana_instructions')
+      expectWindowMetadata(data, 'portal_query_solana_instructions')
+      assert(typeof items[0].primary_id === 'string', 'Expected normalized primary_id on Solana instructions')
+      assert(typeof items[0].slot_number === 'number', 'Expected slot_number on Solana instructions')
     },
   },
   {
@@ -302,7 +333,12 @@ export const TOOL_SPECS: ToolSpec[] = [
       response_format: 'compact',
     }),
     validate: (text) => {
-      expectItems(text, 'portal_query_solana_transactions')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_solana_transactions')
+      expectWindowMetadata(data, 'portal_query_solana_transactions')
+      assert(typeof items[0].tx_hash === 'string', 'Expected normalized tx_hash on Solana transactions')
+      assert(typeof items[0].slot_number === 'number', 'Expected slot_number on Solana transactions')
     },
   },
   {
@@ -329,7 +365,12 @@ export const TOOL_SPECS: ToolSpec[] = [
     prompt: 'Show me recent Bitcoin transactions',
     args: () => ({ dataset: 'bitcoin-mainnet', timeframe: '1h', limit: 3, response_format: 'compact' }),
     validate: (text) => {
-      expectItems(text, 'portal_query_bitcoin_transactions')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_bitcoin_transactions')
+      expectWindowMetadata(data, 'portal_query_bitcoin_transactions')
+      assert(typeof items[0].tx_hash === 'string', 'Expected normalized tx_hash on Bitcoin transactions')
+      assert(typeof items[0].primary_id === 'string', 'Expected normalized primary_id on Bitcoin transactions')
     },
   },
   {
@@ -337,7 +378,12 @@ export const TOOL_SPECS: ToolSpec[] = [
     prompt: 'Show me recent Bitcoin inputs',
     args: () => ({ dataset: 'bitcoin-mainnet', timeframe: '1h', limit: 3, response_format: 'compact' }),
     validate: (text) => {
-      expectItems(text, 'portal_query_bitcoin_inputs')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_bitcoin_inputs')
+      expectWindowMetadata(data, 'portal_query_bitcoin_inputs')
+      assert(typeof items[0].tx_hash === 'string', 'Expected normalized tx_hash on Bitcoin inputs')
+      assert(items[0].sender !== undefined, 'Expected normalized sender on Bitcoin inputs')
     },
   },
   {
@@ -345,7 +391,12 @@ export const TOOL_SPECS: ToolSpec[] = [
     prompt: 'Show me recent Bitcoin outputs',
     args: () => ({ dataset: 'bitcoin-mainnet', timeframe: '1h', limit: 3, response_format: 'compact' }),
     validate: (text) => {
-      expectItems(text, 'portal_query_bitcoin_outputs')
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_bitcoin_outputs')
+      expectWindowMetadata(data, 'portal_query_bitcoin_outputs')
+      assert(typeof items[0].primary_id === 'string', 'Expected normalized primary_id on Bitcoin outputs')
+      assert(items.some((item) => item.recipient !== undefined), 'Expected at least one normalized recipient on Bitcoin outputs')
     },
   },
   {
@@ -371,7 +422,10 @@ export const TOOL_SPECS: ToolSpec[] = [
     prompt: 'Show me recent Hyperliquid fills',
     args: (context) => ({ dataset: 'hyperliquid-fills', from_block: context.hlFillsHead - 100, limit: 3 }),
     validate: (text) => {
+      const data = extractJson(text)
       expectItems(text, 'portal_query_hyperliquid_fills')
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_hyperliquid_fills')
+      expectWindowMetadata(data, 'portal_query_hyperliquid_fills')
     },
   },
   {
@@ -379,7 +433,10 @@ export const TOOL_SPECS: ToolSpec[] = [
     prompt: 'Show me recent Hyperliquid order actions',
     args: (context) => ({ dataset: 'hyperliquid-replica-cmds', from_block: context.hlReplicaHead - 100, limit: 3 }),
     validate: (text) => {
+      const data = extractJson(text)
       expectItems(text, 'portal_query_hyperliquid_replica_cmds')
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on portal_query_hyperliquid_replica_cmds')
+      expectWindowMetadata(data, 'portal_query_hyperliquid_replica_cmds')
     },
   },
   {

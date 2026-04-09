@@ -10,6 +10,7 @@ import { portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { hashString53 } from '../../helpers/hash.js'
+import { buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
 
@@ -71,16 +72,21 @@ export function registerGetContractActivityTool(server: McpServer) {
       let fromBlock: number
       let toBlock: number
       const isBlockCount = /^\d+$/.test(timeframe)
+      let resolvedWindow: { range_kind: string; from_lookup?: never; to_lookup?: never } | Awaited<ReturnType<typeof resolveTimeframeOrBlocks>>
+      const head = await getBlockHead(dataset)
 
       if (isBlockCount) {
-        const head = await getBlockHead(dataset)
         const blockRange = parseInt(timeframe)
         toBlock = head.number
         fromBlock = Math.max(0, toBlock - blockRange)
+        resolvedWindow = {
+          range_kind: 'block_range',
+        }
       } else {
         const resolved = await resolveTimeframeOrBlocks({ dataset, timeframe })
         fromBlock = resolved.from_block
         toBlock = resolved.to_block
+        resolvedWindow = resolved
       }
 
       const notices: string[] = []
@@ -190,6 +196,22 @@ export function registerGetContractActivityTool(server: McpServer) {
         `Contract ${normalizedContract}: ${totalTransactions} interactions from ${uniqueCallerHashes.size} unique callers, ${totalEvents} events`,
         {
           notices,
+          freshness: buildQueryFreshness({
+            finality: 'latest',
+            headBlockNumber: head.number,
+            windowToBlock: toBlock,
+            resolvedWindow,
+          }),
+          coverage: {
+            kind: 'block_window',
+            window_complete: true,
+            result_complete: true,
+            continuation: 'none',
+            window_from_block: requestedFromBlock,
+            window_to_block: toBlock,
+            page_to_block: toBlock,
+            returned_items: totalTransactions,
+          },
           metadata: {
             dataset,
             from_block: fromBlock,
