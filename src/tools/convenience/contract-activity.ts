@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { EVENT_NAMES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
 import { portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
@@ -25,6 +26,8 @@ import { normalizeEvmAddress } from '../../helpers/validation.js'
  * - Top callers by frequency
  */
 export function registerGetContractActivityTool(server: McpServer) {
+  const FAST_MODE_BLOCK_CAP = 3000
+
   server.tool(
     'portal_get_contract_activity',
     'Analyze smart contract activity: interaction count, unique callers, event emissions, and top users over a time period.',
@@ -32,19 +35,33 @@ export function registerGetContractActivityTool(server: McpServer) {
       dataset: z.string().describe('Dataset name or alias'),
       contract_address: z.string().describe('Contract address to analyze'),
       timeframe: z
-        .enum(['1h', '24h', '7d', '1000', '5000'])
+        .string()
         .optional()
         .default('1000')
-        .describe("Analysis period: '1h'=~1 hour, '24h'=~1 day, '7d'=~1 week, or block count"),
+        .describe("Analysis period as timeframe or block count. Examples: '1h', '24h', '7d', '3d', '1000'."),
       include_events: z.boolean().optional().default(true).describe('Include event log summary'),
+      mode: z
+        .enum(['fast', 'deep'])
+        .optional()
+        .default('fast')
+        .describe('fast = recent preview with capped scan size, deep = scan the full requested window'),
     },
-    async ({ dataset, contract_address, timeframe, include_events }) => {
+    async ({ dataset, contract_address, timeframe, include_events, mode }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
-        throw new Error('portal_get_contract_activity is only for EVM chains')
+        throw createUnsupportedChainError({
+          toolName: 'portal_get_contract_activity',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm'],
+          suggestions: [
+            'Use portal_get_recent_transactions for a quick wallet-style activity preview.',
+            'Use chain-specific Solana or Bitcoin analytics tools for non-EVM datasets.',
+          ],
+        })
       }
 
       const normalizedContract = normalizeEvmAddress(contract_address)
@@ -64,6 +81,18 @@ export function registerGetContractActivityTool(server: McpServer) {
         const resolved = await resolveTimeframeOrBlocks({ dataset, timeframe })
         fromBlock = resolved.from_block
         toBlock = resolved.to_block
+      }
+
+      const notices: string[] = []
+      const requestedFromBlock = fromBlock
+      if (mode === 'fast') {
+        const requestedRange = toBlock - fromBlock + 1
+        if (requestedRange > FAST_MODE_BLOCK_CAP) {
+          fromBlock = Math.max(fromBlock, toBlock - FAST_MODE_BLOCK_CAP + 1)
+          notices.push(
+            `Fast mode analyzed the most recent ${FAST_MODE_BLOCK_CAP.toLocaleString()} blocks in the requested window for better responsiveness.`,
+          )
+        }
       }
 
       // Query 1: Transactions to contract (standard preset — no input hex bloat)
@@ -135,10 +164,12 @@ export function registerGetContractActivityTool(server: McpServer) {
       const summary = {
         contract_address: normalizedContract,
         timeframe: {
-          from_block: fromBlock,
+          from_block: requestedFromBlock,
           to_block: toBlock,
+          analyzed_from_block: fromBlock,
           description: timeframe,
         },
+        mode,
         interactions: {
           total_transactions: totalTransactions,
           unique_callers: uniqueCallerHashes.size,
@@ -158,6 +189,7 @@ export function registerGetContractActivityTool(server: McpServer) {
         summary,
         `Contract ${normalizedContract}: ${totalTransactions} interactions from ${uniqueCallerHashes.size} unique callers, ${totalEvents} events`,
         {
+          notices,
           metadata: {
             dataset,
             from_block: fromBlock,

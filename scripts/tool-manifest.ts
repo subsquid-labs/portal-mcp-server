@@ -118,10 +118,12 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'portal_block_at_timestamp',
     prompt: 'What block was Base at 24 hours ago?',
-    args: (context) => ({ dataset: 'base', timestamp: context.nowTimestamp - 24 * 3600 }),
+    args: (context) => ({ dataset: 'base', timestamp: new Date((context.nowTimestamp - 24 * 3600) * 1000).toISOString() }),
     validate: (text) => {
       const data = extractJson(text)
       assert(typeof data.block_number === 'number' && data.block_number > 0, 'Expected a block number')
+      assert(typeof data.timestamp_human === 'string', 'Expected a human-readable timestamp')
+      assert(typeof data.resolution === 'string', 'Expected exact vs estimated resolution')
     },
   },
   {
@@ -196,10 +198,12 @@ export const TOOL_SPECS: ToolSpec[] = [
     prompt: 'Show me recent transactions on Base',
     args: () => ({ dataset: 'base', timeframe: '100', limit: 3 }),
     validate: (text, context) => {
-      const items = expectItems(text, 'portal_get_recent_transactions')
+      const data = extractJson(text)
+      const items = getItems(data)
       const blockNumbers = items.map((item) => item.block_number).filter((value) => typeof value === 'number')
       assert(blockNumbers.length === items.length, 'Expected block_number in recent transaction output')
       assert(Math.max(...blockNumbers) >= context.baseHead - 5, 'Expected recent transaction preview near chain head')
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on recent transactions')
     },
   },
   {
@@ -220,6 +224,7 @@ export const TOOL_SPECS: ToolSpec[] = [
         typeof data.transactions?.items?.[0]?.block_number === 'number' || data.transactions?.items?.length === 0,
         'Expected block_number in wallet summary transactions',
       )
+      assert(data._pagination?.type === 'cursor', 'Expected cursor pagination metadata on wallet summary')
     },
   },
   {

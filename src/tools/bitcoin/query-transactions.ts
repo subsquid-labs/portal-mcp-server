@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { buildBitcoinBlockFields, buildBitcoinTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
@@ -43,7 +44,16 @@ EXAMPLES:
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'bitcoin') {
-        throw new Error('portal_query_bitcoin_transactions is only for Bitcoin chains. Use portal_query_transactions for EVM.')
+        throw createUnsupportedChainError({
+          toolName: 'portal_query_bitcoin_transactions',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['bitcoin'],
+          suggestions: [
+            'Use portal_query_transactions for EVM datasets.',
+            'Use portal_query_solana_transactions for Solana datasets.',
+          ],
+        })
       }
 
       const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({

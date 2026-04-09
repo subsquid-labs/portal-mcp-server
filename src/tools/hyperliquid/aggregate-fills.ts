@@ -226,15 +226,17 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
       }
       if (chunksFetched > 1) response.chunks_fetched = chunksFetched
       if (chunkSizeReduced) response.chunk_size_reduced = true
-      if (effectiveFrom > resolvedFromBlock) {
-        response._note = `Analyzed the most recent ${maxAggregationBlocks.toLocaleString()} blocks for performance`
-      }
+      const notices =
+        effectiveFrom > resolvedFromBlock
+          ? [`Analyzed the most recent ${maxAggregationBlocks.toLocaleString()} blocks for performance.`]
+          : undefined
 
       const coinNote = coin ? ` for ${coin.join(', ')}` : ''
       return formatResult(
         response,
         `${totalFills.toLocaleString()} fills${coinNote}: ${traders.size} traders, $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} volume`,
         {
+          notices,
           metadata: {
             dataset,
             from_block: effectiveFrom,

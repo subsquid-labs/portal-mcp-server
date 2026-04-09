@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
@@ -303,7 +304,16 @@ export function registerDecodeLogsTool(server: McpServer) {
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
-        throw new Error('portal_decode_logs is only for EVM chains')
+        throw createUnsupportedChainError({
+          toolName: 'portal_decode_logs',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm'],
+          suggestions: [
+            'Use portal_query_solana_instructions for Solana program activity.',
+            'Use portal_query_bitcoin_outputs or portal_query_bitcoin_inputs for Bitcoin activity.',
+          ],
+        })
       }
 
       const { validatedToBlock: endBlock } = await validateBlockRange(

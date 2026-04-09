@@ -5,6 +5,7 @@ import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 
@@ -46,7 +47,16 @@ export function registerGetTopContractsTool(server: McpServer) {
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
-        throw new Error('portal_get_top_contracts is only for EVM chains')
+        throw createUnsupportedChainError({
+          toolName: 'portal_get_top_contracts',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm'],
+          suggestions: [
+            'Use portal_get_transaction_density for a quick non-EVM activity overview.',
+            'Use portal_get_recent_transactions for wallet-style previews on Solana or Bitcoin.',
+          ],
+        })
       }
 
       // Get latest block

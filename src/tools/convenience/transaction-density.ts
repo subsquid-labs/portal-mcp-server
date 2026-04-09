@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatNumber } from '../../helpers/formatting.js'
@@ -34,9 +35,16 @@ export function registerGetTransactionDensityTool(server: McpServer) {
       const chainType = detectChainType(dataset)
 
       if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
-        throw new Error(
-          'portal_get_transaction_density does not support Hyperliquid. Use portal_query_hyperliquid_fills instead.',
-        )
+        throw createUnsupportedChainError({
+          toolName: 'portal_get_transaction_density',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm', 'solana', 'bitcoin'],
+          suggestions: [
+            'Use portal_query_hyperliquid_fills for Hyperliquid activity.',
+            'Use portal_hyperliquid_time_series for fills-based charts.',
+          ],
+        })
       }
 
       // Get latest block

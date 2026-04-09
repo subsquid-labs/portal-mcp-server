@@ -282,7 +282,10 @@ EXAMPLES:
         })),
       }
 
-      if (effectiveFrom > fromBlock) response._note = `Analyzed the most recent ${MAX_ANALYTICS_BLOCKS.toLocaleString()} blocks for performance`
+      const notices =
+        effectiveFrom > fromBlock
+          ? [`Analyzed the most recent ${MAX_ANALYTICS_BLOCKS.toLocaleString()} blocks for performance.`]
+          : undefined
       if (chunksFetched > 1) response._chunks_fetched = chunksFetched
       if (chunkSizeReduced) response._chunk_size_reduced = true
 
@@ -291,6 +294,7 @@ EXAMPLES:
         response,
         `Hyperliquid analytics${coinNote}: ${totalFills.toLocaleString()} fills, ${traders.size} traders, $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} volume, ${liquidationCount} liquidations`,
         {
+          notices,
           metadata: {
             dataset,
             from_block: effectiveFrom,

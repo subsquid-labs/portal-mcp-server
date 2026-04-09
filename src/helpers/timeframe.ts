@@ -5,6 +5,7 @@
 import { getBlockHead } from '../cache/datasets.js'
 import { PORTAL_URL } from '../constants/index.js'
 import { detectChainType } from './chain.js'
+import { formatTimestamp } from './formatting.js'
 import { portalFetch, portalFetchStream } from './fetch.js'
 
 export type Timeframe = '1h' | '6h' | '12h' | '24h' | '3d' | '7d' | '14d' | '30d'
@@ -49,7 +50,24 @@ const DATASET_BLOCK_TIMES: Record<string, number> = {
   'celo-': 5,
 }
 
-function estimateBlockTime(dataset: string, chainType: string): number {
+export type ParsedTimestampInput = {
+  timestamp: number
+  source: 'unix_seconds' | 'unix_milliseconds' | 'iso_datetime' | 'relative' | 'keyword'
+  normalized_input: string
+}
+
+export interface BlockAtTimestampResult extends ParsedTimestampInput {
+  block_number: number
+  dataset: string
+  resolution: 'exact' | 'estimated'
+  timestamp_human: string
+  head_block_number?: number
+  head_timestamp?: number
+  head_timestamp_human?: string
+  estimated_block_time_seconds?: number
+}
+
+export function estimateBlockTime(dataset: string, chainType: string): number {
   const lower = dataset.toLowerCase()
   for (const [prefix, blockTime] of Object.entries(DATASET_BLOCK_TIMES)) {
     if (lower.startsWith(prefix)) return blockTime
@@ -154,7 +172,7 @@ export async function timestampToBlock(dataset: string, timestamp: number): Prom
 /**
  * Get the head block's timestamp by querying Portal for the actual block data.
  */
-async function getHeadTimestamp(dataset: string, headBlock: number): Promise<number> {
+export async function getHeadTimestamp(dataset: string, headBlock: number): Promise<number> {
   const chainType = detectChainType(dataset)
 
   // Determine the query type and field key based on chain type
@@ -199,6 +217,141 @@ async function getHeadTimestamp(dataset: string, headBlock: number): Promise<num
 
   const block = (response[0] as any).header || response[0]
   return block.timestamp
+}
+
+function parseRelativeTimestamp(input: string, nowUnix: number): ParsedTimestampInput | undefined {
+  const normalized = input.trim().toLowerCase()
+
+  if (normalized === 'now') {
+    return {
+      timestamp: nowUnix,
+      source: 'keyword',
+      normalized_input: 'now',
+    }
+  }
+
+  if (normalized === 'today') {
+    const now = new Date(nowUnix * 1000)
+    const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000
+    return {
+      timestamp: today,
+      source: 'keyword',
+      normalized_input: 'today',
+    }
+  }
+
+  if (normalized === 'yesterday') {
+    const now = new Date(nowUnix * 1000)
+    const yesterday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 1000 - 86400
+    return {
+      timestamp: yesterday,
+      source: 'keyword',
+      normalized_input: 'yesterday',
+    }
+  }
+
+  const relativeMatch = normalized.match(/^(\d+)\s*([smhdw])(?:\s+ago)?$/)
+  if (!relativeMatch) {
+    return undefined
+  }
+
+  const value = parseInt(relativeMatch[1], 10)
+  const unit = relativeMatch[2]
+  const secondsPerUnit: Record<string, number> = {
+    s: 1,
+    m: 60,
+    h: 3600,
+    d: 86400,
+    w: 604800,
+  }
+
+  return {
+    timestamp: Math.max(0, nowUnix - value * secondsPerUnit[unit]),
+    source: 'relative',
+    normalized_input: `${value}${unit} ago`,
+  }
+}
+
+export function parseTimestampInput(input: string | number, nowUnix: number = Math.floor(Date.now() / 1000)): ParsedTimestampInput {
+  if (typeof input === 'number' && Number.isFinite(input)) {
+    const timestamp = input > 1_000_000_000_000 ? Math.floor(input / 1000) : Math.floor(input)
+    return {
+      timestamp,
+      source: input > 1_000_000_000_000 ? 'unix_milliseconds' : 'unix_seconds',
+      normalized_input: String(input),
+    }
+  }
+
+  const trimmed = String(input).trim()
+  if (!trimmed) {
+    throw new Error('Timestamp cannot be empty. Use a Unix timestamp, ISO datetime, or relative input like "1h ago".')
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    const numericValue = Number(trimmed)
+    if (!Number.isFinite(numericValue)) {
+      throw new Error(`Invalid numeric timestamp: ${trimmed}`)
+    }
+    const timestamp = numericValue > 1_000_000_000_000 ? Math.floor(numericValue / 1000) : Math.floor(numericValue)
+    return {
+      timestamp,
+      source: numericValue > 1_000_000_000_000 ? 'unix_milliseconds' : 'unix_seconds',
+      normalized_input: trimmed,
+    }
+  }
+
+  const relative = parseRelativeTimestamp(trimmed, nowUnix)
+  if (relative) {
+    return relative
+  }
+
+  const parsedDate = Date.parse(trimmed)
+  if (!Number.isNaN(parsedDate)) {
+    return {
+      timestamp: Math.floor(parsedDate / 1000),
+      source: 'iso_datetime',
+      normalized_input: new Date(parsedDate).toISOString(),
+    }
+  }
+
+  throw new Error(
+    `Invalid timestamp input: ${trimmed}. Use Unix seconds, Unix milliseconds, ISO datetime, or relative input like "1h ago".`,
+  )
+}
+
+export async function resolveBlockAtTimestamp(dataset: string, input: string | number): Promise<BlockAtTimestampResult> {
+  const parsed = parseTimestampInput(input)
+
+  try {
+    const blockNumber = await timestampToBlock(dataset, parsed.timestamp)
+    return {
+      ...parsed,
+      block_number: blockNumber,
+      dataset,
+      resolution: 'exact',
+      timestamp_human: formatTimestamp(parsed.timestamp),
+    }
+  } catch {
+    const head = await getBlockHead(dataset)
+    const headTimestamp = await getHeadTimestamp(dataset, head.number)
+    const chainType = detectChainType(dataset)
+    const estimatedBlockTimeSeconds = estimateBlockTime(dataset, chainType)
+    const deltaSeconds = Math.max(0, headTimestamp - parsed.timestamp)
+    const estimatedOffset = Math.round(deltaSeconds / estimatedBlockTimeSeconds)
+    const estimatedBlockNumber = parsed.timestamp >= headTimestamp ? head.number : Math.max(0, head.number - estimatedOffset)
+
+    return {
+      ...parsed,
+      block_number: estimatedBlockNumber,
+      dataset,
+      resolution: 'estimated',
+      timestamp_human: formatTimestamp(parsed.timestamp),
+      head_block_number: head.number,
+      head_timestamp: headTimestamp,
+      head_timestamp_human: formatTimestamp(headTimestamp),
+      estimated_block_time_seconds: estimatedBlockTimeSeconds,
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

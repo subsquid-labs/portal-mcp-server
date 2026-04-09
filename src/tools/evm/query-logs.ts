@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { getLogFields } from '../../helpers/field-presets.js'
 import { buildEvmLogFields, buildEvmTraceFields, buildEvmTransactionFields } from '../../helpers/fields.js'
@@ -146,7 +147,16 @@ export function registerQueryLogsTool(server: McpServer) {
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
-        throw new Error('portal_query_logs is only for EVM chains')
+        throw createUnsupportedChainError({
+          toolName: 'portal_query_logs',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm'],
+          suggestions: [
+            'Use portal_query_solana_instructions for Solana program activity.',
+            'Use portal_query_bitcoin_outputs or portal_query_bitcoin_inputs for Bitcoin UTXO activity.',
+          ],
+        })
       }
 
       // Resolve timeframe or use explicit blocks

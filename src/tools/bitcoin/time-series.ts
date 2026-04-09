@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatDuration, formatTimestamp } from '../../helpers/formatting.js'
@@ -55,7 +56,16 @@ EXAMPLES:
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'bitcoin') {
-        throw new Error('portal_bitcoin_time_series is only for Bitcoin chains. Use portal_get_time_series for EVM.')
+        throw createUnsupportedChainError({
+          toolName: 'portal_bitcoin_time_series',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['bitcoin'],
+          suggestions: [
+            'Use portal_get_time_series for EVM or Solana datasets.',
+            'Use portal_hyperliquid_time_series for Hyperliquid fills.',
+          ],
+        })
       }
 
       const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({
@@ -373,14 +383,13 @@ EXAMPLES:
         },
       }
 
-      if (headAgeWarning) {
-        summary.warning = headAgeWarning
-      }
+      const notices = headAgeWarning ? [headAgeWarning] : undefined
 
       return formatResult(
         { summary, time_series: timeSeries },
         `Bitcoin ${metric} over ${duration} in ${interval} intervals. ${timeSeries.length} data points. Avg: ${avg.toFixed(2)} ${unit}, Min: ${min.toFixed(2)} ${unit}, Max: ${max.toFixed(2)} ${unit}`,
         {
+          notices,
           metadata: {
             dataset,
             from_block: fromBlock,

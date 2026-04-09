@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset } from '../../cache/datasets.js'
 import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { formatTokenValue, getKnownTokenDecimals } from '../../helpers/conversions.js'
 import { getCoinGeckoTokenList } from '../../helpers/external-apis.js'
 import { portalFetch, portalFetchRecentRecords } from '../../helpers/fetch.js'
@@ -49,7 +50,16 @@ export function registerGetErc20TransfersTool(server: McpServer) {
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
-        throw new Error('portal_get_erc20_transfers is only for EVM chains')
+        throw createUnsupportedChainError({
+          toolName: 'portal_get_erc20_transfers',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm'],
+          suggestions: [
+            'Use portal_query_solana_instructions for Solana token program activity.',
+            'Use portal_query_bitcoin_outputs for Bitcoin value movement.',
+          ],
+        })
       }
 
       const normalizedTokens = normalizeAddresses(token_addresses, chainType)

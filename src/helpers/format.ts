@@ -8,6 +8,7 @@ export interface FormatOptions {
   maxItems?: number
   warnOnTruncation?: boolean
   notices?: string[]
+  pagination?: Record<string, unknown>
   metadata?: {
     dataset?: string
     from_block?: number
@@ -113,6 +114,9 @@ export function formatResult(
     const payloadRecord = responsePayload as Record<string, unknown>
     if (message?.trim()) {
       payloadRecord._summary = message.trim()
+    }
+    if (options?.pagination) {
+      payloadRecord._pagination = options.pagination
     }
     if (notices.length === 1) {
       payloadRecord._notice = notices[0]

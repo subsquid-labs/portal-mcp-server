@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import {
@@ -115,7 +116,16 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'solana') {
-        throw new Error('portal_query_solana_instructions is only for Solana chains')
+        throw createUnsupportedChainError({
+          toolName: 'portal_query_solana_instructions',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['solana'],
+          suggestions: [
+            'Use portal_query_transactions or portal_query_logs for EVM datasets.',
+            'Use portal_query_bitcoin_transactions for Bitcoin datasets.',
+          ],
+        })
       }
 
       // Resolve timeframe or use explicit blocks

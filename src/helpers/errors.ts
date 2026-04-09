@@ -259,6 +259,68 @@ export function createAddressFormatError(address: string): ActionableError {
   return new ActionableError(`Invalid address format: ${address}`, suggestions, { address })
 }
 
+function describeChainType(chainType: string): string {
+  switch (chainType) {
+    case 'evm':
+      return 'EVM'
+    case 'solana':
+      return 'Solana'
+    case 'bitcoin':
+      return 'Bitcoin'
+    case 'hyperliquidFills':
+      return 'Hyperliquid fills'
+    case 'hyperliquidReplicaCmds':
+      return 'Hyperliquid replica'
+    default:
+      return chainType
+  }
+}
+
+export function createUnsupportedChainError(params: {
+  toolName: string
+  dataset: string
+  actualChainType: string
+  supportedChains: string[]
+  suggestions?: string[]
+  context?: Record<string, unknown>
+}): ActionableError {
+  const { toolName, dataset, actualChainType, supportedChains, suggestions = [], context } = params
+  const supported = supportedChains.map((chain) => describeChainType(chain)).join(', ')
+
+  return new ActionableError(
+    `${toolName} does not support dataset '${dataset}' because it is a ${describeChainType(actualChainType)} dataset. Supported chain types: ${supported}.`,
+    suggestions,
+    {
+      dataset,
+      actual_chain_type: actualChainType,
+      supported_chains: supportedChains,
+      ...context,
+    },
+  )
+}
+
+export function createUnsupportedMetricError(params: {
+  toolName: string
+  metric: string
+  dataset: string
+  supportedMetrics: string[]
+  reason?: string
+  suggestions?: string[]
+}): ActionableError {
+  const { toolName, metric, dataset, supportedMetrics, reason, suggestions = [] } = params
+  return new ActionableError(
+    `${toolName} does not support metric '${metric}' for dataset '${dataset}'.${reason ? ` ${reason}` : ''}`,
+    suggestions.length > 0
+      ? suggestions
+      : [`Use one of the supported metrics instead: ${supportedMetrics.join(', ')}.`],
+    {
+      dataset,
+      metric,
+      supported_metrics: supportedMetrics,
+    },
+  )
+}
+
 /**
  * Wrap any error with actionable context
  */

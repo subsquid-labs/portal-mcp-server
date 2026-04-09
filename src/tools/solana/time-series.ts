@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatNumber } from '../../helpers/formatting.js'
 import { computeSolanaTimeSeries } from './time-series-shared.js'
@@ -38,7 +39,16 @@ EXAMPLES:
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'solana') {
-        throw new Error('portal_solana_time_series is only for Solana chains.')
+        throw createUnsupportedChainError({
+          toolName: 'portal_solana_time_series',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['solana'],
+          suggestions: [
+            'Use portal_get_time_series for EVM or Bitcoin datasets.',
+            'Use portal_hyperliquid_time_series for Hyperliquid fills.',
+          ],
+        })
       }
 
       const result = await computeSolanaTimeSeries({

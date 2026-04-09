@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError, createUnsupportedMetricError } from '../../helpers/errors.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatDuration, formatTimestamp } from '../../helpers/formatting.js'
@@ -111,32 +112,53 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         .string()
         .optional()
         .describe('Optional: Filter to specific contract address for contract-specific trends'),
+      mode: z
+        .enum(['fast', 'deep'])
+        .optional()
+        .default('deep')
+        .describe('fast = skip extra backfill scans, deep = fill the requested window more aggressively'),
     },
-    async ({ dataset, metric, interval, duration, address }) => {
+    async ({ dataset, metric, interval, duration, address, mode }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
       const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
+      const notices: string[] = []
 
       if (isHyperliquid) {
-        throw new Error(
-          'portal_get_time_series does not support Hyperliquid. Use portal_query_hyperliquid_fills instead.',
-        )
+        throw createUnsupportedChainError({
+          toolName: 'portal_get_time_series',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm', 'solana', 'bitcoin'],
+          suggestions: [
+            'Use portal_query_hyperliquid_fills for raw Hyperliquid activity.',
+            'Use portal_hyperliquid_time_series for fills-based charts.',
+          ],
+        })
       }
 
       // Gas-related metrics are EVM-only
       const gasMetrics = ['avg_gas_price', 'gas_used', 'block_utilization']
       if (gasMetrics.includes(metric) && chainType !== 'evm') {
-        throw new Error(
-          `Metric '${metric}' is EVM-only. For ${dataset}, use: transaction_count, unique_addresses.`,
-        )
+        throw createUnsupportedMetricError({
+          toolName: 'portal_get_time_series',
+          metric,
+          dataset,
+          supportedMetrics: ['transaction_count', 'unique_addresses'],
+          reason: 'Gas metrics are available only on EVM datasets.',
+        })
       }
 
       // unique_addresses requires from/to fields — not available on Bitcoin
       if (metric === 'unique_addresses' && chainType === 'bitcoin') {
-        throw new Error(
-          "Metric 'unique_addresses' is not supported for Bitcoin (UTXO model has no simple from/to). Use: transaction_count.",
-        )
+        throw createUnsupportedMetricError({
+          toolName: 'portal_get_time_series',
+          metric,
+          dataset,
+          supportedMetrics: ['transaction_count'],
+          reason: 'Bitcoin uses a UTXO model, so there is no simple from/to address set for this metric.',
+        })
       }
 
       if (chainType === 'solana' && (metric === 'transaction_count' || metric === 'unique_addresses')) {
@@ -153,6 +175,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           metric,
           interval,
           duration,
+          mode,
           total_buckets: solanaResult.time_series.length,
           expected_buckets: solanaResult.expected_buckets,
           filled_buckets: filledBuckets,
@@ -175,6 +198,9 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         }
         if (solanaResult.chunk_size_reduced) {
           summary.chunk_size_reduced = true
+        }
+        if (mode === 'fast') {
+          notices.push('Solana native metrics already use the optimized fast path, so fast and deep modes behave the same here.')
         }
 
         return formatResult(
@@ -326,7 +352,11 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
 
       sortResults(results)
 
-      while (!address && backfillAttempts < 2) {
+      if (mode === 'fast' && !address) {
+        notices.push('Fast mode skips extra backfill scans. Switch to mode="deep" if you want the tool to fill leading buckets more aggressively.')
+      }
+
+      while (mode === 'deep' && !address && backfillAttempts < 2) {
         const firstBlock = results[0]
         const lastBlock = results[results.length - 1]
         const firstResultBlockNumber = getBlockNumber(firstBlock)
@@ -501,6 +531,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         metric,
         interval,
         duration,
+        mode,
         total_buckets: timeSeries.length,
         expected_buckets: expectedBuckets,
         filled_buckets: filledBuckets,
@@ -517,11 +548,12 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         },
       }
 
-      // Add warnings
       if (headAgeWarning) {
-        summary.warning = headAgeWarning
+        notices.push(headAgeWarning)
       } else if (hasCoverageGap) {
-        summary.warning = `Available data spans only ${formatDuration(observedSpanSeconds)} of the requested ${duration}. The estimated block range may be too small for ${dataset}.`
+        notices.push(
+          `Available data spans only ${formatDuration(observedSpanSeconds)} of the requested ${duration}. The estimated block range may be too small for ${dataset}.`,
+        )
       }
 
       if (address) {
@@ -532,7 +564,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       }
 
       const resultMessage = hasCoverageGap
-        ? `WARNING: Limited coverage. Aggregated ${metric} over ${duration} in ${interval} intervals. Observed ${formatDuration(observedSpanSeconds)} of on-chain data. Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`
+        ? `Aggregated ${metric} over ${duration} in ${interval} intervals with limited coverage. Observed ${formatDuration(observedSpanSeconds)} of on-chain data. Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`
         : `Aggregated ${metric} over ${duration} in ${interval} intervals. ${timeSeries.length} data points (${filledBuckets} with data). Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`
 
       return formatResult(
@@ -542,6 +574,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         },
         resultMessage,
         {
+          notices,
           metadata: {
             dataset,
             from_block: effectiveFromBlock,

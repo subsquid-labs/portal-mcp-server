@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStream, portalFetchStreamVisit } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatDuration, formatNumber, formatPct, shortenAddress } from '../../helpers/formatting.js'
@@ -186,7 +187,16 @@ EXAMPLES:
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'solana') {
-        throw new Error('portal_solana_analytics is only for Solana chains.')
+        throw createUnsupportedChainError({
+          toolName: 'portal_solana_analytics',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['solana'],
+          suggestions: [
+            'Use portal_get_time_series for generic EVM or Bitcoin charts.',
+            'Use portal_bitcoin_analytics or EVM convenience tools for other chains.',
+          ],
+        })
       }
 
       const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({
@@ -435,11 +445,12 @@ EXAMPLES:
         }
       }
 
-      if (requestedSlots > slotsAnalyzed) {
-        response._note = `Analyzed ${slotsAnalyzed} of ${requestedSlots} requested slots (capped for performance)`
-      } else if (requestedTimeframe === '15m') {
-        response._note = 'Fast snapshot mode: default Solana analytics now uses a 15-minute window for better UX'
-      }
+      const notices =
+        requestedSlots > slotsAnalyzed
+          ? [`Analyzed ${slotsAnalyzed} of ${requestedSlots} requested slots (capped for performance).`]
+          : requestedTimeframe === '15m'
+            ? ['Fast snapshot mode: default Solana analytics now uses a 15-minute window for better UX.']
+            : undefined
       if (chunksFetched > 1) {
         response._chunks_fetched = chunksFetched
       }
@@ -463,6 +474,7 @@ EXAMPLES:
         response,
         summary,
         {
+          notices,
           metadata: {
             dataset,
             from_block: effectiveFrom,

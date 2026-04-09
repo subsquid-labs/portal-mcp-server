@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
+import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatNumber, formatBTC, formatPct, formatDuration } from '../../helpers/formatting.js'
@@ -53,7 +54,16 @@ EXAMPLES:
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'bitcoin') {
-        throw new Error('portal_bitcoin_analytics is only for Bitcoin chains.')
+        throw createUnsupportedChainError({
+          toolName: 'portal_bitcoin_analytics',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['bitcoin'],
+          suggestions: [
+            'Use portal_solana_analytics for Solana snapshots.',
+            'Use EVM convenience tools like portal_get_contract_activity for smart-contract chains.',
+          ],
+        })
       }
 
       // Default to 1h
@@ -347,15 +357,16 @@ EXAMPLES:
         response.fee_analysis = { error: 'Failed to estimate fees — try a smaller range' }
       }
 
-      const wasPartial = blockRange > maxBlocks
-      if (wasPartial) {
-        response._note = `Analyzed ${numBlocks} of ${blockRange} requested blocks (capped for performance)`
-      }
+      const notices =
+        blockRange > maxBlocks
+          ? [`Analyzed ${numBlocks} of ${blockRange} requested blocks (capped for performance).`]
+          : undefined
 
       return formatResult(
         response,
         `Bitcoin network analytics: ${numBlocks} blocks, ${totalTxs.toLocaleString()} txs, ${avgTxsPerBlock.toFixed(0)} avg txs/block, ${avgBlockTime.toFixed(0)}s avg block time, ${segwitPct.toFixed(0)}% segwit`,
         {
+          notices,
           metadata: {
             dataset,
             from_block: effectiveFrom,
