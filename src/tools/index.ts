@@ -45,10 +45,11 @@ import {
   registerAggregateHyperliquidFillsTool,
   registerHyperliquidTimeSeriesFilsTool,
   registerHyperliquidAnalyticsTool,
+  registerHyperliquidOhlcTool,
 } from './hyperliquid/index.js'
 
 // ============================================================================
-// Tool Registry — 29 tools, organized by VM
+// Tool Registry — organized by VM
 // ============================================================================
 
 export function registerAllTools(server: McpServer) {
@@ -87,10 +88,11 @@ export function registerAllTools(server: McpServer) {
   registerBitcoinAnalyticsTool(server)
   registerBitcoinTimeSeresTool(server)
 
-  // ── Hyperliquid (5) ──────────────────────────────────────────────────
+  // ── Hyperliquid (6) ──────────────────────────────────────────────────
   registerQueryHyperliquidFillsTool(server)
   registerQueryHyperliquidReplicaCmdsTool(server)
   registerAggregateHyperliquidFillsTool(server)
   registerHyperliquidTimeSeriesFilsTool(server)
   registerHyperliquidAnalyticsTool(server)
+  registerHyperliquidOhlcTool(server)
 }

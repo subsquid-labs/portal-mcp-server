@@ -458,6 +458,23 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
   },
   {
+    name: 'portal_hyperliquid_ohlc',
+    prompt: 'Show me BTC Hyperliquid candles over the last hour',
+    args: () => ({ dataset: 'hyperliquid-fills', coin: 'BTC', duration: '1h' }),
+    validate: (text) => {
+      const data = extractJson(text)
+      assert(Array.isArray(data.ohlc) && data.ohlc.length === 12, 'Expected 12 Hyperliquid OHLC candles')
+      assert(data.summary?.coin === 'BTC', 'Expected OHLC summary to include the requested coin')
+      assert(data.summary?.interval === '5m', 'Expected auto interval to resolve to 5m for 1h candles')
+      assert(data.chart?.kind === 'candlestick', 'Expected chart metadata for OHLC output')
+      expectWindowMetadata(data, 'portal_hyperliquid_ohlc')
+      assert(
+        data.ohlc.some((bucket: any) => bucket.fill_count > 0 && typeof bucket.open === 'number' && typeof bucket.close === 'number'),
+        'Expected at least one filled OHLC bucket',
+      )
+    },
+  },
+  {
     name: 'portal_hyperliquid_analytics',
     prompt: 'Give me a Hyperliquid trading snapshot',
     args: () => ({ dataset: 'hyperliquid-fills', timeframe: '1h' }),

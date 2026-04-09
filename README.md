@@ -8,7 +8,7 @@ MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperli
 MCP Client  ->  MCP Tools (this server)  ->  Portal API (portal.sqd.dev)
 ```
 
-This server provides 29 MCP tools that wrap Portal's streaming API. Each tool validates parameters, constructs a Portal request, and returns formatted results — all blockchain data comes from Portal's infrastructure.
+This server provides 30 MCP tools that wrap Portal's streaming API. Each tool validates parameters, constructs a Portal request, and returns formatted results — all blockchain data comes from Portal's infrastructure.
 
 ## Supported chains
 
@@ -63,7 +63,7 @@ This server provides 29 MCP tools that wrap Portal's streaming API. Each tool va
 | `portal_bitcoin_analytics` | Transaction stats, fee analysis, size distribution |
 | `portal_bitcoin_time_series` | Block size, fees, and transaction trends over time |
 
-### Hyperliquid (5)
+### Hyperliquid (6)
 
 | Tool | Description |
 |------|-------------|
@@ -71,6 +71,7 @@ This server provides 29 MCP tools that wrap Portal's streaming API. Each tool va
 | `portal_query_hyperliquid_replica_cmds` | Query replica commands |
 | `portal_aggregate_hyperliquid_fills` | Volume, PnL, and trader stats by coin |
 | `portal_hyperliquid_time_series` | Volume, trades, and unique traders over time |
+| `portal_hyperliquid_ohlc` | Trade OHLC candles by coin with chart-friendly auto intervals |
 | `portal_hyperliquid_analytics` | Trading volume, top coins, trader rankings |
 
 ## Time ranges

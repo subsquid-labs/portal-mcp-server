@@ -89,7 +89,8 @@ export async function visitHyperliquidFillBlocks({
         )
 
         if (processedBlocks === 0) {
-          break
+          currentFrom = chunkTo + 1
+          continue
         }
 
         chunksFetched += 1
