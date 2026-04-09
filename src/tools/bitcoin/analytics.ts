@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatNumber, formatBTC, formatPct, formatDuration } from '../../helpers/formatting.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
@@ -99,12 +99,12 @@ EXAMPLES:
         transactions: [{}],
       }
 
-      const txResults = await portalFetchStream(
+      const txResults = await portalFetchStreamRange(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         txQuery,
-        undefined,
-        0,
-        100 * 1024 * 1024,
+        {
+          maxBytes: 100 * 1024 * 1024,
+        },
       )
 
       // Compute block & transaction stats
@@ -208,12 +208,13 @@ EXAMPLES:
         }
 
         try {
-          const outputResults = await portalFetchStream(
+          const outputResults = await portalFetchStreamRange(
             `${PORTAL_URL}/datasets/${dataset}/stream`,
             outputQuery,
-            undefined,
-            outputMaxBlocks,
-            100 * 1024 * 1024,
+            {
+              maxBlocks: outputMaxBlocks,
+              maxBytes: 100 * 1024 * 1024,
+            },
           )
 
           const addresses = new Set<string>()
@@ -290,8 +291,8 @@ EXAMPLES:
         }
 
         const [inputResults, outputFeeResults] = await Promise.all([
-          portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, inputQuery, undefined, feeSampleBlocks),
-          portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, outputFeeQuery, undefined, feeSampleBlocks),
+          portalFetchStreamRange(`${PORTAL_URL}/datasets/${dataset}/stream`, inputQuery, { maxBlocks: feeSampleBlocks }),
+          portalFetchStreamRange(`${PORTAL_URL}/datasets/${dataset}/stream`, outputFeeQuery, { maxBlocks: feeSampleBlocks }),
         ])
 
         // Sum input values and output values to estimate fees.

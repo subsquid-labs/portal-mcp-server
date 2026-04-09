@@ -204,7 +204,12 @@ export function registerQueryTransactionsTool(server: McpServer) {
         transactions: [txFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        stopAfterItems: {
+          keys: ['transactions'],
+          limit,
+        },
+      })
 
       const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
 

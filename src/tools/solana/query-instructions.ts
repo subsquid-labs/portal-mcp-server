@@ -133,9 +133,10 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         finalized_only,
       )
 
+      const slotRange = endBlock - resolvedFromBlock
       const hasFilters = !!(program_id || d1 || d2 || d4 || d8 || a0 || mentions_account || transaction_fee_payer)
       const validation = validateSolanaQuerySize({
-        slotRange: endBlock - resolvedFromBlock,
+        slotRange,
         hasFilters,
         queryType: 'instructions',
         limit,
@@ -202,11 +203,20 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         instructions: [instructionFilter],
       }
 
-      // Solana slots are extremely dense — cap maxBlocks to prevent OOM.
-      // Unfiltered: 5 slots is enough for limit results. Filtered: allow more.
-      const maxBlocks = hasFilters ? 0 : Math.max(5, Math.ceil(limit / 50))
+      // Solana slots are extremely dense. Keep both filtered and unfiltered queries capped,
+      // then stop reading as soon as we've accumulated enough instructions.
+      const maxBlocks = Math.min(
+        slotRange + 1,
+        hasFilters ? Math.max(25, Math.ceil(limit / 2)) : Math.max(5, Math.ceil(limit / 50)),
+      )
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        maxBlocks,
+        stopAfterItems: {
+          keys: ['instructions'],
+          limit,
+        },
+      })
 
       const allInstructions = results
         .flatMap((block: unknown) => (block as { instructions?: unknown[] }).instructions || [])

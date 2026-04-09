@@ -31,6 +31,7 @@ const BLOCK_TIME_ESTIMATES: Record<string, number> = {
  */
 const DATASET_BLOCK_TIMES: Record<string, number> = {
   'base-': 2,
+  'monad-': 0.4,
   'optimism-': 2,
   'arbitrum-': 0.25,
   'polygon-': 2,

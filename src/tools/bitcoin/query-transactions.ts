@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { buildBitcoinBlockFields, buildBitcoinTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
@@ -74,7 +74,14 @@ EXAMPLES:
       // Cap blocks to prevent OOM — Bitcoin blocks are very dense (~4k txs each)
       const blockRange = endBlock - resolvedFromBlock
       const maxBlocks = Math.min(blockRange, Math.max(20, Math.ceil(limit / 100)))
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
+      const results = await portalFetchStreamRange(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        maxBlocks,
+        maxBytes: 100 * 1024 * 1024,
+        stopAfterItems: {
+          keys: ['transactions'],
+          limit,
+        },
+      })
 
       const allTxs = results.flatMap(
         (block: unknown) => (block as { transactions?: unknown[] }).transactions || [],

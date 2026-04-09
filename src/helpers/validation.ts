@@ -203,7 +203,7 @@ Even with filters, this exceeds the maximum safe range of ${maximum.toLocaleStri
 export interface SolanaQueryValidationOptions {
   slotRange: number
   hasFilters: boolean
-  queryType: 'instructions' | 'token_balances' | 'balances' | 'logs' | 'rewards'
+  queryType: 'transactions' | 'instructions' | 'token_balances' | 'balances' | 'logs' | 'rewards'
   limit: number
 }
 
@@ -213,6 +213,7 @@ export interface SolanaQueryValidationOptions {
  * These limits prevent OOM crashes from oversized NDJSON responses.
  */
 const SOLANA_MAXIMUM_RANGES = {
+  transactions: { filtered: 1000, unfiltered: 25 },
   instructions: { filtered: 1000, unfiltered: 10 },
   token_balances: { filtered: 1000, unfiltered: 10 },
   balances: { filtered: 1000, unfiltered: 10 },
@@ -224,17 +225,19 @@ export function validateSolanaQuerySize(options: SolanaQueryValidationOptions): 
   const { slotRange, hasFilters, queryType, limit } = options
   const maximum = hasFilters ? SOLANA_MAXIMUM_RANGES[queryType].filtered : SOLANA_MAXIMUM_RANGES[queryType].unfiltered
 
-  // Small limit bypass: streaming safety net (maxBlocks/maxBytes) prevents crashes
-  if (limit <= 100) {
-    return { valid: true }
-  }
-
   if (slotRange > maximum) {
     return {
       valid: false,
       error: `Query too large (${slotRange.toLocaleString()} slots${hasFilters ? '' : ' unfiltered'}). ` +
         `Solana slots are data-dense — max safe range is ${maximum.toLocaleString()} slots. ` +
-        `Reduce range or add filters (program_id, account, etc.) or set limit <= 100.`,
+        `Reduce range or add filters (program_id, account, etc.).`,
+    }
+  }
+
+  if (limit <= 100 && slotRange > Math.max(5, Math.floor(maximum / 2))) {
+    return {
+      valid: true,
+      warning: `Large Solana range (${slotRange.toLocaleString()} slots). Results are capped by limit=${limit}, but the query may still be heavy.`,
     }
   }
 

@@ -111,7 +111,12 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         transactions: [{ from: [normalizedAddress] }, { to: [normalizedAddress] }],
       }
 
-      const txResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery)
+      const txResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery, {
+        stopAfterItems: {
+          keys: ['transactions'],
+          limit: limit_per_type,
+        },
+      })
 
       const transactions = txResults
         .flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
@@ -142,7 +147,12 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           ],
         }
 
-        const tokenResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, tokenQuery)
+        const tokenResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, tokenQuery, {
+          stopAfterItems: {
+            keys: ['logs'],
+            limit: limit_per_type,
+          },
+        })
 
         tokenTransfers = tokenResults
           .flatMap((block: unknown) => {
@@ -221,7 +231,12 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           ],
         }
 
-        const nftResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, nftQuery)
+        const nftResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, nftQuery, {
+          stopAfterItems: {
+            keys: ['logs'],
+            limit: limit_per_type,
+          },
+        })
 
         nftTransfers = nftResults
           .flatMap((block: unknown) => {
@@ -283,18 +298,18 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           : null,
       }
 
-      // Add warning if we hit limits
+      // Add an informational note if we hit preview limits.
       if (hitTxLimit || hitTokenLimit || hitNftLimit) {
         const limitedItems = []
         if (hitTxLimit) limitedItems.push('transactions')
         if (hitTokenLimit) limitedItems.push('token transfers')
         if (hitNftLimit) limitedItems.push('NFT transfers')
-        summary.warning = `Results limited: ${limitedItems.join(', ')} reached the ${limit_per_type} item limit. There may be more data available.`
+        summary.notice = `Showing the first ${limit_per_type} ${limitedItems.join(', ')}. Increase limit_per_type to fetch more activity.`
       }
 
       const message =
         hitTxLimit || hitTokenLimit || hitNftLimit
-          ? `WARNING: Partial results (limit reached). Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers`
+          ? `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers. Showing a preview capped by limit_per_type=${limit_per_type}.`
           : `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers`
 
       return formatResult(summary, message, {

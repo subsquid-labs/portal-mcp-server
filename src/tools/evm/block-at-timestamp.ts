@@ -13,7 +13,7 @@ import { timestampToBlock } from '../../helpers/timeframe.js'
 export function registerBlockAtTimestampTool(server: McpServer) {
   server.tool(
     'portal_block_at_timestamp',
-    'Find the block number at a specific timestamp (EVM only)',
+    'Find the block or slot number at a specific timestamp',
     {
       dataset: z.string().describe('Dataset name or alias'),
       timestamp: z.number().describe('Unix timestamp in seconds'),
@@ -22,8 +22,8 @@ export function registerBlockAtTimestampTool(server: McpServer) {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
-      if (chainType !== 'evm') {
-        throw new Error('Block at timestamp is only supported for EVM chains')
+      if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
+        throw new Error('portal_block_at_timestamp is not supported for Hyperliquid fill or replica datasets')
       }
 
       const blockNumber = await timestampToBlock(dataset, timestamp)

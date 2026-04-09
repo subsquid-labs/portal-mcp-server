@@ -99,11 +99,12 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         finalized_only,
       )
 
+      const slotRange = endBlock - resolvedFromBlock
       const hasFilters = !!(fee_payer || mentions_account)
       const validation = validateSolanaQuerySize({
-        slotRange: endBlock - resolvedFromBlock,
+        slotRange,
         hasFilters,
-        queryType: 'instructions', // transactions are similarly dense
+        queryType: 'transactions',
         limit,
       })
       if (!validation.valid) {
@@ -149,10 +150,18 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         query.rewards = [{}]
       }
 
-      // Solana slots are extremely dense — cap maxBlocks to prevent OOM.
-      const maxBlocks = hasFilters ? 0 : Math.max(5, Math.ceil(limit / 50))
+      const maxBlocks = Math.min(
+        slotRange + 1,
+        hasFilters ? Math.max(25, Math.ceil(limit / 2)) : Math.max(5, Math.ceil(limit / 50)),
+      )
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        maxBlocks,
+        stopAfterItems: {
+          keys: ['transactions'],
+          limit,
+        },
+      })
 
       const allTxs = results
         .flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])

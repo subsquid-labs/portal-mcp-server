@@ -189,7 +189,12 @@ export function registerQueryLogsTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        stopAfterItems: {
+          keys: ['logs'],
+          limit,
+        },
+      })
 
       const allLogs = results.flatMap((block: unknown) => (block as { logs?: unknown[] }).logs || [])
 

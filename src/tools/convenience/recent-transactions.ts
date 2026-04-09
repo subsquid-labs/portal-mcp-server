@@ -126,8 +126,13 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
       const results = await portalFetchStream(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         query,
-        undefined,
-        hasFilters ? 0 : maxBlocksNeeded,
+        {
+          maxBlocks: hasFilters ? 0 : maxBlocksNeeded,
+          stopAfterItems: {
+            keys: ['transactions'],
+            limit,
+          },
+        },
       )
 
       const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
@@ -189,8 +194,13 @@ async function queryBitcoinRecent(
   const results = await portalFetchStream(
     `${PORTAL_URL}/datasets/${dataset}/stream`,
     query,
-    undefined,
-    maxBlocksNeeded,
+    {
+      maxBlocks: maxBlocksNeeded,
+      stopAfterItems: {
+        keys: ['transactions'],
+        limit,
+      },
+    },
   )
 
   const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
@@ -256,8 +266,13 @@ async function querySolanaRecent(
   const results = await portalFetchStream(
     `${PORTAL_URL}/datasets/${dataset}/stream`,
     query,
-    undefined,
-    hasFilters ? 0 : maxBlocksNeeded,
+    {
+      maxBlocks: hasFilters ? 0 : maxBlocksNeeded,
+      stopAfterItems: {
+        keys: ['transactions'],
+        limit,
+      },
+    },
   )
 
   const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])

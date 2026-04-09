@@ -112,11 +112,11 @@ EXAMPLES:
 
       const buckets = new Map<number, BucketData>()
 
-      function getOrCreateBucket(idx: number): BucketData {
-        let b = buckets.get(idx)
+      function getOrCreateBucket(bucketTimestamp: number): BucketData {
+        let b = buckets.get(bucketTimestamp)
         if (!b) {
           b = { fills: 0, volume: 0, traders: new Set(), pnl: 0, liqVolume: 0, byCoin: new Map() }
-          buckets.set(idx, b)
+          buckets.set(bucketTimestamp, b)
         }
         return b
       }
@@ -136,13 +136,9 @@ EXAMPLES:
       const totalBlockRange = endBlock - fromBlock
       const chunks = Math.ceil(totalBlockRange / CHUNK_SIZE)
 
-      // We calculate bucket index from the start of the time range.
-      // Use block timestamps directly — the first fill's timestamp anchors bucket 0.
-      let startTimestamp = 0
+      let latestTimestamp = 0
       let fillCount = 0
 
-      // First chunk: discover startTimestamp, then process
-      // Subsequent chunks: just process
       for (let chunkIdx = 0; chunkIdx < chunks; chunkIdx++) {
         const chunkFrom = fromBlock + chunkIdx * CHUNK_SIZE
         const chunkTo = Math.min(chunkFrom + CHUNK_SIZE, endBlock)
@@ -177,15 +173,10 @@ EXAMPLES:
             const ts = toSeconds(fill.time || block.header?.timestamp || 0)
             if (!ts) continue
 
-            // Anchor startTimestamp from the very first fill
-            if (startTimestamp === 0) startTimestamp = ts
-
+            latestTimestamp = Math.max(latestTimestamp, ts)
             fillCount++
-            const elapsed = ts - startTimestamp
-            const bucketIndex = Math.floor(elapsed / intervalSeconds)
-            if (bucketIndex >= expectedBuckets || bucketIndex < 0) continue
-
-            const bucket = getOrCreateBucket(bucketIndex)
+            const bucketTimestamp = Math.floor(ts / intervalSeconds) * intervalSeconds
+            const bucket = getOrCreateBucket(bucketTimestamp)
             const notional = (fill.px || 0) * (fill.sz || 0)
             const isLiquidation =
               fill.dir === 'Short > Long' || fill.dir === 'Long > Short'
@@ -214,6 +205,9 @@ EXAMPLES:
         throw new Error('No fills found for the specified filters')
       }
 
+      const seriesEndExclusive = Math.floor(latestTimestamp / intervalSeconds) * intervalSeconds + intervalSeconds
+      const seriesStartTimestamp = seriesEndExclusive - durationSeconds
+
       // Helper to extract metric value
       function getMetricValue(data: { fills: number; volume: number; traders: Set<string>; pnl: number; liqVolume: number }): number {
         switch (metric) {
@@ -226,48 +220,34 @@ EXAMPLES:
         }
       }
 
-      // Build time series
-      let timeSeries = Array.from(buckets.entries())
-        .map(([bucketIndex, data]) => {
-          const bucketTimestamp = startTimestamp + bucketIndex * intervalSeconds
+      const timeSeries = Array.from({ length: expectedBuckets }, (_, bucketIndex) => {
+        const bucketTimestamp = seriesStartTimestamp + bucketIndex * intervalSeconds
+        const data = buckets.get(bucketTimestamp)
 
-          const entry: any = {
-            bucket_index: bucketIndex,
-            timestamp: bucketTimestamp,
-            timestamp_human: formatTimestamp(bucketTimestamp),
-            fills_in_bucket: data.fills,
-            value: parseFloat(getMetricValue(data).toFixed(2)),
-          }
-
-          // Add per-coin breakdown
-          if (group_by === 'coin') {
-            const breakdown: Record<string, number> = {}
-            // Ensure all top coins present
-            ;[...TOP_COINS, 'Others'].forEach((c) => {
-              const cd = data.byCoin.get(c)
-              breakdown[c] = cd ? parseFloat(getMetricValue(cd).toFixed(2)) : 0
-            })
-            entry.by_coin = breakdown
-          }
-
-          return entry
-        })
-        .sort((a, b) => a.bucket_index - b.bucket_index)
-
-      // Trim incomplete last bucket
-      if (timeSeries.length > 2) {
-        const fillCounts = timeSeries.slice(0, -1).map((t) => t.fills_in_bucket)
-        const sorted = [...fillCounts].sort((a, b) => a - b)
-        const median = sorted[Math.floor(sorted.length / 2)]
-        const last = timeSeries[timeSeries.length - 1]
-        if (last.fills_in_bucket < median * 0.3) {
-          timeSeries = timeSeries.slice(0, -1)
+        const entry: any = {
+          bucket_index: bucketIndex,
+          timestamp: bucketTimestamp,
+          timestamp_human: formatTimestamp(bucketTimestamp),
+          fills_in_bucket: data?.fills ?? 0,
+          value: parseFloat((data ? getMetricValue(data) : 0).toFixed(2)),
         }
-      }
+
+        if (group_by === 'coin') {
+          const breakdown: Record<string, number> = {}
+          ;[...TOP_COINS, 'Others'].forEach((c) => {
+            const coinData = data?.byCoin.get(c)
+            breakdown[c] = coinData ? parseFloat(getMetricValue(coinData).toFixed(2)) : 0
+          })
+          entry.by_coin = breakdown
+        }
+
+        return entry
+      })
 
       // Summary stats
       const values = timeSeries.map((t) => t.value)
       const avg = values.length > 0 ? values.reduce((sum, v) => sum + v, 0) / values.length : 0
+      const totalFillsInSeries = timeSeries.reduce((sum, bucket) => sum + bucket.fills_in_bucket, 0)
       let min = Infinity, max = -Infinity
       values.forEach((v) => { if (v < min) min = v; if (v > max) max = v })
       if (!isFinite(min)) min = 0
@@ -280,9 +260,11 @@ EXAMPLES:
         duration,
         total_buckets: timeSeries.length,
         expected_buckets: expectedBuckets,
-        total_fills: fillCount,
+        total_fills: totalFillsInSeries,
         from_block: fromBlock,
         to_block: endBlock,
+        latest_fill_timestamp: latestTimestamp,
+        latest_fill_timestamp_human: formatTimestamp(latestTimestamp),
         statistics: {
           avg: parseFloat(avg.toFixed(2)),
           min: parseFloat(min.toFixed(2)),

@@ -6,7 +6,7 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { getBlockFields } from '../../helpers/field-presets.js'
 import { portalFetchStream } from '../../helpers/fetch.js'
-import { buildEvmBlockFields } from '../../helpers/fields.js'
+import { buildBitcoinBlockFields, buildEvmBlockFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { hexToNumber, weiToGwei } from '../../helpers/formatting.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
@@ -18,7 +18,7 @@ import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 export function registerQueryBlocksTool(server: McpServer) {
   server.tool(
     'portal_query_blocks',
-    'Query block data from an EVM dataset',
+    'Query recent block data from EVM, Solana, or Bitcoin datasets',
     {
       dataset: z.string().describe('Dataset name or alias'),
       timeframe: z
@@ -43,7 +43,7 @@ export function registerQueryBlocksTool(server: McpServer) {
         .optional()
         .default('standard')
         .describe(
-          "Field preset: 'minimal' (number+timestamp+gas, smallest), 'standard' (+hash+miner+size), 'full' (all fields including parentHash, stateRoot, mixHash, etc.)",
+          "Field preset for EVM datasets: 'minimal' (number+timestamp+gas), 'standard' (+hash+miner+size), 'full' (all block fields). Ignored for Solana/Bitcoin.",
         ),
     },
     async ({ dataset, timeframe, from_block, to_block, limit, include_l2_fields, finalized_only, field_preset }) => {
@@ -51,8 +51,8 @@ export function registerQueryBlocksTool(server: McpServer) {
       dataset = await resolveDataset(dataset)
       const chainType = detectChainType(dataset)
 
-      if (chainType !== 'evm') {
-        throw new Error('portal_query_blocks is only for EVM chains. Use portal_query_solana_instructions for Solana.')
+      if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
+        throw new Error('portal_query_blocks supports EVM, Solana, and Bitcoin datasets. Hyperliquid datasets do not expose block metadata through this tool.')
       }
 
       // Resolve timeframe or use explicit blocks
@@ -69,17 +69,26 @@ export function registerQueryBlocksTool(server: McpServer) {
         resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
-      const endBlock = Math.min(resolvedFromBlock + limit!, validatedToBlock)
-      const includeL2 = include_l2_fields || isL2Chain(dataset)
+      const endBlock = Math.min(resolvedFromBlock + limit! - 1, validatedToBlock)
+      const includeL2 = chainType === 'evm' && (include_l2_fields || isL2Chain(dataset))
 
-      // Use field preset for compact responses, fall back to full builder for 'full'
       const blockFields =
-        field_preset === 'full'
-          ? buildEvmBlockFields(includeL2)
-          : { ...getBlockFields(field_preset), ...(includeL2 ? { l1BlockNumber: true } : {}) }
+        chainType === 'evm'
+          ? field_preset === 'full'
+            ? buildEvmBlockFields(includeL2)
+            : { ...getBlockFields(field_preset), ...(includeL2 ? { l1BlockNumber: true } : {}) }
+          : chainType === 'bitcoin'
+            ? buildBitcoinBlockFields()
+            : {
+                number: true,
+                hash: true,
+                timestamp: true,
+              }
+
+      const queryType = chainType === 'bitcoin' ? 'bitcoin' : chainType === 'solana' ? 'solana' : 'evm'
 
       const query = {
-        type: 'evm',
+        type: queryType,
         fromBlock: resolvedFromBlock,
         toBlock: endBlock,
         fields: {
@@ -90,30 +99,32 @@ export function registerQueryBlocksTool(server: McpServer) {
 
       const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
-      // Convert hex values to human-readable numbers
-      const formatted = results.map((block: any) => {
-        const header = block.header || block
-        if (header.gasUsed && typeof header.gasUsed === 'string') {
-          header.gasUsed = hexToNumber(header.gasUsed)
-        }
-        if (header.gasLimit && typeof header.gasLimit === 'string') {
-          header.gasLimit = hexToNumber(header.gasLimit)
-        }
-        if (header.baseFeePerGas && typeof header.baseFeePerGas === 'string') {
-          header.baseFeePerGas_gwei = weiToGwei(header.baseFeePerGas)
-          delete header.baseFeePerGas
-        }
-        if (header.size && typeof header.size === 'string') {
-          header.size = hexToNumber(header.size)
-        }
-        if (header.difficulty && typeof header.difficulty === 'string') {
-          header.difficulty = hexToNumber(header.difficulty)
-        }
-        if (header.totalDifficulty && typeof header.totalDifficulty === 'string') {
-          header.totalDifficulty = hexToNumber(header.totalDifficulty)
-        }
-        return block
-      })
+      const formatted =
+        chainType !== 'evm'
+          ? results
+          : results.map((block: any) => {
+              const header = block.header || block
+              if (header.gasUsed && typeof header.gasUsed === 'string') {
+                header.gasUsed = hexToNumber(header.gasUsed)
+              }
+              if (header.gasLimit && typeof header.gasLimit === 'string') {
+                header.gasLimit = hexToNumber(header.gasLimit)
+              }
+              if (header.baseFeePerGas && typeof header.baseFeePerGas === 'string') {
+                header.baseFeePerGas_gwei = weiToGwei(header.baseFeePerGas)
+                delete header.baseFeePerGas
+              }
+              if (header.size && typeof header.size === 'string') {
+                header.size = hexToNumber(header.size)
+              }
+              if (header.difficulty && typeof header.difficulty === 'string') {
+                header.difficulty = hexToNumber(header.difficulty)
+              }
+              if (header.totalDifficulty && typeof header.totalDifficulty === 'string') {
+                header.totalDifficulty = hexToNumber(header.totalDifficulty)
+              }
+              return block
+            })
 
       return formatResult(formatted, `Retrieved ${formatted.length} blocks`, {
         metadata: {

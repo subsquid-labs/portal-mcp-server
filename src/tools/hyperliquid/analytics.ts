@@ -18,6 +18,9 @@ function toSeconds(ts: number): number {
 }
 
 const TOP_COINS = ['BTC', 'ETH', 'SOL', 'HYPE']
+const MAX_VOLUME_COINS = 12
+const MAX_TOP_TRADERS = 8
+const MAX_TOP_PNL = 5
 
 export function registerHyperliquidAnalyticsTool(server: McpServer) {
   server.tool(
@@ -198,7 +201,7 @@ EXAMPLES:
           liquidation_volume_usd: parseFloat(d.liqVolume.toFixed(2)),
         }))
         .sort((a, b) => b.volume_usd - a.volume_usd)
-        .slice(0, 30)
+        .slice(0, MAX_VOLUME_COINS)
 
       // Top traders by volume
       const topTraders = Array.from(traderData.entries())
@@ -210,18 +213,18 @@ EXAMPLES:
           coins_traded: d.coins.size,
         }))
         .sort((a, b) => b.volume_usd - a.volume_usd)
-        .slice(0, 20)
+        .slice(0, MAX_TOP_TRADERS)
 
       // Top PnL winners & losers
       const topWinners = Array.from(traderData.entries())
         .map(([user, d]) => ({ user, realized_pnl: parseFloat(d.pnl.toFixed(2)), volume_usd: parseFloat(d.volume.toFixed(2)) }))
         .sort((a, b) => b.realized_pnl - a.realized_pnl)
-        .slice(0, 10)
+        .slice(0, MAX_TOP_PNL)
 
       const topLosers = Array.from(traderData.entries())
         .map(([user, d]) => ({ user, realized_pnl: parseFloat(d.pnl.toFixed(2)), volume_usd: parseFloat(d.volume.toFixed(2)) }))
         .sort((a, b) => a.realized_pnl - b.realized_pnl)
-        .slice(0, 10)
+        .slice(0, MAX_TOP_PNL)
 
       const openLongs = dirCounts['Open Long'] || 0
       const openShorts = dirCounts['Open Short'] || 0

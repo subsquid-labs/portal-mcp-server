@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatDuration, formatTimestamp } from '../../helpers/formatting.js'
 import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
@@ -92,12 +92,12 @@ EXAMPLES:
         transactions: [{}],
       }
 
-      const txResults = await portalFetchStream(
+      const txResults = await portalFetchStreamRange(
         `${PORTAL_URL}/datasets/${dataset}/stream`,
         txQuery,
-        undefined,
-        0,
-        100 * 1024 * 1024,
+        {
+          maxBytes: 100 * 1024 * 1024,
+        },
       )
 
       if (txResults.length === 0) {
@@ -141,12 +141,12 @@ EXAMPLES:
           outputs: [{}],
         }
 
-        const outputResults = await portalFetchStream(
+        const outputResults = await portalFetchStreamRange(
           `${PORTAL_URL}/datasets/${dataset}/stream`,
           outputQuery,
-          undefined,
-          0,
-          100 * 1024 * 1024,
+          {
+            maxBytes: 100 * 1024 * 1024,
+          },
         )
 
         outputsByBlock = new Map()
@@ -165,7 +165,7 @@ EXAMPLES:
         // Need both inputs and outputs to compute fees = sum(non-coinbase inputs) - sum(non-coinbase outputs)
         // Coinbase (transactionIndex 0) has no real inputs and outputs include block reward
         const [inputResults, outputFeeResults] = await Promise.all([
-          portalFetchStream(
+          portalFetchStreamRange(
             `${PORTAL_URL}/datasets/${dataset}/stream`,
             {
               type: 'bitcoin',
@@ -177,11 +177,11 @@ EXAMPLES:
               },
               inputs: [{}],
             },
-            undefined,
-            0,
-            100 * 1024 * 1024,
+            {
+              maxBytes: 100 * 1024 * 1024,
+            },
           ),
-          portalFetchStream(
+          portalFetchStreamRange(
             `${PORTAL_URL}/datasets/${dataset}/stream`,
             {
               type: 'bitcoin',
@@ -193,9 +193,9 @@ EXAMPLES:
               },
               outputs: [{}],
             },
-            undefined,
-            0,
-            100 * 1024 * 1024,
+            {
+              maxBytes: 100 * 1024 * 1024,
+            },
           ),
         ])
 

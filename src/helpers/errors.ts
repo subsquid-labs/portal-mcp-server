@@ -105,7 +105,7 @@ export function parsePortalError(
       if (datasetMatch) {
         suggestions.push(`Dataset '${datasetMatch[1]}' not found or not available`)
         suggestions.push('Use portal_list_datasets to see available datasets')
-        suggestions.push('Use portal_search_datasets to find datasets by chain name')
+        suggestions.push("Use portal_list_datasets with query: 'ethereum', 'base', etc. to find datasets by chain name")
       }
     } else {
       suggestions.push('Verify the dataset name is correct')
@@ -165,8 +165,8 @@ export function createTimeoutError(timeout: number, context?: Record<string, unk
     `Request timed out after ${timeout}ms`,
     'Try reducing the block range (query fewer blocks)',
     'Add more specific filters (addresses, topics) to reduce result size',
-    'For large queries, use portal_query_paginated instead',
-    'Increase timeout using the timeout_ms parameter',
+    'Split large queries into smaller block-range chunks',
+    'Use a lower timeframe or explicit from_block/to_block window',
   ]
 
   return new ActionableError(`Request timeout after ${timeout}ms`, suggestions, context)
@@ -183,7 +183,7 @@ export function createBlockRangeError(fromBlock: number, toBlock: number, reason
     suggestions.push(`Block range is very large (${range.toLocaleString()} blocks)`)
     suggestions.push('Reduce range to < 10,000 blocks for logs queries')
     suggestions.push('Reduce range to < 5,000 blocks for traces queries')
-    suggestions.push('Use portal_query_paginated for large ranges')
+    suggestions.push('Split the request into multiple smaller block ranges')
   } else if (range > 10000) {
     suggestions.push(`Block range (${range.toLocaleString()} blocks) may be slow`)
     suggestions.push('Consider reducing to < 10,000 blocks for better performance')
@@ -223,7 +223,7 @@ export function createDatasetError(dataset: string, availableCount: number): Act
   const suggestions = [
     `Dataset '${dataset}' not found`,
     `Use portal_list_datasets to see all ${availableCount} available datasets`,
-    "Use portal_search_datasets to search by chain name (e.g., 'ethereum', 'base')",
+    "Use portal_list_datasets with query='ethereum' or query='base' to search by chain name",
     "Common aliases: 'ethereum', 'polygon', 'base', 'arbitrum', 'optimism'",
   ]
 

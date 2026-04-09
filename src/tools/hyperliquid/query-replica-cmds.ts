@@ -97,7 +97,14 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
       const hasFilters = !!(action_type || user || vault_address || status)
       const blockRange = endBlock - resolvedFromBlock
       const maxBlocks = hasFilters ? 0 : Math.min(blockRange, 500000)
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        maxBlocks,
+        maxBytes: 100 * 1024 * 1024,
+        stopAfterItems: {
+          keys: ['actions'],
+          limit,
+        },
+      })
 
       const allActions = results
         .flatMap((block: unknown) => {

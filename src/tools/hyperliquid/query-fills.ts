@@ -129,7 +129,14 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       const hasFilters = !!(user || coin || dir || builder || cloid)
       const blockRange = endBlock - resolvedFromBlock
       const maxBlocks = hasFilters ? 0 : Math.min(blockRange, Math.max(5000, limit * 100))
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, undefined, maxBlocks, 100 * 1024 * 1024)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        maxBlocks,
+        maxBytes: 100 * 1024 * 1024,
+        stopAfterItems: {
+          keys: ['fills'],
+          limit,
+        },
+      })
 
       const allFills = results
         .flatMap((block: unknown) => {

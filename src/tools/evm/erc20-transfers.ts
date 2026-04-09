@@ -32,7 +32,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
         .boolean()
         .optional()
         .default(false)
-        .describe('Include token metadata (symbol, decimals) inline. Avoids separate portal_get_token_info calls.'),
+        .describe('Include token metadata (symbol, decimals) inline. Avoids separate token metadata lookups.'),
     },
     async ({
       dataset,
@@ -81,7 +81,12 @@ export function registerGetErc20TransfersTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        stopAfterItems: {
+          keys: ['logs'],
+          limit,
+        },
+      })
 
       const allTransfers = results.flatMap((block: unknown) => {
         const b = block as {
