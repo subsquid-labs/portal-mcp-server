@@ -5,7 +5,7 @@ import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 
 // ============================================================================
@@ -69,16 +69,20 @@ export function registerGetTopContractsTool(server: McpServer) {
         transactions: [{}], // Get all transactions
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
-
       // Count transactions per contract
       const contractCounts: Map<string, { count: number; samples: string[] }> = new Map()
       let totalTxs = 0
+      await portalFetchStreamRangeVisit(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        onRecord: (record) => {
+          const transactions = (record as {
+            transactions?: Array<{ to?: string; hash?: string }>
+          }).transactions || []
 
-      results.forEach((block: any) => {
-        block.transactions?.forEach((tx: any) => {
-          if (tx.to) {
-            // Only count contract calls (to != null)
+          transactions.forEach((tx) => {
+            if (!tx.to) {
+              return
+            }
+
             const address = tx.to.toLowerCase()
             totalTxs++
 
@@ -89,12 +93,11 @@ export function registerGetTopContractsTool(server: McpServer) {
             const entry = contractCounts.get(address)!
             entry.count++
 
-            // Store sample transaction hashes (up to 5)
-            if (include_details && entry.samples.length < 5) {
+            if (include_details && tx.hash && entry.samples.length < 5) {
               entry.samples.push(tx.hash)
             }
-          }
-        })
+          })
+        },
       })
 
       // Convert to array and sort by transaction count
@@ -118,7 +121,7 @@ export function registerGetTopContractsTool(server: McpServer) {
       const summary = {
         total_transactions: totalTxs,
         unique_contracts: contractCounts.size,
-        blocks_analyzed: results.length,
+        blocks_analyzed: latestBlock - fromBlock + 1,
         from_block: fromBlock,
         to_block: latestBlock,
         top_contract: sortedContracts[0]?.address,
@@ -130,7 +133,7 @@ export function registerGetTopContractsTool(server: McpServer) {
           summary,
           top_contracts: sortedContracts,
         },
-        `Analyzed ${totalTxs.toLocaleString()} transactions across ${results.length} blocks. Top contract: ${sortedContracts[0]?.address} (${sortedContracts[0]?.transaction_count} txs, ${sortedContracts[0]?.percentage}%)`,
+        `Analyzed ${totalTxs.toLocaleString()} transactions across ${latestBlock - fromBlock + 1} blocks. Top contract: ${sortedContracts[0]?.address} (${sortedContracts[0]?.transaction_count} txs, ${sortedContracts[0]?.percentage}%)`,
         {
           metadata: {
             dataset,

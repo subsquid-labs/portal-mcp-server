@@ -7,6 +7,7 @@ const MAX_RESPONSE_LENGTH = 50_000 // 50KB - keeps responses within MCP client c
 export interface FormatOptions {
   maxItems?: number
   warnOnTruncation?: boolean
+  notices?: string[]
   metadata?: {
     dataset?: string
     from_block?: number
@@ -72,8 +73,17 @@ export function formatResult(
     }
   }
 
+  const notices = [...(options?.notices || [])]
+  if (truncated && (options?.warnOnTruncation ?? true)) {
+    notices.push(
+      `Results truncated: showing ${Array.isArray(dataToFormat) ? (dataToFormat as unknown[]).length : 0} of ${originalCount} items.`,
+    )
+  }
+
   // Attach metadata
   const metadata = options?.metadata
+  let responsePayload: unknown = dataToFormat
+
   if (metadata) {
     const meta: ResponseMetadata = {}
     if (metadata.dataset) meta.dataset = metadata.dataset
@@ -86,29 +96,45 @@ export function formatResult(
       if (truncated) meta.has_more = true
     }
 
-    let responseWithMeta: unknown
     if (Array.isArray(dataToFormat)) {
-      responseWithMeta = { items: dataToFormat, _meta: meta }
+      responsePayload = { items: dataToFormat, _meta: meta }
     } else if (typeof dataToFormat === 'object' && dataToFormat !== null) {
-      responseWithMeta = { ...dataToFormat, _meta: meta }
+      responsePayload = { ...dataToFormat, _meta: meta }
     } else {
-      responseWithMeta = dataToFormat
+      responsePayload = { value: dataToFormat, _meta: meta }
     }
+  } else if (Array.isArray(dataToFormat)) {
+    responsePayload = { items: dataToFormat }
+  } else if (typeof dataToFormat !== 'object' || dataToFormat === null) {
+    responsePayload = { value: dataToFormat }
+  }
 
+  if (typeof responsePayload === 'object' && responsePayload !== null) {
+    const payloadRecord = responsePayload as Record<string, unknown>
+    if (message?.trim()) {
+      payloadRecord._summary = message.trim()
+    }
+    if (notices.length === 1) {
+      payloadRecord._notice = notices[0]
+    } else if (notices.length > 1) {
+      payloadRecord._notices = notices
+    }
+    responsePayload = payloadRecord
+  }
+
+  try {
+    jsonString = JSON.stringify(responsePayload, null, 2)
+  } catch {
     try {
-      jsonString = JSON.stringify(responseWithMeta, null, 2)
+      jsonString = JSON.stringify(responsePayload)
     } catch {
-      // fall through with original jsonString
+      return {
+        content: [{ type: 'text', text: 'Error: Unable to serialize response.' }],
+      }
     }
   }
 
-  let finalMessage = message || ''
-  if (truncated && (options?.warnOnTruncation ?? true)) {
-    finalMessage += `\n\nResults truncated: showing ${Array.isArray(dataToFormat) ? (dataToFormat as unknown[]).length : 0} of ${originalCount} items.`
-  }
-
-  const text = finalMessage ? `${finalMessage.trim()}\n\n${jsonString}` : jsonString
-  return { content: [{ type: 'text', text }] }
+  return { content: [{ type: 'text', text: jsonString }] }
 }
 
 /**

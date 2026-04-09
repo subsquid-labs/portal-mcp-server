@@ -128,8 +128,11 @@ export const TOOL_SPECS: ToolSpec[] = [
     name: 'portal_query_blocks',
     prompt: 'Show me the last 3 Base blocks',
     args: (context) => ({ dataset: 'base', from_block: context.baseHead - 5, limit: 3 }),
-    validate: (text) => {
-      expectItems(text, 'portal_query_blocks')
+    validate: (text, context) => {
+      const items = expectItems(text, 'portal_query_blocks')
+      const blockNumbers = items.map((item) => item.number ?? item.header?.number).filter((value) => typeof value === 'number')
+      assert(blockNumbers.length === 3, 'Expected block numbers in portal_query_blocks output')
+      assert(Math.max(...blockNumbers) >= context.baseHead, 'Expected the preview window to reach the latest known head')
     },
   },
   {
@@ -145,15 +148,19 @@ export const TOOL_SPECS: ToolSpec[] = [
     validate: (text, context) => {
       const items = expectItems(text, 'portal_query_logs')
       assert(items[0].address?.toLowerCase() === context.usdcBase, 'Expected USDC log results')
+      assert(typeof items[0].block_number === 'number', 'Expected block_number in log output')
     },
   },
   {
     name: 'portal_query_transactions',
     prompt: 'Show me a few recent Base transactions',
     args: () => ({ dataset: 'base', timeframe: '1h', limit: 3, field_preset: 'minimal' }),
-    validate: (text) => {
+    validate: (text, context) => {
       const items = expectItems(text, 'portal_query_transactions')
       assert(items[0].from !== undefined, 'Expected transaction sender field')
+      const blockNumbers = items.map((item) => item.block_number).filter((value) => typeof value === 'number')
+      assert(blockNumbers.length === items.length, 'Expected block_number on recent transactions')
+      assert(Math.max(...blockNumbers) >= context.baseHead - 5, 'Expected recent transaction results near chain head')
     },
   },
   {
@@ -188,8 +195,11 @@ export const TOOL_SPECS: ToolSpec[] = [
     name: 'portal_get_recent_transactions',
     prompt: 'Show me recent transactions on Base',
     args: () => ({ dataset: 'base', timeframe: '100', limit: 3 }),
-    validate: (text) => {
-      expectItems(text, 'portal_get_recent_transactions')
+    validate: (text, context) => {
+      const items = expectItems(text, 'portal_get_recent_transactions')
+      const blockNumbers = items.map((item) => item.block_number).filter((value) => typeof value === 'number')
+      assert(blockNumbers.length === items.length, 'Expected block_number in recent transaction output')
+      assert(Math.max(...blockNumbers) >= context.baseHead - 5, 'Expected recent transaction preview near chain head')
     },
   },
   {
@@ -206,6 +216,10 @@ export const TOOL_SPECS: ToolSpec[] = [
     validate: (text) => {
       const data = extractJson(text)
       assert(data.transactions !== undefined, 'Expected wallet summary transaction section')
+      assert(
+        typeof data.transactions?.items?.[0]?.block_number === 'number' || data.transactions?.items?.length === 0,
+        'Expected block_number in wallet summary transactions',
+      )
     },
   },
   {

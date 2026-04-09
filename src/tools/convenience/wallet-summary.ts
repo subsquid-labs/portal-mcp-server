@@ -5,9 +5,9 @@ import { resolveDataset } from '../../cache/datasets.js'
 
 import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
-import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { getKnownTokenDecimals } from '../../helpers/conversions.js'
-import { buildEvmLogFields, buildEvmTransactionFields } from '../../helpers/fields.js'
+import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatTokenAmount, formatTransactionFields, hexToBigInt } from '../../helpers/formatting.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
@@ -111,17 +111,37 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         transactions: [{ from: [normalizedAddress] }, { to: [normalizedAddress] }],
       }
 
-      const txResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery, {
-        stopAfterItems: {
-          keys: ['transactions'],
-          limit: limit_per_type,
-        },
+      const txResults = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery, {
+        itemKeys: ['transactions'],
+        limit: limit_per_type,
+        chunkSize: 250,
       })
 
       const transactions = txResults
-        .flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
-        .slice(0, limit_per_type)
-        .map((tx) => formatTransactionFields(tx as Record<string, unknown>))
+        .flatMap((block: unknown) => {
+          const typedBlock = block as {
+            number?: number
+            timestamp?: number
+            header?: { number?: number; timestamp?: number }
+            transactions?: Array<Record<string, unknown>>
+          }
+          const blockNumber = typedBlock.number ?? typedBlock.header?.number
+          const timestamp = typedBlock.timestamp ?? typedBlock.header?.timestamp
+
+          return (typedBlock.transactions || []).map((tx) =>
+            formatTransactionFields({
+              ...tx,
+              ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
+              ...(timestamp !== undefined
+                ? {
+                    timestamp,
+                    timestamp_human: formatTimestamp(timestamp),
+                  }
+                : {}),
+            }),
+          )
+        })
+        .slice(-limit_per_type)
 
       // Query 2: Token Transfers (if requested)
       let tokenTransfers: unknown[] = []
@@ -147,11 +167,10 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           ],
         }
 
-        const tokenResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, tokenQuery, {
-          stopAfterItems: {
-            keys: ['logs'],
-            limit: limit_per_type,
-          },
+        const tokenResults = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, tokenQuery, {
+          itemKeys: ['logs'],
+          limit: limit_per_type,
+          chunkSize: 250,
         })
 
         tokenTransfers = tokenResults
@@ -192,7 +211,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
               }
             })
           })
-          .slice(0, limit_per_type)
+          .slice(-limit_per_type)
       }
 
       // Query 3: NFT Transfers (if requested)
@@ -231,11 +250,10 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           ],
         }
 
-        const nftResults = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, nftQuery, {
-          stopAfterItems: {
-            keys: ['logs'],
-            limit: limit_per_type,
-          },
+        const nftResults = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, nftQuery, {
+          itemKeys: ['logs'],
+          limit: limit_per_type,
+          chunkSize: 250,
         })
 
         nftTransfers = nftResults
@@ -260,7 +278,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
               data: log.data,
             }))
           })
-          .slice(0, limit_per_type)
+          .slice(-limit_per_type)
       }
 
       // Check if we hit the limit (partial data)

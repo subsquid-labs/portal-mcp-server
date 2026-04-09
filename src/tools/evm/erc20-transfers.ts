@@ -6,7 +6,7 @@ import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { formatTokenValue, getKnownTokenDecimals } from '../../helpers/conversions.js'
 import { getCoinGeckoTokenList } from '../../helpers/external-apis.js'
-import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetch, portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { normalizeAddresses, normalizeEvmAddress } from '../../helpers/validation.js'
@@ -81,11 +81,11 @@ export function registerGetErc20TransfersTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
-        stopAfterItems: {
-          keys: ['logs'],
-          limit,
-        },
+      const hasAddressFilters = !!(normalizedTokens || normalizedFrom || normalizedTo)
+      const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        itemKeys: ['logs'],
+        limit,
+        chunkSize: hasAddressFilters ? 500 : 100,
       })
 
       const allTransfers = results.flatMap((block: unknown) => {
@@ -118,7 +118,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
         })
       })
 
-      const limitedTransfers = allTransfers.slice(0, limit)
+      const limitedTransfers = allTransfers.slice(-limit)
 
       // Optionally enrich with token metadata
       let enrichedTransfers = limitedTransfers
@@ -159,7 +159,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
 
       return formatResult(
         enrichedTransfers,
-        `Retrieved ${limitedTransfers.length} ERC20 transfers${allTransfers.length > limit ? ` (total found: ${allTransfers.length})` : ''}`,
+        `Retrieved ${limitedTransfers.length} ERC20 transfers${allTransfers.length > limit ? ` from the most recent matching blocks (preview limited to ${limit})` : ''}`,
         {
           maxItems: limit,
           warnOnTruncation: false,

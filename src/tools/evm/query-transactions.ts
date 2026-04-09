@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { getTransactionFields } from '../../helpers/field-presets.js'
 import {
   buildEvmLogFields,
@@ -13,12 +13,12 @@ import {
   buildEvmTransactionFields,
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
-import { formatTransactionFields } from '../../helpers/formatting.js'
+import { formatTimestamp, formatTransactionFields } from '../../helpers/formatting.js'
 import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import {
-  formatBlockRangeWarning,
   getQueryExamples,
+  getValidationNotices,
   normalizeAddresses,
   validateQuerySize,
 } from '../../helpers/validation.js'
@@ -26,6 +26,36 @@ import {
 // ============================================================================
 // Tool: Query Transactions (EVM)
 // ============================================================================
+
+function flattenTransactionsWithBlockContext(results: unknown[]) {
+  return results.flatMap((block: unknown) => {
+    const typedBlock = block as {
+      number?: number
+      timestamp?: number
+      header?: {
+        number?: number
+        timestamp?: number
+      }
+      transactions?: Array<Record<string, unknown>>
+    }
+
+    const blockNumber = typedBlock.number ?? typedBlock.header?.number
+    const timestamp = typedBlock.timestamp ?? typedBlock.header?.timestamp
+
+    return (typedBlock.transactions || []).map((tx) =>
+      formatTransactionFields({
+        ...tx,
+        ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
+        ...(timestamp !== undefined
+          ? {
+              timestamp,
+              timestamp_human: formatTimestamp(timestamp),
+            }
+          : {}),
+      }),
+    )
+  })
+}
 
 export function registerQueryTransactionsTool(server: McpServer) {
   server.tool(
@@ -156,13 +186,6 @@ export function registerQueryTransactionsTool(server: McpServer) {
         throw new Error(validation.error + examples)
       }
 
-      // Warn about potentially slow queries
-      let warningMessage = ''
-      if (validation.warning) {
-        warningMessage = formatBlockRangeWarning(resolvedFromBlock, endBlock, 'transactions', hasFilters)
-        console.error(warningMessage)
-      }
-
       const txFilter: Record<string, unknown> = {}
       if (normalizedFrom) txFilter.from = normalizedFrom
       if (normalizedTo) txFilter.to = normalizedTo
@@ -204,29 +227,27 @@ export function registerQueryTransactionsTool(server: McpServer) {
         transactions: [txFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
-        stopAfterItems: {
-          keys: ['transactions'],
-          limit,
-        },
+      const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        itemKeys: ['transactions'],
+        limit,
+        chunkSize: hasFilters ? 500 : 100,
       })
 
-      const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
-
-      // Apply limit after collecting all results
-      const limitedTxs = allTxs.slice(0, limit).map((tx) => formatTransactionFields(tx as Record<string, unknown>))
+      const allTxs = flattenTransactionsWithBlockContext(results)
+      const limitedTxs = allTxs.slice(-limit)
 
       // Apply response format (summary/compact/full)
       const formattedData = applyResponseFormat(limitedTxs, response_format || 'full', 'transactions')
 
       const message =
         response_format === 'summary'
-          ? `Transaction summary for ${limitedTxs.length} transactions`
-          : `Retrieved ${limitedTxs.length} transactions${allTxs.length > limit ? ` (total found: ${allTxs.length})` : ''}`
+          ? `Transaction summary for ${limitedTxs.length} transactions${allTxs.length > limit ? ' (latest preview)' : ''}`
+          : `Retrieved ${limitedTxs.length} transactions${allTxs.length > limit ? ` from the most recent matching blocks (preview limited to ${limit})` : ''}`
 
       return formatResult(formattedData, message, {
         maxItems: limit,
         warnOnTruncation: false,
+        notices: getValidationNotices(validation),
         metadata: {
           dataset,
           from_block: resolvedFromBlock,

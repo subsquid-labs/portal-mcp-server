@@ -5,7 +5,7 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { getBlockFields } from '../../helpers/field-presets.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { buildBitcoinBlockFields, buildEvmBlockFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { hexToNumber, weiToGwei } from '../../helpers/formatting.js'
@@ -69,7 +69,8 @@ export function registerQueryBlocksTool(server: McpServer) {
         resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
         finalized_only,
       )
-      const endBlock = Math.min(resolvedFromBlock + limit! - 1, validatedToBlock)
+      const endBlock = validatedToBlock
+      const startBlock = Math.max(resolvedFromBlock, endBlock - limit! + 1)
       const includeL2 = chainType === 'evm' && (include_l2_fields || isL2Chain(dataset))
 
       const blockFields =
@@ -89,7 +90,7 @@ export function registerQueryBlocksTool(server: McpServer) {
 
       const query = {
         type: queryType,
-        fromBlock: resolvedFromBlock,
+        fromBlock: startBlock,
         toBlock: endBlock,
         fields: {
           block: blockFields,
@@ -97,7 +98,7 @@ export function registerQueryBlocksTool(server: McpServer) {
         includeAllBlocks: true,
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      const results = await portalFetchStreamRange(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
       const formatted =
         chainType !== 'evm'
@@ -129,7 +130,7 @@ export function registerQueryBlocksTool(server: McpServer) {
       return formatResult(formatted, `Retrieved ${formatted.length} blocks`, {
         metadata: {
           dataset,
-          from_block: resolvedFromBlock,
+          from_block: startBlock,
           to_block: endBlock,
           query_start_time: queryStartTime,
         },

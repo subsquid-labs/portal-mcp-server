@@ -5,9 +5,10 @@ import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { EVENT_NAMES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { hashString53 } from '../../helpers/hash.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
 
@@ -78,34 +79,32 @@ export function registerGetContractActivityTool(server: McpServer) {
       }
 
       // Contract activity aggregates all data, allow higher byte cap for dense chains
-      const txResults = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        txQuery,
-        undefined,
-        0,
-        100 * 1024 * 1024,
-      )
-
-      const transactions = txResults.flatMap(
-        (block: unknown) => (block as { transactions?: unknown[] }).transactions || [],
-      ) as Array<{ from: string; to: string; hash: string }>
-
-      // Analyze callers
       const callerCounts = new Map<string, number>()
-      transactions.forEach((tx) => {
-        const from = tx.from.toLowerCase()
-        callerCounts.set(from, (callerCounts.get(from) || 0) + 1)
+      const uniqueCallerHashes = new Set<number>()
+      let totalTransactions = 0
+      await portalFetchStreamRangeVisit(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery, {
+        maxBytes: 100 * 1024 * 1024,
+        onRecord: (record) => {
+          const transactions = (record as { transactions?: Array<{ from?: string }> }).transactions || []
+
+          totalTransactions += transactions.length
+          transactions.forEach((tx) => {
+            if (!tx.from) return
+            const from = tx.from.toLowerCase()
+            callerCounts.set(from, (callerCounts.get(from) || 0) + 1)
+            uniqueCallerHashes.add(hashString53(from))
+          })
+        },
       })
 
-      const uniqueCallers = Array.from(callerCounts.keys())
       const topCallers = Array.from(callerCounts.entries())
         .sort((a, b) => b[1] - a[1])
         .slice(0, 10)
         .map(([address, count]) => ({ address, interaction_count: count }))
 
       // Query 2: Events emitted (if requested)
-      let events: unknown[] = []
       let eventsByType: Record<string, number> = {}
+      let totalEvents = 0
       if (include_events) {
         const eventsQuery = {
           type: 'evm',
@@ -118,22 +117,18 @@ export function registerGetContractActivityTool(server: McpServer) {
           logs: [{ address: [normalizedContract] }],
         }
 
-        const eventResults = await portalFetchStream(
-          `${PORTAL_URL}/datasets/${dataset}/stream`,
-          eventsQuery,
-          undefined,
-          0,
-          100 * 1024 * 1024,
-        )
+        await portalFetchStreamRangeVisit(`${PORTAL_URL}/datasets/${dataset}/stream`, eventsQuery, {
+          maxBytes: 100 * 1024 * 1024,
+          onRecord: (record) => {
+            const events = (record as { logs?: Array<{ topics?: string[] }> }).logs || []
+            totalEvents += events.length
 
-        const rawEvents = eventResults.flatMap((block: unknown) => (block as { logs?: unknown[] }).logs || [])
-        events = rawEvents as Array<{ topics?: string[]; data: string }>
-
-        // Count events by topic0 (event signature) — resolve to human-readable names
-        ;(events as Array<{ topics?: string[]; data: string }>).forEach((event) => {
-          const topic0 = event.topics?.[0] || 'unknown'
-          const eventName = EVENT_NAMES[topic0] || topic0
-          eventsByType[eventName] = (eventsByType[eventName] || 0) + 1
+            events.forEach((event) => {
+              const topic0 = event.topics?.[0] || 'unknown'
+              const eventName = EVENT_NAMES[topic0] || topic0
+              eventsByType[eventName] = (eventsByType[eventName] || 0) + 1
+            })
+          },
         })
       }
 
@@ -145,14 +140,14 @@ export function registerGetContractActivityTool(server: McpServer) {
           description: timeframe,
         },
         interactions: {
-          total_transactions: transactions.length,
-          unique_callers: uniqueCallers.length,
+          total_transactions: totalTransactions,
+          unique_callers: uniqueCallerHashes.size,
           top_callers: topCallers,
           // Removed all_callers: massive array that bloats response unnecessarily
         },
         events: include_events
           ? {
-              total_events: events.length,
+              total_events: totalEvents,
               unique_event_types: Object.keys(eventsByType).length,
               events_by_type: eventsByType,
             }
@@ -161,7 +156,7 @@ export function registerGetContractActivityTool(server: McpServer) {
 
       return formatResult(
         summary,
-        `Contract ${normalizedContract}: ${transactions.length} interactions from ${uniqueCallers.length} unique callers, ${events.length} events`,
+        `Contract ${normalizedContract}: ${totalTransactions} interactions from ${uniqueCallerHashes.size} unique callers, ${totalEvents} events`,
         {
           metadata: {
             dataset,

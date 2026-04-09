@@ -4,15 +4,16 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { getLogFields } from '../../helpers/field-presets.js'
 import { buildEvmLogFields, buildEvmTraceFields, buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
+import { formatTimestamp } from '../../helpers/formatting.js'
 import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import {
-  formatBlockRangeWarning,
   getQueryExamples,
+  getValidationNotices,
   normalizeAddresses,
   validateQuerySize,
 } from '../../helpers/validation.js'
@@ -20,6 +21,34 @@ import {
 // ============================================================================
 // Tool: Query Logs (EVM)
 // ============================================================================
+
+function flattenLogsWithBlockContext(results: unknown[]) {
+  return results.flatMap((block: unknown) => {
+    const typedBlock = block as {
+      number?: number
+      timestamp?: number
+      header?: {
+        number?: number
+        timestamp?: number
+      }
+      logs?: Array<Record<string, unknown>>
+    }
+
+    const blockNumber = typedBlock.number ?? typedBlock.header?.number
+    const timestamp = typedBlock.timestamp ?? typedBlock.header?.timestamp
+
+    return (typedBlock.logs || []).map((log) => ({
+      ...(log as Record<string, unknown>),
+      ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
+      ...(timestamp !== undefined
+        ? {
+            timestamp,
+            timestamp_human: formatTimestamp(timestamp),
+          }
+        : {}),
+    }))
+  })
+}
 
 export function registerQueryLogsTool(server: McpServer) {
   server.tool(
@@ -154,11 +183,6 @@ export function registerQueryLogsTool(server: McpServer) {
         throw new Error(validation.error + examples)
       }
 
-      // Warn about potentially slow queries
-      if (validation.warning) {
-        console.error(formatBlockRangeWarning(resolvedFromBlock, endBlock, 'logs', hasFilters))
-      }
-
       const logFilter: Record<string, unknown> = {}
       if (normalizedAddresses) logFilter.address = normalizedAddresses
       if (topic0) logFilter.topic0 = topic0
@@ -189,29 +213,27 @@ export function registerQueryLogsTool(server: McpServer) {
         logs: [logFilter],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
-        stopAfterItems: {
-          keys: ['logs'],
-          limit,
-        },
+      const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        itemKeys: ['logs'],
+        limit,
+        chunkSize: hasFilters ? 500 : 100,
       })
 
-      const allLogs = results.flatMap((block: unknown) => (block as { logs?: unknown[] }).logs || [])
-
-      // Apply limit after collecting all results
-      const limitedLogs = allLogs.slice(0, limit)
+      const allLogs = flattenLogsWithBlockContext(results)
+      const limitedLogs = allLogs.slice(-limit)
 
       // Apply response format (summary/compact/full)
       const formattedData = applyResponseFormat(limitedLogs, response_format || 'full', 'logs')
 
       const message =
         response_format === 'summary'
-          ? `Log summary for ${limitedLogs.length} logs`
-          : `Retrieved ${limitedLogs.length} logs${allLogs.length > limit ? ` (total found: ${allLogs.length})` : ''}`
+          ? `Log summary for ${limitedLogs.length} logs${allLogs.length > limit ? ' (latest preview)' : ''}`
+          : `Retrieved ${limitedLogs.length} logs${allLogs.length > limit ? ` from the most recent matching blocks (preview limited to ${limit})` : ''}`
 
       return formatResult(formattedData, message, {
         maxItems: limit,
         warnOnTruncation: false,
+        notices: getValidationNotices(validation),
         metadata: {
           dataset,
           from_block: resolvedFromBlock,

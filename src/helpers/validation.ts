@@ -56,6 +56,13 @@ export interface QueryValidationResult {
   recommendation?: string
 }
 
+export function getValidationNotices(validation: QueryValidationResult): string[] {
+  const notices: string[] = []
+  if (validation.warning) notices.push(validation.warning)
+  if (validation.recommendation) notices.push(validation.recommendation)
+  return notices
+}
+
 /**
  * Recommended block ranges for different query types to maintain good UX (<1-3s response)
  */
@@ -168,7 +175,8 @@ Even with filters, this exceeds the maximum safe range of ${maximum.toLocaleStri
   if (hasLowLimit && blockRange > maximum && blockRange > recommended) {
     return {
       valid: true,
-      warning: `Large block range (${blockRange.toLocaleString()} blocks) allowed due to low limit (${limit}). Query is safe because result set is capped.`,
+      warning: `Scanning ${blockRange.toLocaleString()} blocks. This is allowed because limit=${limit} caps the result size.`,
+      recommendation: 'If you want a faster scan, add filters or use a shorter time window.',
     }
   }
 
@@ -178,10 +186,10 @@ Even with filters, this exceeds the maximum safe range of ${maximum.toLocaleStri
 
     return {
       valid: true,
-      warning: `Large block range (${blockRange.toLocaleString()} blocks). Expected response time: ${expectedTime}. Recommended: <${recommended.toLocaleString()} blocks for <1s response.`,
+      warning: `Scanning ${blockRange.toLocaleString()} blocks. This may take ${expectedTime} on busy chains.`,
       recommendation: hasFilters
-        ? `For faster results, reduce block range to <${recommended.toLocaleString()} blocks.`
-        : `Add filters (addresses, topics) to significantly improve performance.`,
+        ? `For faster results, keep ${queryType} queries under about ${recommended.toLocaleString()} blocks.`
+        : `For faster results, add filters (addresses, topics) or keep the range under about ${recommended.toLocaleString()} blocks.`,
     }
   }
 
@@ -254,14 +262,8 @@ export function formatBlockRangeWarning(
   hasFilters: boolean,
 ): string {
   const range = toBlock - fromBlock
-  const recommended = hasFilters ? RECOMMENDED_RANGES[queryType].filtered : RECOMMENDED_RANGES[queryType].unfiltered
 
-  return `WARNING: LARGE RANGE: ${range.toLocaleString()} blocks (${fromBlock} → ${toBlock}).
-   For fast responses (<1-3s), use smaller ranges:
-   - Logs: <${RECOMMENDED_RANGES.logs[hasFilters ? 'filtered' : 'unfiltered'].toLocaleString()} blocks (~500ms)
-   - Transactions: <${RECOMMENDED_RANGES.transactions[hasFilters ? 'filtered' : 'unfiltered'].toLocaleString()} blocks (~100ms)
-   - Traces: <${RECOMMENDED_RANGES.traces[hasFilters ? 'filtered' : 'unfiltered'].toLocaleString()} blocks (expensive)
-   Large ranges may take >15s or timeout.`
+  return `Scanning ${range.toLocaleString()} ${queryType} blocks (${fromBlock} → ${toBlock}). ${hasFilters ? 'Filters help keep this query manageable.' : 'Add filters or reduce the range if you want faster results.'}`
 }
 
 /**

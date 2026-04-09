@@ -5,11 +5,11 @@ import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
-import { formatTransactionFields } from '../../helpers/formatting.js'
+import { formatTimestamp, formatTransactionFields } from '../../helpers/formatting.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
-import { getQueryExamples, normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
+import { getQueryExamples, getValidationNotices, normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
 // Tool: Get Recent Transactions (Convenience Wrapper)
@@ -19,6 +19,43 @@ import { getQueryExamples, normalizeAddresses, validateQuerySize } from '../../h
  * Convenience wrapper that auto-calculates block ranges for recent activity.
  * Supports EVM, Solana, and Bitcoin chains.
  */
+
+function flattenTransactionsWithBlockContext(results: unknown[], formatter?: (tx: Record<string, unknown>) => Record<string, unknown>) {
+  return results.flatMap((block: unknown) => {
+    const typedBlock = block as {
+      number?: number
+      timestamp?: number
+      header?: {
+        number?: number
+        timestamp?: number
+      }
+      transactions?: Array<Record<string, unknown>>
+    }
+
+    const blockNumber = typedBlock.number ?? typedBlock.header?.number
+    const timestamp = typedBlock.timestamp ?? typedBlock.header?.timestamp
+
+    return (typedBlock.transactions || []).map((tx) => {
+      const enriched = {
+        ...tx,
+        ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
+        ...(timestamp !== undefined
+          ? {
+              timestamp,
+              timestamp_human: formatTimestamp(timestamp),
+            }
+          : {}),
+      }
+
+      return formatter ? formatter(enriched) : enriched
+    })
+  })
+}
+
+function buildRecentMessage(prefix: string, timeframe: string, totalCollected: number, limit: number) {
+  return `${prefix}${totalCollected > limit ? ` (latest preview limited to ${limit})` : ''} from last ${timeframe}`
+}
+
 export function registerGetRecentTransactionsTool(server: McpServer) {
   server.tool(
     'portal_get_recent_transactions',
@@ -70,11 +107,11 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
 
       // Build chain-specific query
       if (chainType === 'bitcoin') {
-        return await queryBitcoinRecent(dataset, fromBlock, toBlock, blockRange, timeframe, limit, queryStartTime)
+        return await queryBitcoinRecent(dataset, fromBlock, toBlock, timeframe, limit, queryStartTime)
       }
       if (chainType === 'solana') {
         return await querySolanaRecent(
-          dataset, fromBlock, toBlock, blockRange, timeframe, from_addresses, limit, queryStartTime,
+          dataset, fromBlock, toBlock, timeframe, from_addresses, limit, queryStartTime,
         )
       }
 
@@ -121,31 +158,22 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         transactions: txFilters.length > 0 ? txFilters : [{}],
       }
 
-      // Use maxBlocks to stop streaming early on dense chains
-      const maxBlocksNeeded = Math.min(blockRange, Math.max(limit * 2, 100))
-      const results = await portalFetchStream(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-        {
-          maxBlocks: hasFilters ? 0 : maxBlocksNeeded,
-          stopAfterItems: {
-            keys: ['transactions'],
-            limit,
-          },
-        },
-      )
+      const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+        itemKeys: ['transactions'],
+        limit,
+        chunkSize: hasFilters ? 500 : 100,
+      })
 
-      const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
-      const limitedTxs = allTxs.slice(0, limit).map((tx) => formatTransactionFields(tx as Record<string, unknown>))
+      const allTxs = flattenTransactionsWithBlockContext(results, (tx) => formatTransactionFields(tx))
+      const limitedTxs = allTxs.slice(-limit)
 
       return formatResult(
         limitedTxs,
-        `Retrieved ${limitedTxs.length} recent transactions${
-          allTxs.length > limit ? ` (total found: ${allTxs.length})` : ''
-        } from last ${timeframe}`,
+        buildRecentMessage(`Retrieved ${limitedTxs.length} recent transactions`, timeframe, allTxs.length, limit),
         {
           maxItems: limit,
           warnOnTruncation: false,
+          notices: getValidationNotices(validation),
           metadata: {
             dataset,
             from_block: fromBlock,
@@ -166,7 +194,6 @@ async function queryBitcoinRecent(
   dataset: string,
   fromBlock: number,
   toBlock: number,
-  blockRange: number,
   timeframe: string,
   limit: number,
   queryStartTime: number,
@@ -190,27 +217,23 @@ async function queryBitcoinRecent(
     transactions: [{}],
   }
 
-  const maxBlocksNeeded = Math.min(blockRange, Math.max(limit * 2, 20))
-  const results = await portalFetchStream(
-    `${PORTAL_URL}/datasets/${dataset}/stream`,
-    query,
-    {
-      maxBlocks: maxBlocksNeeded,
-      stopAfterItems: {
-        keys: ['transactions'],
-        limit,
-      },
-    },
-  )
+  const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+    itemKeys: ['transactions'],
+    limit,
+    chunkSize: 20,
+  })
 
-  const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
-  const limitedTxs = allTxs.slice(0, limit)
+  const allTxs = flattenTransactionsWithBlockContext(results)
+  const limitedTxs = allTxs.slice(-limit)
 
   return formatResult(
     limitedTxs,
-    `Retrieved ${limitedTxs.length} recent Bitcoin transactions${
-      allTxs.length > limit ? ` (total found: ${allTxs.length})` : ''
-    } from last ${timeframe}`,
+    buildRecentMessage(
+      `Retrieved ${limitedTxs.length} recent Bitcoin transactions`,
+      timeframe,
+      allTxs.length,
+      limit,
+    ),
     {
       maxItems: limit,
       warnOnTruncation: false,
@@ -232,7 +255,6 @@ async function querySolanaRecent(
   dataset: string,
   fromBlock: number,
   toBlock: number,
-  blockRange: number,
   timeframe: string,
   from_addresses: string[] | undefined,
   limit: number,
@@ -262,27 +284,23 @@ async function querySolanaRecent(
     transactions: hasFilters ? txFilters : [{}],
   }
 
-  const maxBlocksNeeded = Math.min(blockRange, Math.max(limit * 2, 100))
-  const results = await portalFetchStream(
-    `${PORTAL_URL}/datasets/${dataset}/stream`,
-    query,
-    {
-      maxBlocks: hasFilters ? 0 : maxBlocksNeeded,
-      stopAfterItems: {
-        keys: ['transactions'],
-        limit,
-      },
-    },
-  )
+  const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+    itemKeys: ['transactions'],
+    limit,
+    chunkSize: hasFilters ? 500 : 100,
+  })
 
-  const allTxs = results.flatMap((block: unknown) => (block as { transactions?: unknown[] }).transactions || [])
-  const limitedTxs = allTxs.slice(0, limit)
+  const allTxs = flattenTransactionsWithBlockContext(results)
+  const limitedTxs = allTxs.slice(-limit)
 
   return formatResult(
     limitedTxs,
-    `Retrieved ${limitedTxs.length} recent Solana transactions${
-      allTxs.length > limit ? ` (total found: ${allTxs.length})` : ''
-    } from last ${timeframe}`,
+    buildRecentMessage(
+      `Retrieved ${limitedTxs.length} recent Solana transactions`,
+      timeframe,
+      allTxs.length,
+      limit,
+    ),
     {
       maxItems: limit,
       warnOnTruncation: false,

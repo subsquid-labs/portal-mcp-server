@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
-import { portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatNumber } from '../../helpers/formatting.js'
 
@@ -57,7 +57,7 @@ export function registerGetTransactionDensityTool(server: McpServer) {
         transactions: [{}],
       }
 
-      const results = await portalFetchStream(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
+      const results = await portalFetchStreamRange(`${PORTAL_URL}/datasets/${dataset}/stream`, query)
 
       // Calculate tx density per block
       const densityData = results.map((block: any) => {

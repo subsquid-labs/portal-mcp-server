@@ -44,6 +44,12 @@ export interface PortalFetchStreamRangeOptions extends PortalFetchStreamOptions 
   getBlockNumber?: (record: unknown) => number | undefined
 }
 
+export interface PortalFetchRecentRecordsOptions extends PortalFetchStreamRangeOptions {
+  itemKeys: string[]
+  limit: number
+  chunkSize: number
+}
+
 function normalizePortalFetchStreamOptions(
   timeoutOrOptions: number | PortalFetchStreamOptions,
   maxBlocks: number,
@@ -652,4 +658,157 @@ export async function portalFetchStreamRange(
   }
 
   return results
+}
+
+/**
+ * Stream a complete block range and process each NDJSON record incrementally,
+ * continuing forward if Portal returns only a partial contiguous subrange.
+ */
+export async function portalFetchStreamRangeVisit(
+  url: string,
+  body: unknown,
+  options: PortalFetchStreamVisitOptions & PortalFetchStreamRangeOptions,
+): Promise<number> {
+  if (!body || typeof body !== 'object') {
+    return portalFetchStreamVisit(url, body, options)
+  }
+
+  const typedBody = body as Record<string, unknown>
+  const requestedFrom = parseBlockNumber(typedBody.fromBlock)
+  const requestedTo = parseBlockNumber(typedBody.toBlock)
+
+  if (requestedFrom === undefined || requestedTo === undefined || requestedFrom > requestedTo) {
+    return portalFetchStreamVisit(url, body, options)
+  }
+
+  const getBlockNumber = options.getBlockNumber ?? getRecordBlockNumber
+  const stopAfterLimit = options.stopAfterItems?.limit ?? 0
+  let matchedItems = 0
+  let processedRecords = 0
+  let currentFrom = requestedFrom
+  let remainingBlockBudget = options.maxBlocks ?? 0
+
+  while (currentFrom <= requestedTo) {
+    let lastReturnedBlock: number | undefined
+    const stopAfterItems =
+      options.stopAfterItems && stopAfterLimit > 0
+        ? {
+            ...options.stopAfterItems,
+            limit: Math.max(1, stopAfterLimit - matchedItems),
+          }
+        : undefined
+
+    const chunkProcessed = await portalFetchStreamVisit(
+      url,
+      {
+        ...typedBody,
+        fromBlock: currentFrom,
+        toBlock: requestedTo,
+      },
+      {
+        ...options,
+        maxBlocks: remainingBlockBudget > 0 ? remainingBlockBudget : 0,
+        stopAfterItems,
+        onRecord: async (record) => {
+          processedRecords++
+          matchedItems += countMatchingItems(record, options.stopAfterItems)
+
+          const recordBlock = getBlockNumber(record)
+          if (recordBlock !== undefined) {
+            lastReturnedBlock = recordBlock
+          }
+
+          await options.onRecord(record)
+        },
+      },
+    )
+
+    if (chunkProcessed === 0) {
+      break
+    }
+
+    if (stopAfterLimit > 0 && matchedItems >= stopAfterLimit) {
+      break
+    }
+
+    if (remainingBlockBudget > 0) {
+      remainingBlockBudget = Math.max(0, remainingBlockBudget - chunkProcessed)
+      if (remainingBlockBudget === 0) {
+        break
+      }
+    }
+
+    if (lastReturnedBlock === undefined || lastReturnedBlock < currentFrom) {
+      break
+    }
+
+    if (lastReturnedBlock >= requestedTo) {
+      break
+    }
+
+    currentFrom = lastReturnedBlock + 1
+  }
+
+  return processedRecords
+}
+
+/**
+ * Fetch recent matching records from the end of a range, chunking backward so
+ * limit-based "recent" queries return the latest matches rather than the oldest
+ * matches in the window.
+ */
+export async function portalFetchRecentRecords(
+  url: string,
+  body: unknown,
+  options: PortalFetchRecentRecordsOptions,
+): Promise<unknown[]> {
+  if (!body || typeof body !== 'object') {
+    return portalFetchStreamRange(url, body, options)
+  }
+
+  const typedBody = body as Record<string, unknown>
+  const requestedFrom = parseBlockNumber(typedBody.fromBlock)
+  const requestedTo = parseBlockNumber(typedBody.toBlock)
+
+  if (requestedFrom === undefined || requestedTo === undefined || requestedFrom > requestedTo) {
+    return portalFetchStreamRange(url, body, options)
+  }
+
+  const chunkSize = Math.max(1, options.chunkSize)
+  const recentRecords: unknown[] = []
+  let matchedItems = 0
+  let currentTo = requestedTo
+
+  while (currentTo >= requestedFrom && matchedItems < options.limit) {
+    const chunkFrom = Math.max(requestedFrom, currentTo - chunkSize + 1)
+    const chunk = await portalFetchStreamRange(
+      url,
+      {
+        ...typedBody,
+        fromBlock: chunkFrom,
+        toBlock: currentTo,
+      },
+      {
+        ...options,
+        stopAfterItems: undefined,
+        maxBlocks: 0,
+      },
+    )
+
+    if (chunk.length > 0) {
+      recentRecords.unshift(...chunk)
+      matchedItems += chunk.reduce<number>(
+        (sum, record) => sum + countMatchingItems(record, { keys: options.itemKeys, limit: Number.MAX_SAFE_INTEGER }),
+        0,
+      )
+    }
+
+    if (chunkFrom === requestedFrom) {
+      break
+    }
+
+    currentTo = chunkFrom - 1
+  }
+
+  return recentRecords
 }
