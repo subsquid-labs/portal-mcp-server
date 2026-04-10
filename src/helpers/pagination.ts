@@ -33,6 +33,14 @@ export interface RecentPageCursor<TRequest extends Record<string, unknown>> exte
   window_to_block: number
 }
 
+export interface OffsetPageCursor<TRequest extends Record<string, unknown>> {
+  [key: string]: unknown
+  tool: string
+  dataset: string
+  request: TRequest
+  offset: number
+}
+
 export function encodeCursor(payload: Record<string, unknown>): string {
   return Buffer.from(
     JSON.stringify({
@@ -157,6 +165,37 @@ export function decodeRecentPageCursor<TRequest extends Record<string, unknown>>
 
 export function encodeRecentPageCursor<TRequest extends Record<string, unknown>>(
   params: RecentPageCursor<TRequest>,
+): string {
+  return encodeCursor(params)
+}
+
+export function paginateOffsetItems<T>(
+  items: T[],
+  limit: number,
+  offset: number = 0,
+): {
+  pageItems: T[]
+  hasMore: boolean
+  nextOffset?: number
+} {
+  const pageItems = items.slice(offset, offset + limit)
+  const nextOffset = offset + pageItems.length
+  return {
+    pageItems,
+    hasMore: nextOffset < items.length,
+    ...(nextOffset < items.length ? { nextOffset } : {}),
+  }
+}
+
+export function decodeOffsetPageCursor<TRequest extends Record<string, unknown>>(
+  cursor: string,
+  expectedTool: string,
+): OffsetPageCursor<TRequest> {
+  return decodeCursor<OffsetPageCursor<TRequest>>(cursor, expectedTool)
+}
+
+export function encodeOffsetPageCursor<TRequest extends Record<string, unknown>>(
+  params: OffsetPageCursor<TRequest>,
 ): string {
   return encodeCursor(params)
 }

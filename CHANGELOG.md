@@ -3,7 +3,7 @@
 ## [0.7.6] - 2026-04-09
 
 ### Added
-- Added `portal_hyperliquid_ohlc` for trade-fill OHLC candles on `hyperliquid-fills`.
+- Added `portal_hyperliquid_get_ohlc` for trade-fill OHLC candles on `hyperliquid-fills`.
 - Added chart-oriented OHLC output with `chart.kind: "candlestick"`, volume metadata, and automatic interval selection for common durations.
 
 ### Fixed

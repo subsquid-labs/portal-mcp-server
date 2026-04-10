@@ -17,9 +17,10 @@ import {
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatTransactionFields } from '../../helpers/formatting.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import {
   getQueryExamples,
   getValidationNotices,
@@ -83,7 +84,7 @@ type QueryTransactionsRequest = {
 }
 
 type QueryTransactionsCursor = {
-  tool: 'portal_query_transactions'
+  tool: 'portal_evm_query_transactions'
   dataset: string
   request: QueryTransactionsRequest
   window_from_block: number
@@ -127,10 +128,10 @@ function sortTransactions(items: EvmTransactionItem[]) {
 
 export function registerQueryTransactionsTool(server: McpServer) {
   server.tool(
-    'portal_query_transactions',
-    `Query transactions from EVM chains. Filter by sender, recipient, or function signature. Unfiltered queries >100 blocks need limit <=100.`,
+    'portal_evm_query_transactions',
+    buildToolDescription('portal_evm_query_transactions'),
     {
-      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
+      network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
       timeframe: z
         .string()
         .optional()
@@ -202,7 +203,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       // include_receipt removed: logsBloom is not in TransactionFieldSelection per OpenAPI spec
     },
     async ({
-      dataset,
+      network,
       timeframe,
       from_block,
       to_block,
@@ -225,23 +226,23 @@ export function registerQueryTransactionsTool(server: McpServer) {
     }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<QueryTransactionsRequest>(cursor, 'portal_query_transactions')
+        ? decodeRecentPageCursor<QueryTransactionsRequest>(cursor, 'portal_evm_query_transactions')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : undefined)
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : undefined)
       if (!dataset) {
-        throw new Error('dataset is required unless you are continuing with cursor.')
+        throw new Error('network is required unless you are continuing with cursor.')
       }
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
         throw createUnsupportedChainError({
-          toolName: 'portal_query_transactions',
+          toolName: 'portal_evm_query_transactions',
           dataset,
           actualChainType: chainType,
           supportedChains: ['evm'],
           suggestions: [
-            'Use portal_query_solana_transactions for Solana datasets.',
-            'Use portal_query_bitcoin_transactions for Bitcoin datasets.',
+            'Use portal_solana_query_transactions for Solana datasets.',
+            'Use portal_bitcoin_query_transactions for Bitcoin datasets.',
           ],
         })
       }
@@ -392,7 +393,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<QueryTransactionsRequest>({
-            tool: 'portal_query_transactions',
+            tool: 'portal_evm_query_transactions',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -446,11 +447,32 @@ export function registerQueryTransactionsTool(server: McpServer) {
           : `Retrieved ${page.pageItems.length} transactions${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
       return formatResult(formattedData, message, {
+        toolName: 'portal_evm_query_transactions',
         notices,
         pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+        ordering: buildChronologicalPageOrdering({
+          sortedBy: 'block_number',
+          tieBreakers: ['transactionIndex', 'hash'],
+        }),
         freshness,
         coverage,
+        execution: buildExecutionMetadata({
+          response_format,
+          finalized_only,
+          limit,
+          from_block: resolvedFromBlock,
+          to_block: endBlock,
+          page_to_block: pageToBlock,
+          range_kind: resolvedBlocks.range_kind,
+          notes: [
+            include_logs || include_traces || include_state_diffs
+              ? 'Expanded transaction context was requested with include flags.'
+              : `Using ${field_preset} field preset.`,
+          ],
+          normalized_output: true,
+        }),
         metadata: {
+          network: dataset,
           dataset,
           from_block: resolvedFromBlock,
           to_block: pageToBlock,

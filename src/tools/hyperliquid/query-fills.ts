@@ -5,10 +5,12 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
+import { normalizeHyperliquidFillResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 
 // ============================================================================
 // Tool: Query Hyperliquid Fills
@@ -66,14 +68,14 @@ function sortFills(items: HyperliquidFillItem[]) {
 
 export function registerQueryHyperliquidFillsTool(server: McpServer) {
   server.tool(
-    'portal_query_hyperliquid_fills',
-    'Query Hyperliquid trade fills — executions, PnL, fees, routing. Filter by trader, coin, direction, or builder.',
+    'portal_hyperliquid_query_fills',
+    buildToolDescription('portal_hyperliquid_query_fills'),
     {
-      dataset: z
+      network: z
         .string()
         .optional()
         .default('hyperliquid-fills')
-        .describe("Dataset name (default: 'hyperliquid-fills'). Optional when continuing with cursor."),
+        .describe("Network name (default: 'hyperliquid-fills'). Optional when continuing with cursor."),
       timeframe: z
         .string()
         .optional()
@@ -102,7 +104,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
     async ({
-      dataset,
+      network,
       timeframe,
       from_block,
       to_block,
@@ -123,9 +125,9 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
     }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<HyperliquidFillsRequest>(cursor, 'portal_query_hyperliquid_fills')
+        ? decodeRecentPageCursor<HyperliquidFillsRequest>(cursor, 'portal_hyperliquid_query_fills')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : 'hyperliquid-fills')
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : 'hyperliquid-fills')
       if (paginationCursor) {
         dataset = paginationCursor.dataset
         timeframe = paginationCursor.request.timeframe
@@ -241,11 +243,13 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
             header?: { number: number; timestamp: number }
             fills?: Array<Record<string, unknown>>
           }
-          return (b.fills || []).map((fill) => ({
-            block_number: b.header?.number,
-            block_timestamp: b.header?.timestamp,
-            ...fill,
-          }))
+          return (b.fills || []).map((fill) =>
+            normalizeHyperliquidFillResult({
+              ...fill,
+              ...(b.header?.number !== undefined ? { block_number: b.header.number } : {}),
+              ...(b.header?.timestamp !== undefined ? { block_timestamp: b.header.timestamp } : {}),
+            }),
+          )
         }) as HyperliquidFillItem[],
       )
       const page = paginateAscendingItems(
@@ -261,7 +265,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<HyperliquidFillsRequest>({
-            tool: 'portal_query_hyperliquid_fills',
+            tool: 'portal_hyperliquid_query_fills',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -308,11 +312,32 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         formattedData,
         `Retrieved ${page.pageItems.length} Hyperliquid fills${page.hasMore ? ` from the most recent matching range (preview page limited to ${limit})` : ''}`,
         {
+          toolName: 'portal_hyperliquid_query_fills',
           notices,
           pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+          ordering: buildChronologicalPageOrdering({
+            sortedBy: 'block_number',
+            tieBreakers: ['time', 'coin', 'user'],
+          }),
           freshness,
           coverage,
+          execution: buildExecutionMetadata({
+            response_format,
+            finalized_only,
+            limit,
+            from_block: resolvedFromBlock,
+            to_block: endBlock,
+            page_to_block: pageToBlock,
+            range_kind: resolvedBlocks.range_kind,
+            normalized_output: true,
+            notes: [
+              include_pnl || include_builder_info
+                ? 'Additional fill context was requested with include flags.'
+                : 'Using the lightweight fill view.',
+            ],
+          }),
           metadata: {
+            network: dataset,
             dataset,
             from_block: resolvedFromBlock,
             to_block: pageToBlock,

@@ -62,12 +62,12 @@ export function parsePortalError(
 
     if (errorText.includes('fromBlock')) {
       suggestions.push('Ensure fromBlock is a valid block number (integer)')
-      suggestions.push('Use portal_get_block_number to find the latest block')
+      suggestions.push('Use portal_get_head to find the latest block')
     }
 
     if (errorText.includes('toBlock')) {
       suggestions.push('Ensure toBlock >= fromBlock')
-      suggestions.push('Use portal_get_block_number to find the latest block')
+      suggestions.push('Use portal_get_head to find the latest block')
     }
 
     if (errorText.includes('invalid address')) {
@@ -99,17 +99,17 @@ export function parsePortalError(
         `Timestamp ${tsMatch?.[1] ?? 'unknown'} is not yet indexed (indexer may lag ~1-2h behind the chain head)`,
       )
       suggestions.push('Use a longer timeframe (e.g., "24h" instead of "1h") or explicit from_block')
-      suggestions.push('Use portal_get_block_number to get the latest block and query by block range')
+      suggestions.push('Use portal_get_head to get the latest block and query by block range')
     } else if (context?.url && String(context.url).includes('/datasets/')) {
       const datasetMatch = String(context.url).match(/\/datasets\/([^/]+)/)
       if (datasetMatch) {
         suggestions.push(`Dataset '${datasetMatch[1]}' not found or not available`)
-        suggestions.push('Use portal_list_datasets to see available datasets')
-        suggestions.push("Use portal_list_datasets with query: 'ethereum', 'base', etc. to find datasets by chain name")
+        suggestions.push('Use portal_list_networks to see available datasets')
+        suggestions.push("Use portal_list_networks with query: 'ethereum', 'base', etc. to find datasets by chain name")
       }
     } else {
       suggestions.push('Verify the dataset name is correct')
-      suggestions.push('Use portal_list_datasets to see all available datasets')
+      suggestions.push('Use portal_list_networks to see all available datasets')
     }
   }
 
@@ -210,7 +210,7 @@ export function createEmptyResultError(queryType: string, context: Record<string
     'Try expanding the block range',
     'Check that addresses/topics are correct',
     'Verify the dataset has data for this block range',
-    'Use portal_get_block_number to confirm blocks exist',
+    'Use portal_get_head to confirm blocks exist',
   ]
 
   return new ActionableError(`No ${queryType} found in the specified range`, suggestions, context)
@@ -222,8 +222,8 @@ export function createEmptyResultError(queryType: string, context: Record<string
 export function createDatasetError(dataset: string, availableCount: number): ActionableError {
   const suggestions = [
     `Dataset '${dataset}' not found`,
-    `Use portal_list_datasets to see all ${availableCount} available datasets`,
-    "Use portal_list_datasets with query='ethereum' or query='base' to search by chain name",
+    `Use portal_list_networks to see all ${availableCount} available datasets`,
+    "Use portal_list_networks with query='ethereum' or query='base' to search by chain name",
     "Common aliases: 'ethereum', 'polygon', 'base', 'arbitrum', 'optimism'",
   ]
 

@@ -16,8 +16,9 @@ import {
 import { formatResult } from '../../helpers/format.js'
 import { normalizeSolanaInstructionResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { getValidationNotices, validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -64,7 +65,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
   }
 
   type SolanaInstructionsCursor = {
-    tool: 'portal_query_solana_instructions'
+    tool: 'portal_solana_query_instructions'
     dataset: string
     request: SolanaInstructionsRequest
     window_from_block: number
@@ -104,10 +105,10 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
     })
 
   server.tool(
-    'portal_query_solana_instructions',
-    "Query instruction data from a Solana dataset with advanced filters. Wrapper for Portal API POST /datasets/{dataset}/stream with type: 'solana'.",
+    'portal_solana_query_instructions',
+    buildToolDescription('portal_solana_query_instructions'),
     {
-      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
+      network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
       timeframe: z
         .string()
         .optional()
@@ -165,7 +166,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
     async ({
-      dataset,
+      network,
       timeframe,
       from_block,
       to_block,
@@ -207,23 +208,23 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
     }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<SolanaInstructionsRequest>(cursor, 'portal_query_solana_instructions')
+        ? decodeRecentPageCursor<SolanaInstructionsRequest>(cursor, 'portal_solana_query_instructions')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : undefined)
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : undefined)
       if (!dataset) {
-        throw new Error('dataset is required unless you are continuing with cursor.')
+        throw new Error('network is required unless you are continuing with cursor.')
       }
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'solana') {
         throw createUnsupportedChainError({
-          toolName: 'portal_query_solana_instructions',
+          toolName: 'portal_solana_query_instructions',
           dataset,
           actualChainType: chainType,
           supportedChains: ['solana'],
           suggestions: [
-            'Use portal_query_transactions or portal_query_logs for EVM datasets.',
-            'Use portal_query_bitcoin_transactions for Bitcoin datasets.',
+            'Use portal_evm_query_transactions or portal_evm_query_logs for EVM datasets.',
+            'Use portal_bitcoin_query_transactions for Bitcoin datasets.',
           ],
         })
       }
@@ -406,7 +407,7 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<SolanaInstructionsRequest>({
-            tool: 'portal_query_solana_instructions',
+            tool: 'portal_solana_query_instructions',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -473,11 +474,26 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         page.pageItems,
         `Retrieved ${page.pageItems.length} instructions${page.hasMore ? ` from the most recent matching slots (preview page limited to ${limit})` : ''}`,
         {
+          toolName: 'portal_solana_query_instructions',
           notices,
           pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+          ordering: buildChronologicalPageOrdering({
+            sortedBy: 'slot_number',
+            tieBreakers: ['transactionIndex', 'instructionAddress'],
+          }),
           freshness,
           coverage,
+          execution: buildExecutionMetadata({
+            finalized_only,
+            limit,
+            from_block: resolvedFromBlock,
+            to_block: endBlock,
+            page_to_block: pageToBlock,
+            range_kind: resolvedBlocks.range_kind,
+            normalized_output: true,
+          }),
           metadata: {
+            network: dataset,
             dataset,
             from_block: resolvedFromBlock,
             to_block: pageToBlock,

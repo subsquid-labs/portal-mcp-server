@@ -3,7 +3,7 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetchStream, portalFetchStreamVisit } from '../../helpers/fetch.js'
 import { formatDuration, formatNumber, formatTimestamp } from '../../helpers/formatting.js'
 import { hashString53 } from '../../helpers/hash.js'
-import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { parseTimeframeToSeconds, resolveTimeframeOrBlocks, type ResolvedBlockWindow, type TimestampInput } from '../../helpers/timeframe.js'
 
 export type SolanaTimeSeriesMetric =
   | 'tps'
@@ -35,6 +35,8 @@ export interface SolanaTimeSeriesResult {
   to_block: number
   observed_span_seconds: number
   observed_span_formatted: string
+  first_observed_timestamp?: number
+  last_observed_timestamp?: number
   chunks_fetched: number
   chunk_size_reduced: boolean
   statistics: {
@@ -52,6 +54,9 @@ interface ComputeSolanaTimeSeriesOptions {
   interval: '5m' | '15m' | '1h' | '6h' | '1d'
   duration: '1h' | '6h' | '24h' | '7d'
   trimIncompleteLastBucket?: boolean
+  from_timestamp?: TimestampInput
+  to_timestamp?: TimestampInput
+  resolved_window?: ResolvedBlockWindow
 }
 
 type SolanaSlotRange = {
@@ -190,11 +195,23 @@ export async function computeSolanaTimeSeries({
   interval,
   duration,
   trimIncompleteLastBucket = true,
+  from_timestamp,
+  to_timestamp,
+  resolved_window,
 }: ComputeSolanaTimeSeriesOptions): Promise<SolanaTimeSeriesResult> {
-  const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({
+  const resolvedWindow = resolved_window ?? await resolveTimeframeOrBlocks({
     dataset,
-    timeframe: duration,
+    ...(from_timestamp !== undefined || to_timestamp !== undefined
+      ? {
+          from_timestamp,
+          to_timestamp,
+        }
+      : {
+          timeframe: duration,
+        }),
   })
+
+  const { from_block: fromBlock, to_block: toBlock } = resolvedWindow
 
   const { validatedToBlock: endBlock } = await validateBlockRange(
     dataset,
@@ -369,6 +386,8 @@ export async function computeSolanaTimeSeries({
     to_block: endBlock,
     observed_span_seconds: observedSpanSeconds,
     observed_span_formatted: formatDuration(observedSpanSeconds),
+    ...(firstObservedTimestamp !== undefined ? { first_observed_timestamp: firstObservedTimestamp } : {}),
+    ...(lastObservedTimestamp !== undefined ? { last_observed_timestamp: lastObservedTimestamp } : {}),
     chunks_fetched: chunksFetched,
     chunk_size_reduced: chunkSizeReduced,
     statistics: {

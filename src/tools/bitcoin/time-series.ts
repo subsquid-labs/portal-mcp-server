@@ -3,11 +3,13 @@ import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
+import { buildTimeSeriesChart, buildTimeSeriesTable, type TableValueFormat } from '../../helpers/chart-metadata.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatDuration, formatTimestamp } from '../../helpers/formatting.js'
+import { buildBucketCoverage, buildBucketGapDiagnostics, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
 // ============================================================================
@@ -68,15 +70,16 @@ EXAMPLES:
         })
       }
 
-      const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({
+      const resolvedWindow = await resolveTimeframeOrBlocks({
         dataset,
         timeframe: duration,
       })
+      const fromBlock = resolvedWindow.from_block
 
-      const { validatedToBlock: endBlock } = await validateBlockRange(
+      const { validatedToBlock: endBlock, head } = await validateBlockRange(
         dataset,
         fromBlock,
-        toBlock ?? Number.MAX_SAFE_INTEGER,
+        resolvedWindow.to_block ?? Number.MAX_SAFE_INTEGER,
         false,
       )
 
@@ -355,9 +358,18 @@ EXAMPLES:
         unique_addresses: 'addresses',
       }
       const unit = unitMap[metric] || ''
+      const valueFormat: TableValueFormat =
+        metric === 'transaction_count' || metric === 'unique_addresses'
+          ? 'integer'
+          : metric === 'avg_block_size'
+            ? 'bytes'
+            : metric === 'fee_per_block'
+              ? 'btc'
+              : 'decimal'
 
       // Detect chain head staleness — Bitcoin blocks are stochastic (~10 min avg)
       // so the head block can be significantly behind wall-clock time
+      const firstBlockTimestamp = Math.min(...Array.from(blockData.values()).map((d) => d.timestamp))
       const lastBlockTimestamp = Math.max(...Array.from(blockData.values()).map((d) => d.timestamp))
       const nowUnix = Math.floor(Date.now() / 1000)
       const headAgeSec = nowUnix - lastBlockTimestamp
@@ -384,12 +396,56 @@ EXAMPLES:
       }
 
       const notices = headAgeWarning ? [headAgeWarning] : undefined
+      const gapDiagnostics = buildBucketGapDiagnostics({
+        buckets: timeSeries,
+        intervalSeconds,
+        isFilled: (bucket) => bucket.blocks_in_bucket > 0,
+        anchor: 'latest_block',
+        firstObservedTimestamp: firstBlockTimestamp,
+        lastObservedTimestamp: lastBlockTimestamp,
+      })
 
       return formatResult(
-        { summary, time_series: timeSeries },
+        {
+          summary,
+          chart: buildTimeSeriesChart({
+            interval,
+            totalPoints: timeSeries.length,
+            unit,
+            title: `Bitcoin ${metric}`,
+            yAxisLabel: metric,
+            valueFormat,
+          }),
+          tables: [
+            buildTimeSeriesTable({
+              rowCount: timeSeries.length,
+              title: 'Time series buckets',
+              valueLabel: metric,
+              valueFormat,
+              unit: unit || undefined,
+              timestampField: 'timestamp',
+              blocksInBucketField: 'blocks_in_bucket',
+              defaultSort: { key: 'bucket_index', direction: 'asc' },
+            }),
+          ],
+          gap_diagnostics: gapDiagnostics,
+          time_series: timeSeries,
+        },
         `Bitcoin ${metric} over ${duration} in ${interval} intervals. ${timeSeries.length} data points. Avg: ${avg.toFixed(2)} ${unit}, Min: ${min.toFixed(2)} ${unit}, Max: ${max.toFixed(2)} ${unit}`,
         {
           notices,
+          freshness: buildQueryFreshness({
+            finality: 'latest',
+            headBlockNumber: head.number,
+            windowToBlock: endBlock,
+            resolvedWindow,
+          }),
+          coverage: buildBucketCoverage({
+            expectedBuckets,
+            returnedBuckets: timeSeries.length,
+            filledBuckets: timeSeries.filter((point) => point.blocks_in_bucket > 0).length,
+            anchor: 'latest_block',
+          }),
           metadata: {
             dataset,
             from_block: fromBlock,

@@ -6,13 +6,14 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
-import { buildBitcoinBlockFields, buildBitcoinTransactionFields } from '../../helpers/fields.js'
+import { buildBitcoinBlockFields, buildBitcoinInputFields, buildBitcoinOutputFields, buildBitcoinTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
-import { normalizeBitcoinTransactionResult } from '../../helpers/normalized-results.js'
+import { normalizeBitcoinInputResult, normalizeBitcoinOutputResult, normalizeBitcoinTransactionResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 
 export function registerQueryBitcoinTransactionsTool(server: McpServer) {
   type BitcoinTransactionsRequest = {
@@ -21,11 +22,13 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
     to_timestamp?: TimestampInput
     limit: number
     finalized_only: boolean
+    include_inputs: boolean
+    include_outputs: boolean
     response_format: ResponseFormat
   }
 
   type BitcoinTransactionsCursor = {
-    tool: 'portal_query_bitcoin_transactions'
+    tool: 'portal_bitcoin_query_transactions'
     dataset: string
     request: BitcoinTransactionsRequest
     window_from_block: number
@@ -64,21 +67,10 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
     })
 
   server.tool(
-    'portal_query_bitcoin_transactions',
-    `Query Bitcoin transactions. Returns transaction-level data (txid, size, weight, version, locktime).
-
-WHEN TO USE:
-- "Show recent Bitcoin transactions"
-- "Get transaction details from Bitcoin"
-
-NOTE: Bitcoin uses UTXO model. For address-specific queries, use portal_query_bitcoin_inputs
-(spending from address) or portal_query_bitcoin_outputs (receiving to address).
-
-EXAMPLES:
-- Recent txs: { dataset: "bitcoin-mainnet", timeframe: "1h", limit: 10 }
-- Block range: { dataset: "bitcoin-mainnet", from_block: 800000, to_block: 800010 }`,
+    'portal_bitcoin_query_transactions',
+    buildToolDescription('portal_bitcoin_query_transactions'),
     {
-      dataset: z.string().optional().describe('Dataset name (default: bitcoin-mainnet). Optional when continuing with cursor.'),
+      network: z.string().optional().describe('Network name (default: bitcoin-mainnet). Optional when continuing with cursor.'),
       from_block: z.number().optional().describe('Starting block number'),
       to_block: z.number().optional().describe('Ending block number'),
       timeframe: z
@@ -94,27 +86,29 @@ EXAMPLES:
         .optional()
         .describe('Ending timestamp. Accepts Unix seconds, Unix milliseconds, ISO datetime, or relative input like "now".'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
+      include_inputs: z.boolean().optional().default(false).describe('Attach transaction inputs inline'),
+      include_outputs: z.boolean().optional().default(false).describe('Attach transaction outputs inline'),
       response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (stats only, ~90% smaller), 'compact' (hash+size+weight only, ~50% smaller), 'full' (all fields)"),
       limit: z.number().optional().default(50).describe('Max transactions to return (default: 50)'),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
-    async ({ dataset, from_block, to_block, timeframe, from_timestamp, to_timestamp, finalized_only, response_format, limit, cursor }) => {
+    async ({ network, from_block, to_block, timeframe, from_timestamp, to_timestamp, finalized_only, include_inputs, include_outputs, response_format, limit, cursor }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<BitcoinTransactionsRequest>(cursor, 'portal_query_bitcoin_transactions')
+        ? decodeRecentPageCursor<BitcoinTransactionsRequest>(cursor, 'portal_bitcoin_query_transactions')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : 'bitcoin-mainnet')
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : 'bitcoin-mainnet')
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'bitcoin') {
         throw createUnsupportedChainError({
-          toolName: 'portal_query_bitcoin_transactions',
+          toolName: 'portal_bitcoin_query_transactions',
           dataset,
           actualChainType: chainType,
           supportedChains: ['bitcoin'],
           suggestions: [
-            'Use portal_query_transactions for EVM datasets.',
-            'Use portal_query_solana_transactions for Solana datasets.',
+            'Use portal_evm_query_transactions for EVM datasets.',
+            'Use portal_solana_query_transactions for Solana datasets.',
           ],
         })
       }
@@ -125,6 +119,8 @@ EXAMPLES:
         to_timestamp = paginationCursor.request.to_timestamp
         limit = paginationCursor.request.limit
         finalized_only = paginationCursor.request.finalized_only
+        include_inputs = paginationCursor.request.include_inputs
+        include_outputs = paginationCursor.request.include_outputs
         response_format = paginationCursor.request.response_format
       }
 
@@ -208,7 +204,7 @@ EXAMPLES:
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<BitcoinTransactionsRequest>({
-            tool: 'portal_query_bitcoin_transactions',
+            tool: 'portal_bitcoin_query_transactions',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -216,6 +212,8 @@ EXAMPLES:
               ...(to_timestamp !== undefined ? { to_timestamp } : {}),
               limit,
               finalized_only,
+              include_inputs,
+              include_outputs,
               response_format: response_format as ResponseFormat,
             },
             window_from_block: resolvedFromBlock,
@@ -224,7 +222,112 @@ EXAMPLES:
             skip_inclusive_block: page.nextBoundary.skip_inclusive_block,
           })
         : undefined
-      const formattedData = applyResponseFormat(page.pageItems, response_format as ResponseFormat, 'bitcoin_transactions')
+      let pageItems = page.pageItems
+      if ((include_inputs || include_outputs) && pageItems.length > 0) {
+        const txKeys = new Set(
+          pageItems
+            .map((item) => {
+              const blockNumber = typeof item.block_number === 'number' ? item.block_number : undefined
+              const transactionIndex = typeof item.transactionIndex === 'number'
+                ? item.transactionIndex
+                : typeof item.transactionIndex === 'string'
+                  ? Number(item.transactionIndex)
+                  : undefined
+              return blockNumber !== undefined && Number.isFinite(transactionIndex) ? `${blockNumber}:${transactionIndex}` : undefined
+            })
+            .filter((value): value is string => Boolean(value)),
+        )
+        const [inputBlocks, outputBlocks] = await Promise.all([
+          include_inputs
+            ? portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+                type: 'bitcoin',
+                fromBlock: resolvedFromBlock,
+                toBlock: pageToBlock,
+                fields: {
+                  block: buildBitcoinBlockFields(),
+                  input: buildBitcoinInputFields(),
+                },
+                inputs: [{}],
+              }, {
+                itemKeys: ['inputs'],
+                limit: 5000,
+                chunkSize: 20,
+              })
+            : Promise.resolve([]),
+          include_outputs
+            ? portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+                type: 'bitcoin',
+                fromBlock: resolvedFromBlock,
+                toBlock: pageToBlock,
+                fields: {
+                  block: buildBitcoinBlockFields(),
+                  output: buildBitcoinOutputFields(),
+                },
+                outputs: [{}],
+              }, {
+                itemKeys: ['outputs'],
+                limit: 5000,
+                chunkSize: 20,
+              })
+            : Promise.resolve([]),
+        ])
+
+        const inputsByTx = new Map<string, Record<string, unknown>[]>()
+        for (const block of inputBlocks as Array<any>) {
+          const blockNumber = typeof block.number === 'number' ? block.number : typeof block.header?.number === 'number' ? block.header.number : undefined
+          for (const input of block.inputs || []) {
+            const transactionIndex = typeof input.transactionIndex === 'number'
+              ? input.transactionIndex
+              : typeof input.transactionIndex === 'string'
+                ? Number(input.transactionIndex)
+                : undefined
+            if (blockNumber === undefined || !Number.isFinite(transactionIndex)) continue
+            const txKey = `${blockNumber}:${transactionIndex}`
+            if (!txKeys.has(txKey)) continue
+            if (!inputsByTx.has(txKey)) inputsByTx.set(txKey, [])
+            inputsByTx.get(txKey)!.push(normalizeBitcoinInputResult({
+              ...input,
+              block_number: blockNumber,
+            }))
+          }
+        }
+        const outputsByTx = new Map<string, Record<string, unknown>[]>()
+        for (const block of outputBlocks as Array<any>) {
+          const blockNumber = typeof block.number === 'number' ? block.number : typeof block.header?.number === 'number' ? block.header.number : undefined
+          for (const output of block.outputs || []) {
+            const transactionIndex = typeof output.transactionIndex === 'number'
+              ? output.transactionIndex
+              : typeof output.transactionIndex === 'string'
+                ? Number(output.transactionIndex)
+                : undefined
+            if (blockNumber === undefined || !Number.isFinite(transactionIndex)) continue
+            const txKey = `${blockNumber}:${transactionIndex}`
+            if (!txKeys.has(txKey)) continue
+            if (!outputsByTx.has(txKey)) outputsByTx.set(txKey, [])
+            outputsByTx.get(txKey)!.push(normalizeBitcoinOutputResult({
+              ...output,
+              block_number: blockNumber,
+            }))
+          }
+        }
+
+        pageItems = pageItems.map((item) => {
+          const blockNumber = typeof item.block_number === 'number' ? item.block_number : undefined
+          const transactionIndex = typeof item.transactionIndex === 'number'
+            ? item.transactionIndex
+            : typeof item.transactionIndex === 'string'
+              ? Number(item.transactionIndex)
+              : undefined
+          const txKey = blockNumber !== undefined && Number.isFinite(transactionIndex) ? `${blockNumber}:${transactionIndex}` : ''
+          return {
+            ...item,
+            ...(include_inputs ? { inputs: inputsByTx.get(txKey) || [] } : {}),
+            ...(include_outputs ? { outputs: outputsByTx.get(txKey) || [] } : {}),
+          }
+        })
+      }
+
+      const formattedData = applyResponseFormat(pageItems, response_format as ResponseFormat, 'bitcoin_transactions')
       const notices = getTimestampWindowNotices(resolvedBlocks)
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
@@ -243,15 +346,36 @@ EXAMPLES:
       })
 
       const message = response_format === 'summary'
-        ? `Summary of ${page.pageItems.length} Bitcoin transactions${page.hasMore ? ' (latest preview page)' : ''}`
-        : `Retrieved ${page.pageItems.length} Bitcoin transactions${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
+        ? `Summary of ${pageItems.length} Bitcoin transactions${page.hasMore ? ' (latest preview page)' : ''}`
+        : `Retrieved ${pageItems.length} Bitcoin transactions${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
       return formatResult(formattedData, message, {
+        toolName: 'portal_bitcoin_query_transactions',
         notices,
         pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+        ordering: buildChronologicalPageOrdering({
+          sortedBy: 'block_number',
+          tieBreakers: ['transactionIndex', 'txid'],
+        }),
         freshness,
         coverage,
+        execution: buildExecutionMetadata({
+          response_format,
+          finalized_only,
+          limit,
+          from_block: resolvedFromBlock,
+          to_block: endBlock,
+          page_to_block: pageToBlock,
+          range_kind: resolvedBlocks.range_kind,
+          normalized_output: true,
+          notes: [
+            include_inputs || include_outputs
+              ? 'Inputs and/or outputs were attached inline to each transaction.'
+              : 'Transaction-only Bitcoin view.',
+          ],
+        }),
         metadata: {
+          network: dataset,
           dataset,
           from_block: resolvedFromBlock,
           to_block: pageToBlock,

@@ -12,15 +12,17 @@ import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, pa
 import { buildEvmLogFields, buildEvmTraceFields, buildEvmTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp } from '../../helpers/formatting.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import {
   getQueryExamples,
   getValidationNotices,
   normalizeAddresses,
   validateQuerySize,
 } from '../../helpers/validation.js'
+import { decodeLog } from '../utilities/decode-logs.js'
 
 // ============================================================================
 // Tool: Query Logs (EVM)
@@ -72,10 +74,11 @@ type QueryLogsRequest = {
   include_transaction: boolean
   include_transaction_traces: boolean
   include_transaction_logs: boolean
+  decode?: boolean
 }
 
 type QueryLogsCursor = {
-  tool: 'portal_query_logs'
+  tool: 'portal_evm_query_logs'
   dataset: string
   request: QueryLogsRequest
   window_from_block: number
@@ -116,10 +119,10 @@ function sortLogs(items: EvmLogItem[]) {
 
 export function registerQueryLogsTool(server: McpServer) {
   server.tool(
-    'portal_query_logs',
-    `Query event logs from EVM chains. Filter by contract address, event signature (topic0), and indexed parameters. Use field_preset and response_format to control response size.`,
+    'portal_evm_query_logs',
+    buildToolDescription('portal_evm_query_logs'),
     {
-      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
+      network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
       timeframe: z
         .string()
         .optional()
@@ -194,10 +197,11 @@ export function registerQueryLogsTool(server: McpServer) {
         .optional()
         .default(false)
         .describe('Include all logs from parent transactions'),
+      decode: z.boolean().optional().default(false).describe('Decode known log signatures inline when topics/data are available'),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
     async ({
-      dataset,
+      network,
       timeframe,
       from_block,
       to_block,
@@ -215,27 +219,28 @@ export function registerQueryLogsTool(server: McpServer) {
       include_transaction,
       include_transaction_traces,
       include_transaction_logs,
+      decode,
       cursor,
     }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<QueryLogsRequest>(cursor, 'portal_query_logs')
+        ? decodeRecentPageCursor<QueryLogsRequest>(cursor, 'portal_evm_query_logs')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : undefined)
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : undefined)
       if (!dataset) {
-        throw new Error('dataset is required unless you are continuing with cursor.')
+        throw new Error('network is required unless you are continuing with cursor.')
       }
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
         throw createUnsupportedChainError({
-          toolName: 'portal_query_logs',
+          toolName: 'portal_evm_query_logs',
           dataset,
           actualChainType: chainType,
           supportedChains: ['evm'],
           suggestions: [
-            'Use portal_query_solana_instructions for Solana program activity.',
-            'Use portal_query_bitcoin_outputs or portal_query_bitcoin_inputs for Bitcoin UTXO activity.',
+            'Use portal_solana_query_instructions for Solana program activity.',
+            'Use portal_bitcoin_query_transactions with include_inputs/include_outputs for Bitcoin UTXO activity.',
           ],
         })
       }
@@ -257,6 +262,7 @@ export function registerQueryLogsTool(server: McpServer) {
         include_transaction = paginationCursor.request.include_transaction
         include_transaction_traces = paginationCursor.request.include_transaction_traces
         include_transaction_logs = paginationCursor.request.include_transaction_logs
+        decode = paginationCursor.request.decode ?? false
       }
 
       // Resolve timeframe or use explicit blocks
@@ -333,6 +339,7 @@ export function registerQueryLogsTool(server: McpServer) {
         logIndex: true,
         address: true,
         topics: true,
+        ...(decode ? { data: true } : {}),
       }
 
       // Add transaction/trace fields if requested
@@ -373,7 +380,7 @@ export function registerQueryLogsTool(server: McpServer) {
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<QueryLogsRequest>({
-            tool: 'portal_query_logs',
+            tool: 'portal_evm_query_logs',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -391,6 +398,7 @@ export function registerQueryLogsTool(server: McpServer) {
               include_transaction,
               include_transaction_traces,
               include_transaction_logs,
+              ...(decode ? { decode } : {}),
             },
             window_from_block: resolvedFromBlock,
             window_to_block: endBlock,
@@ -400,7 +408,23 @@ export function registerQueryLogsTool(server: McpServer) {
         : undefined
 
       // Apply response format (summary/compact/full)
-      const formattedData = applyResponseFormat(page.pageItems, response_format || 'full', 'logs')
+      const decodedItems = decode
+        ? page.pageItems.map((item) => {
+            const topics = Array.isArray(item.topics) ? item.topics.filter((value): value is string => typeof value === 'string') : []
+            const data = typeof item.data === 'string' ? item.data : '0x'
+            return {
+              ...item,
+              decoded_log: decodeLog({
+                address: String(item.address ?? ''),
+                topics,
+                data,
+                transactionHash: typeof item.transactionHash === 'string' ? item.transactionHash : typeof item.tx_hash === 'string' ? item.tx_hash : undefined,
+                logIndex: typeof item.logIndex === 'number' ? item.logIndex : typeof item.log_index === 'number' ? item.log_index : undefined,
+              }),
+            }
+          })
+        : page.pageItems
+      const formattedData = applyResponseFormat(decodedItems, response_format || 'full', 'logs')
       const notices = [...getTimestampWindowNotices(resolvedBlocks), ...getValidationNotices(validation)]
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
@@ -424,11 +448,33 @@ export function registerQueryLogsTool(server: McpServer) {
           : `Retrieved ${page.pageItems.length} logs${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
       return formatResult(formattedData, message, {
+        toolName: 'portal_evm_query_logs',
         notices,
         pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+        ordering: buildChronologicalPageOrdering({
+          sortedBy: 'block_number',
+          tieBreakers: ['logIndex', 'transactionIndex', 'transactionHash'],
+        }),
         freshness,
         coverage,
+        execution: buildExecutionMetadata({
+          response_format,
+          finalized_only,
+          limit,
+          from_block: resolvedFromBlock,
+          to_block: endBlock,
+          page_to_block: pageToBlock,
+          range_kind: resolvedBlocks.range_kind,
+          decode,
+          notes: [
+            include_transaction || include_transaction_traces || include_transaction_logs
+              ? 'Parent transaction context was requested for matching logs.'
+              : `Using ${field_preset} field preset.`,
+          ],
+          normalized_output: true,
+        }),
         metadata: {
+          network: dataset,
           dataset,
           from_block: resolvedFromBlock,
           to_block: pageToBlock,

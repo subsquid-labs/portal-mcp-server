@@ -7,6 +7,7 @@ import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { formatResult } from '../../helpers/format.js'
 import { buildBlockLookupFreshness } from '../../helpers/result-metadata.js'
 import { resolveBlockAtTimestamp } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 
 // ============================================================================
 // Tool: Block at Timestamp
@@ -14,27 +15,27 @@ import { resolveBlockAtTimestamp } from '../../helpers/timeframe.js'
 
 export function registerBlockAtTimestampTool(server: McpServer) {
   server.tool(
-    'portal_block_at_timestamp',
-    'Find the block or slot number at a specific timestamp',
+    'portal_debug_resolve_time_to_block',
+    buildToolDescription('portal_debug_resolve_time_to_block'),
     {
-      dataset: z.string().describe('Dataset name or alias'),
+      network: z.string().describe('Network name or alias'),
       timestamp: z
         .union([z.number(), z.string()])
         .describe('Unix seconds, Unix milliseconds, ISO datetime, or relative input like "1h ago"'),
     },
-    async ({ dataset, timestamp }) => {
-      dataset = await resolveDataset(dataset)
+    async ({ network, timestamp }) => {
+      const dataset = await resolveDataset(network)
       const chainType = detectChainType(dataset)
 
       if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
         throw createUnsupportedChainError({
-          toolName: 'portal_block_at_timestamp',
+          toolName: 'portal_debug_resolve_time_to_block',
           dataset,
           actualChainType: chainType,
           supportedChains: ['evm', 'solana', 'bitcoin'],
           suggestions: [
-            'Use portal_get_block_number for the current head block.',
-            'Use portal_query_hyperliquid_fills with a recent block window for Hyperliquid activity.',
+            'Use portal_get_head for the current head block.',
+            'Use portal_hyperliquid_query_fills with a recent block window for Hyperliquid activity.',
           ],
         })
       }
@@ -48,8 +49,25 @@ export function registerBlockAtTimestampTool(server: McpServer) {
         result,
         `Resolved ${result.timestamp_human} to block ${result.block_number} (${result.resolution}).`,
         {
+          toolName: 'portal_debug_resolve_time_to_block',
           notices,
           freshness: buildBlockLookupFreshness(result),
+          coverage: {
+            kind: 'timestamp_lookup',
+            window_complete: true,
+            result_complete: true,
+            resolution: result.resolution,
+          },
+          execution: buildExecutionMetadata({
+            notes: [
+              result.resolution === 'estimated'
+                ? 'Resolved near the indexed head using the latest known block timestamp.'
+                : 'Resolved directly against indexed timestamp data.',
+            ],
+          }),
+          metadata: {
+            network: dataset,
+          },
         },
       )
     },

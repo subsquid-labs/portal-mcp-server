@@ -86,51 +86,78 @@ async function main() {
   const listId = send('tools/list')
   const listResp = await readResponse(listId)
   if (listResp.error) fail(`tools/list error: ${JSON.stringify(listResp.error)}`)
-  const toolCount = listResp.result?.tools?.length ?? 0
-  console.log(`Tools registered: ${toolCount}`)
-  if (toolCount < 20) fail(`Expected at least 20 tools, got ${toolCount}`)
+  const tools = listResp.result?.tools ?? []
+  const toolCount = tools.length
+  const publicToolCount = tools.filter((tool: any) => !String(tool.name || '').startsWith('portal_debug_')).length
+  const advancedToolCount = tools.filter((tool: any) => String(tool.name || '').startsWith('portal_debug_')).length
+  const legacyNames = [
+    'portal_list_datasets',
+    'portal_get_dataset_info',
+    'portal_get_block_number',
+    'portal_query_transactions',
+    'portal_query_logs',
+    'portal_get_erc20_transfers',
+    'portal_query_solana_transactions',
+    'portal_query_solana_instructions',
+    'portal_solana_analytics',
+    'portal_query_bitcoin_transactions',
+    'portal_bitcoin_analytics',
+    'portal_query_hyperliquid_fills',
+    'portal_hyperliquid_analytics',
+    'portal_hyperliquid_ohlc',
+    'portal_query_blocks',
+    'portal_block_at_timestamp',
+    'portal_query_hyperliquid_replica_cmds',
+    'portal_get_recent_transactions',
+  ]
+  const stillExposed = tools.map((tool: any) => tool.name).filter((name: string) => legacyNames.includes(name))
+  console.log(`Tools registered: ${toolCount} (${publicToolCount} public, ${advancedToolCount} advanced)`)
+  if (toolCount !== 23) fail(`Expected exactly 23 tools, got ${toolCount}`)
+  if (publicToolCount !== 20) fail(`Expected exactly 20 public tools, got ${publicToolCount}`)
+  if (advancedToolCount !== 3) fail(`Expected exactly 3 advanced tools, got ${advancedToolCount}`)
+  if (stillExposed.length > 0) fail(`Legacy tool names are still exposed: ${stillExposed.join(', ')}`)
 
-  // Step 5: Call portal_list_datasets
+  // Step 5: Call portal_list_networks
   const dsId = send('tools/call', {
-    name: 'portal_list_datasets',
+    name: 'portal_list_networks',
     arguments: { network_type: 'mainnet' },
   })
   const dsResp = await readResponse(dsId)
-  if (dsResp.error) fail(`portal_list_datasets error: ${JSON.stringify(dsResp.error)}`)
+  if (dsResp.error) fail(`portal_list_networks error: ${JSON.stringify(dsResp.error)}`)
   const dsContent = dsResp.result?.content?.[0]?.text
   if (!dsContent || !dsContent.includes('ethereum-mainnet')) {
-    fail(`portal_list_datasets: expected ethereum-mainnet in results`)
+    fail(`portal_list_networks: expected ethereum-mainnet in results`)
   }
-  console.log('portal_list_datasets OK')
+  console.log('portal_list_networks OK')
 
-  // Step 6: Call portal_get_dataset_info
+  // Step 6: Call portal_get_network_info
   const infoId = send('tools/call', {
-    name: 'portal_get_dataset_info',
-    arguments: { dataset: 'ethereum-mainnet' },
+    name: 'portal_get_network_info',
+    arguments: { network: 'ethereum' },
   })
   const infoResp = await readResponse(infoId)
-  if (infoResp.error) fail(`portal_get_dataset_info error: ${JSON.stringify(infoResp.error)}`)
+  if (infoResp.error) fail(`portal_get_network_info error: ${JSON.stringify(infoResp.error)}`)
   const infoContent = infoResp.result?.content?.[0]?.text
   if (!infoContent || !infoContent.includes('ethereum')) {
-    fail(`portal_get_dataset_info: expected ethereum in results`)
+    fail(`portal_get_network_info: expected ethereum in results`)
   }
-  console.log('portal_get_dataset_info OK')
+  console.log('portal_get_network_info OK')
 
-  // Step 7: Call portal_get_block_number
+  // Step 7: Call portal_get_head
   const blockId = send('tools/call', {
-    name: 'portal_get_block_number',
-    arguments: { dataset: 'ethereum-mainnet' },
+    name: 'portal_get_head',
+    arguments: { network: 'ethereum' },
   })
   const blockResp = await readResponse(blockId)
-  if (blockResp.error) fail(`portal_get_block_number error: ${JSON.stringify(blockResp.error)}`)
+  if (blockResp.error) fail(`portal_get_head error: ${JSON.stringify(blockResp.error)}`)
   const blockContent = blockResp.result?.content?.[0]?.text
-  if (!blockContent) fail(`portal_get_block_number: empty response`)
+  if (!blockContent) fail(`portal_get_head: empty response`)
   const parsed = JSON.parse(blockContent)
   const blockNum = parsed.number ?? parsed.block_number
   if (typeof blockNum !== 'number' || blockNum < 1_000_000) {
-    fail(`portal_get_block_number: unexpected block number ${blockNum}`)
+    fail(`portal_get_head: unexpected block number ${blockNum}`)
   }
-  console.log(`portal_get_block_number OK (block ${blockNum})`)
+  console.log(`portal_get_head OK (block ${blockNum})`)
 
   // Done
   child.kill()

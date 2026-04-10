@@ -5,7 +5,7 @@ type RecordLike = Record<string, unknown>
 function withCommonAliases(
   item: RecordLike,
   aliases: {
-    chain_kind: 'evm' | 'solana' | 'bitcoin'
+    chain_kind: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid'
     record_type: string
     primary_id?: string
     tx_hash?: string
@@ -266,6 +266,73 @@ export function normalizeBitcoinOutputResult(item: RecordLike): RecordLike {
     primary_id: txHash && outputIndex !== undefined ? `${txHash}:${outputIndex}` : txHash ?? fallbackPrimaryId,
     tx_hash: txHash,
     recipient,
+    block_number: blockNumber,
+    timestamp,
+  })
+}
+
+export function normalizeHyperliquidFillResult(item: RecordLike): RecordLike {
+  const txHash = typeof item.hash === 'string' ? item.hash : undefined
+  const fillIndex = typeof item.fillIndex === 'number'
+    ? item.fillIndex
+    : typeof item.fillIndex === 'string'
+      ? Number(item.fillIndex)
+      : undefined
+  const sender = typeof item.user === 'string' ? item.user : undefined
+  const blockNumber = typeof item.block_number === 'number' ? item.block_number : undefined
+  const timestampValue = item.time ?? item.block_timestamp ?? item.timestamp
+  const rawTimestamp = typeof timestampValue === 'number'
+    ? timestampValue
+    : typeof timestampValue === 'string'
+      ? Number(timestampValue)
+      : undefined
+  const timestamp = rawTimestamp !== undefined
+    ? rawTimestamp > 1e12
+      ? Math.floor(rawTimestamp / 1000)
+      : rawTimestamp
+    : undefined
+
+  return withCommonAliases(item, {
+    chain_kind: 'hyperliquid',
+    record_type: 'fill',
+    primary_id: txHash && fillIndex !== undefined ? `${txHash}:${fillIndex}` : txHash,
+    tx_hash: txHash,
+    sender,
+    block_number: blockNumber,
+    timestamp,
+  })
+}
+
+export function normalizeHyperliquidReplicaCmdResult(item: RecordLike): RecordLike {
+  const blockNumber = typeof item.block_number === 'number' ? item.block_number : undefined
+  const actionIndex = typeof item.actionIndex === 'number'
+    ? item.actionIndex
+    : typeof item.actionIndex === 'string'
+      ? Number(item.actionIndex)
+      : undefined
+  const sender = typeof item.user === 'string' ? item.user : undefined
+  const timestampValue = item.timestamp ?? item.block_timestamp ?? item.time
+  const rawTimestamp = typeof timestampValue === 'number'
+    ? timestampValue
+    : typeof timestampValue === 'string'
+      ? Number(timestampValue)
+      : undefined
+  const timestamp = rawTimestamp !== undefined
+    ? rawTimestamp > 1e12
+      ? Math.floor(rawTimestamp / 1000)
+      : rawTimestamp
+    : undefined
+  const primaryId = blockNumber !== undefined && actionIndex !== undefined
+    ? `${blockNumber}:${actionIndex}`
+    : blockNumber !== undefined
+      ? `${blockNumber}:action`
+      : undefined
+
+  return withCommonAliases(item, {
+    chain_kind: 'hyperliquid',
+    record_type: 'replica_command',
+    primary_id: primaryId,
+    sender,
     block_number: blockNumber,
     timestamp,
   })

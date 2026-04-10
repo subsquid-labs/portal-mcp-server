@@ -161,7 +161,7 @@ const KNOWN_EVENTS: Record<string, { name: string; inputs: EventInput[] }> = {
   },
 }
 
-function decodeLog(log: {
+export function decodeLog(log: {
   address: string
   topics: string[]
   data: string
@@ -310,7 +310,7 @@ export function registerDecodeLogsTool(server: McpServer) {
           actualChainType: chainType,
           supportedChains: ['evm'],
           suggestions: [
-            'Use portal_query_solana_instructions for Solana program activity.',
+            'Use portal_solana_query_instructions for Solana program activity.',
             'Use portal_query_bitcoin_outputs or portal_query_bitcoin_inputs for Bitcoin activity.',
           ],
         })

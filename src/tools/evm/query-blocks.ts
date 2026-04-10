@@ -10,8 +10,9 @@ import { buildBitcoinBlockFields, buildEvmBlockFields } from '../../helpers/fiel
 import { formatResult } from '../../helpers/format.js'
 import { hexToNumber, weiToGwei } from '../../helpers/formatting.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 
 // ============================================================================
 // Tool: Query Blocks (EVM)
@@ -46,10 +47,10 @@ function sortBlocks(items: BlockItem[]) {
 
 export function registerQueryBlocksTool(server: McpServer) {
   server.tool(
-    'portal_query_blocks',
-    'Query recent block data from EVM, Solana, or Bitcoin datasets',
+    'portal_debug_query_blocks',
+    buildToolDescription('portal_debug_query_blocks'),
     {
-      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
+      network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
       timeframe: z
         .string()
         .optional()
@@ -84,19 +85,19 @@ export function registerQueryBlocksTool(server: McpServer) {
         ),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
-    async ({ dataset, timeframe, from_block, to_block, from_timestamp, to_timestamp, limit, include_l2_fields, finalized_only, field_preset, cursor }) => {
+    async ({ network, timeframe, from_block, to_block, from_timestamp, to_timestamp, limit, include_l2_fields, finalized_only, field_preset, cursor }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<QueryBlocksRequest>(cursor, 'portal_query_blocks')
+        ? decodeRecentPageCursor<QueryBlocksRequest>(cursor, 'portal_debug_query_blocks')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : undefined)
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : undefined)
       if (!dataset) {
-        throw new Error('dataset is required unless you are continuing with cursor.')
+        throw new Error('network is required unless you are continuing with cursor.')
       }
       const chainType = detectChainType(dataset)
 
       if (chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') {
-        throw new Error('portal_query_blocks supports EVM, Solana, and Bitcoin datasets. Hyperliquid datasets do not expose block metadata through this tool.')
+        throw new Error('portal_debug_query_blocks supports EVM, Solana, and Bitcoin networks. Hyperliquid datasets do not expose block metadata through this tool.')
       }
 
       if (paginationCursor) {
@@ -213,7 +214,7 @@ export function registerQueryBlocksTool(server: McpServer) {
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<QueryBlocksRequest>({
-            tool: 'portal_query_blocks',
+          tool: 'portal_debug_query_blocks',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -249,11 +250,29 @@ export function registerQueryBlocksTool(server: McpServer) {
       })
 
       return formatResult(page.pageItems, `Retrieved ${page.pageItems.length} blocks${page.hasMore ? ` from the most recent matching range (preview page limited to ${limit})` : ''}`, {
+        toolName: 'portal_debug_query_blocks',
         notices,
         pagination: buildPaginationInfo(limit!, page.pageItems.length, nextCursor),
+        ordering: buildChronologicalPageOrdering({
+          sortedBy: chainType === 'solana' ? 'slot_number' : 'block_number',
+        }),
         freshness,
         coverage,
+        execution: buildExecutionMetadata({
+          finalized_only,
+          limit,
+          from_block: startBlock,
+          to_block: endBlock,
+          page_to_block: pageToBlock,
+          range_kind: resolvedBlocks.range_kind,
+          notes: [
+            chainType === 'evm'
+              ? `Field preset: ${field_preset}${includeL2 ? ' with L2 fields' : ''}.`
+              : `Field preset follows the native ${chainType} block shape.`,
+          ],
+        }),
         metadata: {
+          network: dataset,
           dataset,
           from_block: startBlock,
           to_block: pageToBlock,

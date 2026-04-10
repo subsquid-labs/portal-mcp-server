@@ -2,9 +2,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { buildTimeSeriesChart, buildTimeSeriesTable, type TableValueFormat } from '../../helpers/chart-metadata.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp } from '../../helpers/formatting.js'
 import { hashString53 } from '../../helpers/hash.js'
+import { buildBucketCoverage, buildBucketGapDiagnostics, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { visitHyperliquidFillBlocks } from './fill-stream.js'
 
@@ -62,15 +64,16 @@ EXAMPLES:
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
 
-      const { from_block: fromBlock, to_block: toBlock } = await resolveTimeframeOrBlocks({
+      const resolvedWindow = await resolveTimeframeOrBlocks({
         dataset,
         timeframe: duration,
       })
+      const fromBlock = resolvedWindow.from_block
 
-      const { validatedToBlock: endBlock } = await validateBlockRange(
+      const { validatedToBlock: endBlock, head } = await validateBlockRange(
         dataset,
         fromBlock,
-        toBlock ?? Number.MAX_SAFE_INTEGER,
+        resolvedWindow.to_block ?? Number.MAX_SAFE_INTEGER,
         false,
       )
 
@@ -133,6 +136,7 @@ EXAMPLES:
       // HL blocks are ~0.083s (~12/sec). Long durations need millions of blocks.
       // Fetch in chunks to avoid OOM, aggregating into buckets incrementally.
       let latestTimestamp = 0
+      let firstObservedTimestamp: number | undefined
       let fillCount = 0
       const { chunksFetched, chunkSizeReduced } = await visitHyperliquidFillBlocks({
         dataset,
@@ -150,6 +154,7 @@ EXAMPLES:
             if (!ts) continue
 
             latestTimestamp = Math.max(latestTimestamp, ts)
+            if (firstObservedTimestamp === undefined || ts < firstObservedTimestamp) firstObservedTimestamp = ts
             fillCount += 1
             const bucketTimestamp = Math.floor(ts / intervalSeconds) * intervalSeconds
             const bucket = getOrCreateBucket(bucketTimestamp)
@@ -231,12 +236,24 @@ EXAMPLES:
       if (!isFinite(max)) max = 0
 
       const coinNote = coin ? ` for ${coin.join(', ')}` : ''
+      const filledBuckets = timeSeries.filter((bucket) => bucket.fills_in_bucket > 0).length
+      const gapDiagnostics = buildBucketGapDiagnostics({
+        buckets: timeSeries,
+        intervalSeconds,
+        isFilled: (bucket) => bucket.fills_in_bucket > 0,
+        anchor: 'latest_fill',
+        windowComplete: firstObservedTimestamp !== undefined ? firstObservedTimestamp <= seriesStartTimestamp : true,
+        ...(firstObservedTimestamp !== undefined ? { firstObservedTimestamp } : {}),
+        ...(latestTimestamp > 0 ? { lastObservedTimestamp: latestTimestamp } : {}),
+      })
       const summary: any = {
         metric,
         interval,
         duration,
         total_buckets: timeSeries.length,
         expected_buckets: expectedBuckets,
+        filled_buckets: filledBuckets,
+        empty_buckets: timeSeries.length - filledBuckets,
         total_fills: totalFillsInSeries,
         from_block: fromBlock,
         to_block: endBlock,
@@ -253,11 +270,70 @@ EXAMPLES:
       if (group_by === 'coin') summary.grouped_by = 'coin'
       if (chunksFetched > 1) summary.chunks_fetched = chunksFetched
       if (chunkSizeReduced) summary.chunk_size_reduced = true
+      const valueFormat: TableValueFormat =
+        metric === 'fill_count' || metric === 'unique_traders' ? 'integer' : metric === 'volume' || metric === 'liquidation_volume' ? 'currency_usd' : 'decimal'
+      const valueUnit =
+        metric === 'volume' || metric === 'liquidation_volume'
+          ? 'USD'
+          : metric === 'fill_count'
+            ? 'fills'
+            : undefined
+      const seriesKeys = [...TOP_COINS, 'Others']
 
       return formatResult(
-        { summary, time_series: timeSeries },
+        {
+          summary,
+          chart: buildTimeSeriesChart({
+            interval,
+            totalPoints: timeSeries.length,
+            dataKey: 'time_series',
+            title: `Hyperliquid ${metric}`,
+            yAxisLabel: metric,
+            valueFormat,
+            unit: valueUnit,
+            ...(group_by === 'coin'
+              ? {
+                  groupedValueField: 'by_coin',
+                  groupedValueMode: 'object_map' as const,
+                  seriesKeys,
+                  recommendedVisual: 'stacked_area' as const,
+                }
+              : {}),
+          }),
+          tables: [
+            buildTimeSeriesTable({
+              rowCount: timeSeries.length,
+              title: group_by === 'coin' ? 'Bucketed per-coin breakdown' : 'Time series buckets',
+              valueLabel: metric,
+              valueFormat,
+              unit: valueUnit,
+              groupedValueField: group_by === 'coin' ? 'by_coin' : undefined,
+              groupedValueMode: group_by === 'coin' ? 'object_map' : undefined,
+              seriesKeys: group_by === 'coin' ? seriesKeys : undefined,
+              timestampField: 'timestamp',
+              blocksInBucketField: 'fills_in_bucket',
+              blocksInBucketLabel: 'Fills',
+              defaultSort: { key: 'bucket_index', direction: 'asc' },
+            }),
+          ],
+          gap_diagnostics: gapDiagnostics,
+          time_series: timeSeries,
+        },
         `Aggregated ${metric}${coinNote} over ${duration} in ${interval} intervals. ${timeSeries.length} data points. Avg: ${avg.toFixed(2)}, Min: ${min.toFixed(2)}, Max: ${max.toFixed(2)}`,
         {
+          freshness: buildQueryFreshness({
+            finality: 'latest',
+            headBlockNumber: head.number,
+            windowToBlock: endBlock,
+            resolvedWindow,
+          }),
+          coverage: buildBucketCoverage({
+            expectedBuckets,
+            returnedBuckets: timeSeries.length,
+            filledBuckets,
+            anchor: 'latest_fill',
+            windowComplete: firstObservedTimestamp !== undefined ? firstObservedTimestamp <= seriesStartTimestamp : true,
+          }),
           metadata: {
             dataset,
             from_block: fromBlock,

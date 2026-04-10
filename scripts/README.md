@@ -14,6 +14,14 @@ Runs the full live tool suite against the current MCP server. It:
 - exercises all currently registered tools with representative arguments
 - validates that each response is non-error and structurally useful
 
+### `npm run test:routing`
+Ranks naive user prompts against the live `listTools()` catalog to catch naming and description ambiguity before a model routes to the wrong tool. It:
+
+- uses the real tool descriptions exposed by the server
+- checks every current tool has at least one routing prompt
+- adds extra "dumb user" prompts for common confusion cases
+- fails when the expected tool does not rank highly enough
+
 ### `npx tsx scripts/deep-test.ts`
 Runs the same manifest with user-style prompts in the output so it is easier to scan as a realistic end-to-end QA pass.
 
@@ -26,7 +34,8 @@ When tool names or recommended arguments change:
 
 1. Update `scripts/tool-manifest.ts`
 2. Re-run `npm run test:tools`
-3. Re-run `npx tsx scripts/data-quality-test.ts` for a quick qualitative review
+3. Re-run `npm run test:routing`
+4. Re-run `npx tsx scripts/data-quality-test.ts` for a quick qualitative review
 
 ## Why the manifest exists
 

@@ -2,10 +2,13 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { buildCandlestickChart, buildOhlcTable } from '../../helpers/chart-metadata.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp } from '../../helpers/formatting.js'
-import { buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildBucketCoverage, buildBucketGapDiagnostics, buildChronologicalPageOrdering, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildPaginationInfo, decodeCursor, encodeCursor } from '../../helpers/pagination.js'
+import { estimateBlockTime, parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { visitHyperliquidFillBlocks } from './fill-stream.js'
 
 type OhlcDuration = '1h' | '6h' | '12h' | '24h' | '7d' | '30d'
@@ -28,6 +31,19 @@ type CandleAccumulator = {
   base_volume: number
   fill_count: number
   notional_sum: number
+}
+
+type HyperliquidOhlcCursor = {
+  tool: 'portal_hyperliquid_get_ohlc'
+  dataset: string
+  request: {
+    coin: string
+    interval: OhlcIntervalInput
+    duration: OhlcDuration
+    user?: string
+  }
+  window_start_timestamp: number
+  window_end_exclusive: number
 }
 
 const AUTO_INTERVAL_BY_DURATION: Record<OhlcDuration, OhlcInterval> = {
@@ -109,25 +125,15 @@ function resolveOhlcInterval(duration: OhlcDuration, requestedInterval: OhlcInte
 
 export function registerHyperliquidOhlcTool(server: McpServer) {
   server.tool(
-    'portal_hyperliquid_ohlc',
-    `Build trade OHLC candles from Hyperliquid fills. Returns fixed buckets with open, high, low, close, volume, and VWAP for one coin.
-
-WHEN TO USE:
-- "Show me BTC candles on Hyperliquid for the last hour"
-- "Give me ETH OHLC over the last 24h"
-- "Chart SOL trade candles for one trader"
-
-NOTES:
-- This is trade-fill OHLC, not oracle or orderbook OHLC.
-- Empty intervals are returned with null OHLC values and zero volume.
-- Requires a single coin symbol for a clean candle series.`,
+    'portal_hyperliquid_get_ohlc',
+    buildToolDescription('portal_hyperliquid_get_ohlc'),
     {
-      dataset: z
+      network: z
         .string()
         .optional()
         .default('hyperliquid-fills')
-        .describe("Dataset name (default: 'hyperliquid-fills')"),
-      coin: z.string().describe('Asset symbol to build candles for (for example: "BTC", "ETH", "SOL")'),
+        .describe("Network name (default: 'hyperliquid-fills')"),
+      coin: z.string().optional().describe('Asset symbol to build candles for (for example: "BTC", "ETH", "SOL"). Optional when continuing with cursor.'),
       interval: z
         .enum(['auto', '1m', '5m', '15m', '30m', '1h', '4h', '6h', '1d'])
         .optional()
@@ -139,24 +145,32 @@ NOTES:
         .default('1h')
         .describe('How much recent trading history to cover'),
       user: z.string().optional().describe('Optional trader wallet address (0x-prefixed, lowercase)'),
+      cursor: z.string().optional().describe('Continuation cursor from a previous candle page'),
     },
-    async ({ dataset, coin, interval, duration, user }) => {
+    async ({ network, coin, interval, duration, user, cursor }) => {
       const queryStartTime = Date.now()
-      dataset = await resolveDataset(dataset)
+      const paginationCursor = cursor
+        ? decodeCursor<HyperliquidOhlcCursor>(cursor, 'portal_hyperliquid_get_ohlc')
+        : undefined
+      const requestedDataset = cursor ? (network ? await resolveDataset(network) : undefined) : await resolveDataset(network)
+      const effectiveDataset = paginationCursor?.dataset ?? requestedDataset
+      if (!effectiveDataset) {
+        throw new Error('network is required unless you are continuing with cursor')
+      }
+      let dataset = effectiveDataset
+      if (paginationCursor && requestedDataset && requestedDataset !== paginationCursor.dataset) {
+        throw new Error('This cursor belongs to a different network. Reuse the same network or omit cursor to start a fresh candle window.')
+      }
+
+      coin = paginationCursor?.request.coin ?? coin
+      interval = paginationCursor?.request.interval ?? interval
+      duration = paginationCursor?.request.duration ?? duration
+      user = paginationCursor?.request.user ?? user
+      if (!coin) {
+        throw new Error('coin is required unless you are continuing with cursor')
+      }
+
       const resolvedInterval = resolveOhlcInterval(duration as OhlcDuration, interval as OhlcIntervalInput)
-
-      const resolvedWindow = await resolveTimeframeOrBlocks({
-        dataset,
-        timeframe: duration,
-      })
-      const fromBlock = resolvedWindow.from_block
-
-      const { validatedToBlock: endBlock, head } = await validateBlockRange(
-        dataset,
-        fromBlock,
-        resolvedWindow.to_block ?? Number.MAX_SAFE_INTEGER,
-        false,
-      )
 
       const intervalSeconds = parseTimeframeToSeconds(resolvedInterval)
       const durationSeconds = parseTimeframeToSeconds(duration)
@@ -164,13 +178,19 @@ NOTES:
       const buckets = new Map<number, CandleAccumulator>()
       let latestTimestamp = 0
       let earliestTimestamp = Number.MAX_SAFE_INTEGER
-      let earliestObservedBlock = endBlock
+      let earliestObservedBelowPageEnd = Number.MAX_SAFE_INTEGER
+      let earliestObservedBlock = Number.MAX_SAFE_INTEGER
       let totalFills = 0
       let totalVolume = 0
       let totalBaseVolume = 0
       let chunksFetched = 0
       let chunkSizeReduced = false
-      let scannedFromBlock = fromBlock
+      let scannedFromBlock = 0
+      let seriesStartTimestamp = 0
+      let seriesEndExclusive = 0
+      let resolvedWindow
+      let endBlock = 0
+      let head
 
       const fillFilter: Record<string, unknown> = {
         coin: [coin],
@@ -183,7 +203,7 @@ NOTES:
         sz: true,
       }
 
-      const accumulateRange = async (rangeFrom: number, rangeTo: number) => {
+      const accumulateRange = async (rangeFrom: number, rangeTo: number, options?: { pageEndExclusive?: number; pageStartTimestamp?: number }) => {
         const result = await visitHyperliquidFillBlocks({
           dataset,
           fromBlock: rangeFrom,
@@ -205,11 +225,21 @@ NOTES:
                 continue
               }
 
-              latestTimestamp = Math.max(latestTimestamp, timestamp)
-              earliestTimestamp = Math.min(earliestTimestamp, timestamp)
+              if (options?.pageEndExclusive !== undefined && timestamp >= options.pageEndExclusive) {
+                continue
+              }
+
+              earliestObservedBelowPageEnd = Math.min(earliestObservedBelowPageEnd, timestamp)
               if (blockNumber !== undefined) {
                 earliestObservedBlock = Math.min(earliestObservedBlock, blockNumber)
               }
+
+              if (options?.pageStartTimestamp !== undefined && timestamp < options.pageStartTimestamp) {
+                continue
+              }
+
+              latestTimestamp = Math.max(latestTimestamp, timestamp)
+              earliestTimestamp = Math.min(earliestTimestamp, timestamp)
               totalFills += 1
 
               const bucketTimestamp = Math.floor(timestamp / intervalSeconds) * intervalSeconds
@@ -235,20 +265,68 @@ NOTES:
         chunkSizeReduced = chunkSizeReduced || result.chunkSizeReduced
       }
 
-      await accumulateRange(fromBlock, endBlock)
+      if (paginationCursor) {
+        seriesStartTimestamp = paginationCursor.window_start_timestamp
+        seriesEndExclusive = paginationCursor.window_end_exclusive
+        resolvedWindow = await resolveTimeframeOrBlocks({
+          dataset,
+          from_timestamp: seriesStartTimestamp,
+          to_timestamp: Math.max(0, seriesEndExclusive - 1),
+        })
+
+        const estimatedBlocksPerSecond = 1 / estimateBlockTime(dataset, 'hyperliquidFills')
+        const cushionBlocks = Math.max(25_000, Math.ceil(durationSeconds * estimatedBlocksPerSecond * 0.15))
+        const rangeFrom = Math.max(0, resolvedWindow.from_block - cushionBlocks)
+        const rangeTo = resolvedWindow.to_block + cushionBlocks
+
+        const validated = await validateBlockRange(
+          dataset,
+          rangeFrom,
+          rangeTo ?? Number.MAX_SAFE_INTEGER,
+          false,
+        )
+        endBlock = validated.validatedToBlock
+        head = validated.head
+        scannedFromBlock = rangeFrom
+
+        await accumulateRange(rangeFrom, endBlock, {
+          pageStartTimestamp: seriesStartTimestamp,
+          pageEndExclusive: seriesEndExclusive,
+        })
+      } else {
+        resolvedWindow = await resolveTimeframeOrBlocks({
+          dataset,
+          timeframe: duration,
+        })
+        const fromBlock = resolvedWindow.from_block
+
+        const validated = await validateBlockRange(
+          dataset,
+          fromBlock,
+          resolvedWindow.to_block ?? Number.MAX_SAFE_INTEGER,
+          false,
+        )
+        endBlock = validated.validatedToBlock
+        head = validated.head
+        scannedFromBlock = fromBlock
+
+        await accumulateRange(fromBlock, endBlock)
+      }
 
       if (latestTimestamp === 0 || totalFills === 0) {
         throw new Error(`No Hyperliquid fills found for ${coin}${user ? ` and user ${user}` : ''} in the requested window`)
       }
 
-      const seriesEndExclusive = Math.floor(latestTimestamp / intervalSeconds) * intervalSeconds + intervalSeconds
-      const seriesStartTimestamp = seriesEndExclusive - durationSeconds
+      if (!paginationCursor) {
+        seriesEndExclusive = Math.floor(latestTimestamp / intervalSeconds) * intervalSeconds + intervalSeconds
+        seriesStartTimestamp = seriesEndExclusive - durationSeconds
+      }
 
       let backfillAttempts = 0
-      while (earliestTimestamp > seriesStartTimestamp && scannedFromBlock > 0 && backfillAttempts < 8) {
-        const observedSeconds = Math.max(1, latestTimestamp - earliestTimestamp)
+      while (earliestObservedBelowPageEnd > seriesStartTimestamp && scannedFromBlock > 0 && backfillAttempts < 8) {
+        const observedSeconds = Math.max(1, Math.max(latestTimestamp, seriesEndExclusive - intervalSeconds) - earliestObservedBelowPageEnd)
         const observedBlocks = Math.max(1, endBlock - earliestObservedBlock + 1)
-        const missingSeconds = earliestTimestamp - seriesStartTimestamp
+        const missingSeconds = earliestObservedBelowPageEnd - seriesStartTimestamp
         const estimatedBlocksNeeded = Math.ceil((observedBlocks / observedSeconds) * missingSeconds * 2)
         const extensionSize = Math.max(25_000, estimatedBlocksNeeded)
         const extensionFromBlock = Math.max(0, scannedFromBlock - extensionSize)
@@ -257,7 +335,14 @@ NOTES:
           break
         }
 
-        await accumulateRange(extensionFromBlock, scannedFromBlock - 1)
+        await accumulateRange(extensionFromBlock, scannedFromBlock - 1, {
+          ...(paginationCursor
+            ? {
+                pageStartTimestamp: seriesStartTimestamp,
+                pageEndExclusive: seriesEndExclusive,
+              }
+            : {}),
+        })
         scannedFromBlock = extensionFromBlock
         backfillAttempts += 1
       }
@@ -283,10 +368,37 @@ NOTES:
       })
 
       const filledBuckets = ohlc.filter((bucket) => bucket.fill_count > 0).length
+      const totalWindowFills = ohlc.reduce((sum, bucket) => sum + bucket.fill_count, 0)
+      const totalWindowVolume = ohlc.reduce((sum, bucket) => sum + bucket.volume, 0)
+      const totalWindowBaseVolume = ohlc.reduce((sum, bucket) => sum + bucket.base_volume, 0)
       const firstFilledCandle = ohlc.find((bucket) => bucket.fill_count > 0)
       const lastFilledCandle = [...ohlc].reverse().find((bucket) => bucket.fill_count > 0)
+      const gapDiagnostics = buildBucketGapDiagnostics({
+        buckets: ohlc,
+        intervalSeconds,
+        isFilled: (bucket) => bucket.fill_count > 0,
+        anchor: 'latest_fill',
+        windowComplete: earliestObservedBelowPageEnd <= seriesStartTimestamp,
+        ...(earliestObservedBelowPageEnd !== Number.MAX_SAFE_INTEGER ? { firstObservedTimestamp: earliestObservedBelowPageEnd } : {}),
+        ...(latestTimestamp > 0 ? { lastObservedTimestamp: latestTimestamp } : {}),
+      })
+      const nextCursor =
+        seriesStartTimestamp > 0
+          ? encodeCursor({
+              tool: 'portal_hyperliquid_get_ohlc',
+              dataset,
+              request: {
+                coin,
+                interval,
+                duration,
+                ...(user ? { user: user.toLowerCase() } : {}),
+              },
+              window_start_timestamp: Math.max(0, seriesStartTimestamp - durationSeconds),
+              window_end_exclusive: seriesStartTimestamp,
+            })
+          : undefined
 
-        const summary = {
+      const summary = {
         coin,
         interval: resolvedInterval,
         interval_requested: interval,
@@ -294,13 +406,17 @@ NOTES:
         total_buckets: ohlc.length,
         filled_buckets: filledBuckets,
         empty_buckets: ohlc.length - filledBuckets,
-        total_fills: totalFills,
-        total_volume: parseFloat(totalVolume.toFixed(2)),
-        total_base_volume: parseFloat(totalBaseVolume.toFixed(6)),
+        total_fills: totalWindowFills,
+        total_volume: parseFloat(totalWindowVolume.toFixed(2)),
+        total_base_volume: parseFloat(totalWindowBaseVolume.toFixed(6)),
         from_block: scannedFromBlock,
         to_block: endBlock,
         latest_fill_timestamp: latestTimestamp,
         latest_fill_timestamp_human: formatTimestamp(latestTimestamp),
+        window_start_timestamp: seriesStartTimestamp,
+        window_start_timestamp_human: formatTimestamp(seriesStartTimestamp),
+        window_end_exclusive: seriesEndExclusive,
+        window_end_exclusive_human: formatTimestamp(Math.max(seriesStartTimestamp, seriesEndExclusive - 1)),
         ...(user ? { filtered_user: user.toLowerCase() } : {}),
         ...(firstFilledCandle ? { series_open: firstFilledCandle.open } : {}),
         ...(lastFilledCandle ? { series_close: lastFilledCandle.close } : {}),
@@ -319,34 +435,51 @@ NOTES:
       return formatResult(
         {
           summary,
-          chart: {
-            kind: 'candlestick',
-            volume_panel: true,
-            x_field: 'timestamp',
-            candle_fields: {
-              open: 'open',
-              high: 'high',
-              low: 'low',
-              close: 'close',
-            },
-            volume_field: 'volume',
+          chart: buildCandlestickChart({
+            dataKey: 'ohlc',
             interval: resolvedInterval,
-            total_candles: ohlc.length,
-          },
+            totalCandles: ohlc.length,
+            title: `${coin} Hyperliquid candles`,
+            volumePanel: true,
+            volumeField: 'volume',
+            volumeUnit: 'USD',
+          }),
+          tables: [
+            buildOhlcTable({
+              rowCount: ohlc.length,
+              title: `${coin} candle table`,
+              volumeField: 'volume',
+              volumeLabel: 'Volume',
+              volumeUnit: 'USD',
+            }),
+          ],
+          gap_diagnostics: gapDiagnostics,
           ohlc,
         },
         `Built ${resolvedInterval} ${coin} Hyperliquid candles over ${duration}. ${filledBuckets}/${ohlc.length} buckets contain trades.`,
         {
+          toolName: 'portal_hyperliquid_get_ohlc',
+          ...(nextCursor ? { notices: ['Older candles are available via _pagination.next_cursor.'] } : {}),
+          pagination: buildPaginationInfo(expectedBuckets, ohlc.length, nextCursor),
+          ordering: buildChronologicalPageOrdering({
+            sortedBy: 'timestamp',
+            continuation: nextCursor ? 'older' : 'none',
+          }),
           freshness,
-          coverage: {
-            kind: 'bucket_window',
-            window_complete: true,
-            expected_buckets: expectedBuckets,
-            returned_buckets: ohlc.length,
-            filled_buckets: filledBuckets,
-            empty_buckets: ohlc.length - filledBuckets,
+          execution: buildExecutionMetadata({
+            interval: resolvedInterval,
+            duration,
+            from_block: scannedFromBlock,
+            to_block: endBlock,
+            range_kind: resolvedWindow.range_kind,
+          }),
+          coverage: buildBucketCoverage({
+            expectedBuckets,
+            returnedBuckets: ohlc.length,
+            filledBuckets,
             anchor: 'latest_fill',
-          },
+            windowComplete: earliestObservedBelowPageEnd <= seriesStartTimestamp,
+          }),
           metadata: {
             dataset,
             from_block: scannedFromBlock,

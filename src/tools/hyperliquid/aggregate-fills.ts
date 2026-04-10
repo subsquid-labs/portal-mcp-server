@@ -2,11 +2,27 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { ActionableError } from '../../helpers/errors.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatUSD, formatNumber, formatPct } from '../../helpers/formatting.js'
 import { hashString53 } from '../../helpers/hash.js'
+import { buildPaginationInfo, decodeOffsetPageCursor, encodeOffsetPageCursor, paginateOffsetItems } from '../../helpers/pagination.js'
+import { buildAnalysisCoverage, buildQueryFreshness, buildRankedOrdering } from '../../helpers/result-metadata.js'
 import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { visitHyperliquidFillBlocks } from './fill-stream.js'
+
+type HyperliquidAggregateCursorRequest = {
+  timeframe?: string
+  requested_from_block: number
+  requested_to_block: number
+  analyzed_from_block: number
+  analyzed_to_block: number
+  coin?: string[]
+  user?: string[]
+  dir?: string[]
+  group_by: 'coin' | 'user' | 'direction' | 'none'
+  limit: number
+}
 
 // ============================================================================
 // Tool: Aggregate Hyperliquid Fills
@@ -25,7 +41,7 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
         .string()
         .optional()
         .default('hyperliquid-fills')
-        .describe("Dataset name (default: 'hyperliquid-fills')"),
+        .describe("Dataset name (default: 'hyperliquid-fills'). Optional when continuing with cursor."),
       timeframe: z
         .string()
         .optional()
@@ -40,36 +56,81 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
         .optional()
         .default('none')
         .describe("Group by: 'coin' (per asset), 'user' (per trader), 'direction', 'none' (totals only)"),
+      limit: z
+        .number()
+        .optional()
+        .default(30)
+        .describe('Max grouped rows to return per page (default: 30)'),
+      cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
-    async ({ dataset, timeframe, from_block, to_block, coin, user, dir, group_by }) => {
+    async ({ dataset, timeframe, from_block, to_block, coin, user, dir, group_by, limit, cursor }) => {
       const queryStartTime = Date.now()
-      dataset = await resolveDataset(dataset)
+      const paginationCursor =
+        cursor ? decodeOffsetPageCursor<HyperliquidAggregateCursorRequest>(cursor, 'portal_aggregate_hyperliquid_fills') : undefined
+      const requestedDataset = dataset ? await resolveDataset(dataset) : undefined
+      dataset = paginationCursor?.dataset ?? requestedDataset ?? 'hyperliquid-fills'
+      if (paginationCursor && requestedDataset && paginationCursor.dataset !== requestedDataset) {
+        throw new ActionableError('This cursor belongs to a different dataset.', [
+          'Reuse the cursor with the same dataset as the previous response.',
+          'Omit cursor to start a fresh aggregate query.',
+        ], {
+          cursor_dataset: paginationCursor.dataset,
+          requested_dataset: requestedDataset,
+        })
+      }
 
-      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
-        dataset,
-        timeframe,
-        from_block,
-        to_block,
-      })
+      const freshResolvedWindow = paginationCursor
+        ? undefined
+        : await resolveTimeframeOrBlocks({
+            dataset,
+            timeframe,
+            from_block,
+            to_block,
+          })
 
-      const { validatedToBlock: endBlock } = await validateBlockRange(
-        dataset,
-        resolvedFromBlock,
-        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
-        false,
-      )
+      const resolvedWindow = paginationCursor
+        ? {
+            range_kind: paginationCursor.request.timeframe ? 'timeframe' : 'block_range',
+          }
+        : freshResolvedWindow!
+
+      const requestedFromBlock = paginationCursor?.request.requested_from_block ?? freshResolvedWindow!.from_block
+      const { validatedToBlock, head } = paginationCursor
+        ? { validatedToBlock: paginationCursor.request.analyzed_to_block, head: { number: paginationCursor.request.requested_to_block } }
+        : await validateBlockRange(
+            dataset,
+            requestedFromBlock,
+            freshResolvedWindow?.to_block ?? Number.MAX_SAFE_INTEGER,
+            false,
+          )
+      const endBlock = validatedToBlock
 
       // Build fill filter
+      const request = paginationCursor?.request ?? {
+        timeframe,
+        requested_from_block: requestedFromBlock,
+        requested_to_block: endBlock,
+        analyzed_from_block: 0,
+        analyzed_to_block: endBlock,
+        ...(coin ? { coin } : {}),
+        ...(user ? { user: user.map((u) => u.toLowerCase()) } : {}),
+        ...(dir ? { dir } : {}),
+        group_by,
+        limit,
+      }
       const fillFilter: Record<string, unknown> = {}
-      if (coin) fillFilter.coin = coin
-      if (user) fillFilter.user = user.map((u) => u.toLowerCase())
-      if (dir) fillFilter.dir = dir
+      if (request.coin) fillFilter.coin = request.coin
+      if (request.user) fillFilter.user = request.user
+      if (request.dir) fillFilter.dir = request.dir
 
-      const requestedBlockRange = endBlock - resolvedFromBlock + 1
+      const requestedBlockRange = endBlock - request.requested_from_block + 1
       const maxAggregationBlocks = 1_000_000
-      const effectiveFrom = requestedBlockRange > maxAggregationBlocks
-        ? endBlock - maxAggregationBlocks + 1
-        : resolvedFromBlock
+      const effectiveFrom = paginationCursor?.request.analyzed_from_block ??
+        (requestedBlockRange > maxAggregationBlocks
+          ? endBlock - maxAggregationBlocks + 1
+          : request.requested_from_block)
+      request.analyzed_from_block = effectiveFrom
+      request.analyzed_to_block = endBlock
 
       // Compute aggregates incrementally to avoid materializing the full fill stream.
       const traders = new Set<number>()
@@ -82,10 +143,10 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
 
       // Group if requested
       let grouped: any[] | undefined
-      const byCoin = group_by === 'coin'
+      const byCoin = request.group_by === 'coin'
         ? new Map<string, { fills: number; volume: number; traders: Set<number>; pnl: number }>()
         : undefined
-      const byUser = group_by === 'user'
+      const byUser = request.group_by === 'user'
         ? new Map<string, { fills: number; volume: number; coins: Set<string>; pnl: number }>()
         : undefined
 
@@ -172,7 +233,6 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
             realized_pnl_formatted: (data.pnl >= 0 ? '+' : '') + formatUSD(data.pnl),
           }))
           .sort((a, b) => b.volume_usd - a.volume_usd)
-          .slice(0, 30)
           .map((item, i) => ({ rank: i + 1, ...item }))
       } else if (byUser) {
         grouped = Array.from(byUser.entries())
@@ -187,13 +247,24 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
             realized_pnl_formatted: (data.pnl >= 0 ? '+' : '') + formatUSD(data.pnl),
           }))
           .sort((a, b) => b.volume_usd - a.volume_usd)
-          .slice(0, 30)
           .map((item, i) => ({ rank: i + 1, ...item }))
-      } else if (group_by === 'direction') {
+      } else if (request.group_by === 'direction') {
         grouped = Object.entries(dirCounts)
           .map(([direction, count]) => ({ direction, fill_count: count }))
           .sort((a, b) => b.fill_count - a.fill_count)
       }
+
+      const { pageItems, hasMore, nextOffset } = grouped
+        ? paginateOffsetItems(grouped, request.limit, paginationCursor?.offset ?? 0)
+        : { pageItems: undefined, hasMore: false, nextOffset: undefined }
+      const nextCursor = grouped && hasMore
+        ? encodeOffsetPageCursor<HyperliquidAggregateCursorRequest>({
+            tool: 'portal_aggregate_hyperliquid_fills',
+            dataset,
+            request,
+            offset: nextOffset ?? (paginationCursor?.offset ?? 0) + (pageItems?.length ?? 0),
+          })
+        : undefined
 
       // Compute additional metrics
       const liquidationCount = (dirCounts['Short > Long'] || 0) + (dirCounts['Long > Short'] || 0)
@@ -221,22 +292,57 @@ export function registerAggregateHyperliquidFillsTool(server: McpServer) {
       }
 
       if (grouped) {
-        response.grouped = grouped
-        response.top_count = grouped.length
+        response.grouped = pageItems
+        response.grouped_total = grouped.length
+        response.top_count = pageItems?.length ?? 0
       }
       if (chunksFetched > 1) response.chunks_fetched = chunksFetched
       if (chunkSizeReduced) response.chunk_size_reduced = true
-      const notices =
-        effectiveFrom > resolvedFromBlock
-          ? [`Analyzed the most recent ${maxAggregationBlocks.toLocaleString()} blocks for performance.`]
-          : undefined
+      const notices: string[] = []
+      if (effectiveFrom > request.requested_from_block) {
+        notices.push(`Analyzed the most recent ${maxAggregationBlocks.toLocaleString()} blocks for performance.`)
+      }
+      if (grouped && hasMore) {
+        const pageStart = (paginationCursor?.offset ?? 0) + 1
+        const pageEnd = (paginationCursor?.offset ?? 0) + (pageItems?.length ?? 0)
+        notices.push(`Showing grouped rows ${pageStart}-${pageEnd}. Use _pagination.next_cursor to continue.`)
+      }
 
-      const coinNote = coin ? ` for ${coin.join(', ')}` : ''
+      const coinNote = request.coin ? ` for ${request.coin.join(', ')}` : ''
       return formatResult(
         response,
         `${totalFills.toLocaleString()} fills${coinNote}: ${traders.size} traders, $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} volume`,
         {
-          notices,
+          ...(notices.length > 0 ? { notices } : {}),
+          ...(grouped ? { pagination: buildPaginationInfo(request.limit, pageItems?.length ?? 0, nextCursor) } : {}),
+          ...(grouped
+            ? {
+                ordering:
+                  request.group_by === 'direction'
+                    ? buildRankedOrdering({
+                        sortedBy: 'fill_count',
+                        direction: 'desc',
+                      })
+                    : buildRankedOrdering({
+                        sortedBy: 'volume_usd',
+                        direction: 'desc',
+                        rankField: 'rank',
+                      }),
+              }
+            : {}),
+          freshness: buildQueryFreshness({
+            finality: 'latest',
+            headBlockNumber: head.number,
+            windowToBlock: request.requested_to_block,
+            resolvedWindow,
+          }),
+          coverage: buildAnalysisCoverage({
+            windowFromBlock: request.requested_from_block,
+            windowToBlock: request.requested_to_block,
+            analyzedFromBlock: effectiveFrom,
+            analyzedToBlock: endBlock,
+            hasMore,
+          }),
           metadata: {
             dataset,
             from_block: effectiveFrom,

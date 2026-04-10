@@ -13,7 +13,7 @@ import {
 import { formatResult } from '../../helpers/format.js'
 import { normalizeBitcoinOutputResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 
@@ -128,8 +128,8 @@ EXAMPLES:
           actualChainType: chainType,
           supportedChains: ['bitcoin'],
           suggestions: [
-            'Use portal_query_logs or portal_query_transactions for EVM datasets.',
-            'Use portal_query_solana_instructions or portal_query_solana_transactions for Solana datasets.',
+            'Use portal_evm_query_logs or portal_evm_query_transactions for EVM datasets.',
+            'Use portal_solana_query_instructions or portal_solana_query_transactions for Solana datasets.',
           ],
         })
       }
@@ -273,6 +273,10 @@ EXAMPLES:
       return formatResult(formattedData, message, {
         notices,
         pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+        ordering: buildChronologicalPageOrdering({
+          sortedBy: 'block_number',
+          tieBreakers: ['transactionIndex', 'txid', 'outputIndex'],
+        }),
         freshness,
         coverage,
         metadata: { dataset, from_block: resolvedFromBlock, to_block: pageToBlock, query_start_time: queryStartTime },

@@ -13,8 +13,9 @@ import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp } from '../../helpers/formatting.js'
 import { normalizeErc20TransferResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { normalizeAddresses, normalizeEvmAddress } from '../../helpers/validation.js'
 import type { BlockHead } from '../../types/index.js'
 
@@ -37,7 +38,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
   }
 
   type Erc20Cursor = {
-    tool: 'portal_get_erc20_transfers'
+    tool: 'portal_evm_query_token_transfers'
     dataset: string
     request: Erc20Request
     window_from_block: number
@@ -67,10 +68,10 @@ export function registerGetErc20TransfersTool(server: McpServer) {
     })
 
   server.tool(
-    'portal_get_erc20_transfers',
-    `Get ERC20 token transfers. Automatically filters Transfer events — no need to know event signatures. Supports filtering by token, sender, and recipient.`,
+    'portal_evm_query_token_transfers',
+    buildToolDescription('portal_evm_query_token_transfers'),
     {
-      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
+      network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
       from_block: z.number().optional().describe('Starting block number'),
       to_block: z.number().optional().describe('Ending block number. RECOMMENDED: <10k blocks for fast responses.'),
       timeframe: z.string().optional().describe("Time range (e.g., '1h', '24h'). Alternative to block numbers."),
@@ -94,7 +95,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
     async ({
-      dataset,
+      network,
       timeframe,
       from_block,
       to_block,
@@ -109,23 +110,23 @@ export function registerGetErc20TransfersTool(server: McpServer) {
     }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<Erc20Request>(cursor, 'portal_get_erc20_transfers')
+        ? decodeRecentPageCursor<Erc20Request>(cursor, 'portal_evm_query_token_transfers')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : undefined)
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : undefined)
       if (!dataset) {
-        throw new Error('dataset is required unless you are continuing with cursor.')
+        throw new Error('network is required unless you are continuing with cursor.')
       }
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
         throw createUnsupportedChainError({
-          toolName: 'portal_get_erc20_transfers',
+          toolName: 'portal_evm_query_token_transfers',
           dataset,
           actualChainType: chainType,
           supportedChains: ['evm'],
           suggestions: [
-            'Use portal_query_solana_instructions for Solana token program activity.',
-            'Use portal_query_bitcoin_outputs for Bitcoin value movement.',
+            'Use portal_solana_query_instructions for Solana token program activity.',
+            'Use portal_bitcoin_query_transactions with include_outputs for Bitcoin value movement.',
           ],
         })
       }
@@ -143,7 +144,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
         include_token_info = paginationCursor.request.include_token_info
       }
       if (!paginationCursor && from_block === undefined && timeframe === undefined && from_timestamp === undefined) {
-        throw new ActionableError('portal_get_erc20_transfers requires from_block, timeframe, or from_timestamp unless you are continuing with cursor.', [
+        throw new ActionableError('portal_evm_query_token_transfers requires from_block, timeframe, or from_timestamp unless you are continuing with cursor.', [
           'Provide from_block for a fresh query.',
           'Or use timeframe for a recent window like "1h".',
           'Or use from_timestamp/to_timestamp for a natural time window.',
@@ -259,7 +260,7 @@ export function registerGetErc20TransfersTool(server: McpServer) {
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<Erc20Request>({
-            tool: 'portal_get_erc20_transfers',
+            tool: 'portal_evm_query_token_transfers',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -337,11 +338,30 @@ export function registerGetErc20TransfersTool(server: McpServer) {
         enrichedTransfers,
         `Retrieved ${page.pageItems.length} ERC20 transfers${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`,
         {
+          toolName: 'portal_evm_query_token_transfers',
           notices,
           pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+          ordering: buildChronologicalPageOrdering({
+            sortedBy: 'block_number',
+            tieBreakers: ['log_index', 'transaction_index', 'tx_hash'],
+          }),
           freshness,
           coverage,
+          execution: buildExecutionMetadata({
+            limit,
+            from_block: resolvedFromBlock,
+            to_block: endBlock,
+            page_to_block: pageToBlock,
+            range_kind: resolvedBlocks.range_kind,
+            normalized_output: true,
+            notes: [
+              include_token_info
+                ? 'Token metadata was enriched inline.'
+                : 'Token metadata enrichment was disabled for a lighter response.',
+            ],
+          }),
           metadata: {
+            network: dataset,
             dataset,
             from_block: resolvedFromBlock,
             to_block: pageToBlock,

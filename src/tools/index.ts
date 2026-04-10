@@ -1,98 +1,82 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
-// Dataset discovery
+// Discovery
 import { registerListDatasetsTool } from './datasets/list.js'
 import { registerGetDatasetInfoTool } from './datasets/info.js'
 
-// EVM — core queries
+// Global / debug
 import { registerGetBlockNumberTool } from './evm/block-number.js'
 import { registerBlockAtTimestampTool } from './evm/block-at-timestamp.js'
 import { registerQueryBlocksTool } from './evm/query-blocks.js'
+
+// EVM
 import { registerQueryLogsTool } from './evm/query-logs.js'
 import { registerQueryTransactionsTool } from './evm/query-transactions.js'
 import { registerGetErc20TransfersTool } from './evm/erc20-transfers.js'
+import { registerEvmOhlcTool } from './evm/ohlc.js'
 
-// EVM — convenience & analytics
 import {
   registerGetContractActivityTool,
   registerGetRecentTransactionsTool,
   registerGetTimeSeriesDataTool,
   registerGetTopContractsTool,
-  registerGetTransactionDensityTool,
   registerGetWalletSummaryTool,
 } from './convenience/index.js'
-import { registerDecodeLogsTool } from './utilities/decode-logs.js'
 
 // Solana
 import { registerQuerySolanaInstructionsTool } from './solana/query-instructions.js'
 import { registerQuerySolanaTransactionsTool } from './solana/query-transactions.js'
 import { registerSolanaAnalyticsTool } from './solana/analytics.js'
-import { registerSolanaTimeSeriesool } from './solana/time-series.js'
 
 // Bitcoin
 import {
   registerQueryBitcoinTransactionsTool,
-  registerQueryBitcoinInputsTool,
-  registerQueryBitcoinOutputsTool,
   registerBitcoinAnalyticsTool,
-  registerBitcoinTimeSeresTool,
 } from './bitcoin/index.js'
 
 // Hyperliquid
 import {
   registerQueryHyperliquidFillsTool,
   registerQueryHyperliquidReplicaCmdsTool,
-  registerAggregateHyperliquidFillsTool,
-  registerHyperliquidTimeSeriesFilsTool,
   registerHyperliquidAnalyticsTool,
   registerHyperliquidOhlcTool,
 } from './hyperliquid/index.js'
 
-// ============================================================================
-// Tool Registry — organized by VM
-// ============================================================================
-
 export function registerAllTools(server: McpServer) {
-  // ── Dataset discovery (2) ────────────────────────────────────────────
+  // Public discovery (3)
   registerListDatasetsTool(server)
   registerGetDatasetInfoTool(server)
-
-  // ── EVM (13) ─────────────────────────────────────────────────────────
-  // Core queries (traces & state diffs available via include_traces/include_state_diffs on query_transactions)
   registerGetBlockNumberTool(server)
-  registerBlockAtTimestampTool(server)
-  registerQueryBlocksTool(server)
+
+  // Public convenience (3)
+  registerGetRecentTransactionsTool(server)
+  registerGetWalletSummaryTool(server)
+  registerGetTimeSeriesDataTool(server)
+
+  // Public EVM (6)
   registerQueryLogsTool(server)
   registerQueryTransactionsTool(server)
   registerGetErc20TransfersTool(server)
-  // Convenience & analytics
-  registerDecodeLogsTool(server)
-  registerGetRecentTransactionsTool(server)
-  registerGetWalletSummaryTool(server)
   registerGetContractActivityTool(server)
   registerGetTopContractsTool(server)
-  registerGetTransactionDensityTool(server)
-  registerGetTimeSeriesDataTool(server)
+  registerEvmOhlcTool(server)
 
-  // ── Solana (4) ───────────────────────────────────────────────────────
-  // Balances, token balances, logs, rewards available via include flags on query_solana_transactions/instructions
+  // Public Solana (3)
   registerQuerySolanaInstructionsTool(server)
   registerQuerySolanaTransactionsTool(server)
   registerSolanaAnalyticsTool(server)
-  registerSolanaTimeSeriesool(server)
 
-  // ── Bitcoin (5) ──────────────────────────────────────────────────────
+  // Public Bitcoin (2)
   registerQueryBitcoinTransactionsTool(server)
-  registerQueryBitcoinInputsTool(server)
-  registerQueryBitcoinOutputsTool(server)
   registerBitcoinAnalyticsTool(server)
-  registerBitcoinTimeSeresTool(server)
 
-  // ── Hyperliquid (6) ──────────────────────────────────────────────────
+  // Public Hyperliquid (3)
   registerQueryHyperliquidFillsTool(server)
-  registerQueryHyperliquidReplicaCmdsTool(server)
-  registerAggregateHyperliquidFillsTool(server)
-  registerHyperliquidTimeSeriesFilsTool(server)
   registerHyperliquidAnalyticsTool(server)
   registerHyperliquidOhlcTool(server)
+
+  // Advanced/debug (3)
+  registerQueryBlocksTool(server)
+  registerBlockAtTimestampTool(server)
+  registerQueryHyperliquidReplicaCmdsTool(server)
 }

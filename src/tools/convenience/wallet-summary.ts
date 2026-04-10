@@ -4,14 +4,17 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
-import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
+import { ActionableError } from '../../helpers/errors.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { getKnownTokenDecimals } from '../../helpers/conversions.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatTokenAmount, formatTransactionFields, hexToBigInt } from '../../helpers/formatting.js'
+import { normalizeEvmTransactionResult } from '../../helpers/normalized-results.js'
 import { encodeCursor, decodeCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildQueryFreshness, buildSectionCoverage } from '../../helpers/result-metadata.js'
+import { resolveTimeframeOrBlocks, type TimestampInput } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -37,6 +40,7 @@ type WalletSummaryCursor = {
   dataset: string
   address: string
   timeframe: string
+  mode: 'fast' | 'deep'
   include_tokens: boolean
   include_nfts: boolean
   limit_per_type: number
@@ -127,6 +131,9 @@ function sortLogs(items: WalletLogItem[]) {
 }
 
 function describeWalletWindow(timeframe: string) {
+  if (timeframe.includes('->')) {
+    return timeframe
+  }
   return /^\d+$/.test(timeframe) ? `last ${timeframe} blocks` : `last ${timeframe}`
 }
 
@@ -144,46 +151,119 @@ function buildSectionPagination(returned: number, hasMore: boolean) {
   }
 }
 
+function compactWalletTransactionItem(tx: WalletTransactionItem) {
+  const txHash = typeof tx['hash'] === 'string' ? String(tx['hash']) : typeof tx['tx_hash'] === 'string' ? String(tx['tx_hash']) : undefined
+  const timestamp = typeof tx['timestamp'] === 'number' ? Number(tx['timestamp']) : undefined
+
+  return {
+    chain_kind: 'evm',
+    record_type: 'transaction',
+    primary_id: txHash,
+    tx_hash: txHash,
+    sender: typeof tx['from'] === 'string' ? String(tx['from']) : undefined,
+    recipient: typeof tx['to'] === 'string' ? String(tx['to']) : undefined,
+    block_number: getBlockNumber(tx),
+    transactionIndex: getTransactionIndex(tx),
+    ...(timestamp !== undefined ? { timestamp, timestamp_human: formatTimestamp(timestamp) } : {}),
+    ...(tx['value'] !== undefined ? { value: tx['value'] } : {}),
+    ...(tx['nonce'] !== undefined ? { nonce: tx['nonce'] } : {}),
+    ...(tx['status'] !== undefined ? { status: tx['status'] } : {}),
+  }
+}
+
+function compactWalletTokenTransferItem(item: WalletLogItem) {
+  const txHash = typeof item['transaction_hash'] === 'string' ? String(item['transaction_hash']) : undefined
+  const logIndex = typeof item['log_index'] === 'number' ? Number(item['log_index']) : undefined
+  const timestamp = typeof item['timestamp'] === 'number' ? Number(item['timestamp']) : undefined
+
+  return {
+    chain_kind: 'evm',
+    record_type: 'token_transfer',
+    primary_id: txHash && logIndex !== undefined ? `${txHash}:${logIndex}` : txHash,
+    tx_hash: txHash,
+    sender: typeof item['from'] === 'string' ? String(item['from']) : undefined,
+    recipient: typeof item['to'] === 'string' ? String(item['to']) : undefined,
+    block_number: getBlockNumber(item),
+    ...(timestamp !== undefined ? { timestamp, timestamp_human: formatTimestamp(timestamp) } : {}),
+    token_address: typeof item['token_address'] === 'string' ? String(item['token_address']) : undefined,
+    value: item['value'],
+    direction: item['direction'],
+  }
+}
+
+function compactWalletNftTransferItem(item: WalletLogItem) {
+  const txHash = typeof item['transaction_hash'] === 'string' ? String(item['transaction_hash']) : undefined
+  const logIndex = typeof item['log_index'] === 'number' ? Number(item['log_index']) : undefined
+  const timestamp = typeof item['timestamp'] === 'number' ? Number(item['timestamp']) : undefined
+
+  return {
+    chain_kind: 'evm',
+    record_type: 'nft_transfer',
+    primary_id: txHash && logIndex !== undefined ? `${txHash}:${logIndex}` : txHash,
+    tx_hash: txHash,
+    block_number: getBlockNumber(item),
+    ...(timestamp !== undefined ? { timestamp, timestamp_human: formatTimestamp(timestamp) } : {}),
+    contract_address: typeof item['contract_address'] === 'string' ? String(item['contract_address']) : undefined,
+    token_id: item['token_id'],
+  }
+}
+
 export function registerGetWalletSummaryTool(server: McpServer) {
+  const FAST_MODE_BLOCK_CAP = 3000
+
   server.tool(
     'portal_get_wallet_summary',
-    `Get wallet activity summary: recent transactions, ERC20 token transfers, and optionally NFT transfers for an address over a time period.`,
+    buildToolDescription('portal_get_wallet_summary'),
     {
-      dataset: z.string().optional().describe('Dataset name or alias. Optional when continuing with cursor.'),
+      network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
       address: z.string().optional().describe('Wallet address to analyze. Optional when continuing with cursor.'),
       timeframe: z
         .string()
         .optional()
         .default('1000')
         .describe("Look-back period as timeframe or block count. Examples: '1h', '24h', '7d', '3d', '1000'."),
+      from_timestamp: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Natural start time like "1h ago", ISO datetime, or Unix timestamp'),
+      to_timestamp: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Natural end time like "now", ISO datetime, or Unix timestamp'),
       include_tokens: z.boolean().optional().default(true).describe('Include ERC20 token transfers'),
       include_nfts: z.boolean().optional().default(false).describe('Include NFT transfers (ERC721/1155)'),
       limit_per_type: z.number().optional().default(10).describe('Max items per category (txs, tokens, nfts)'),
+      mode: z
+        .enum(['fast', 'deep'])
+        .optional()
+        .default('fast')
+        .describe('fast = cap the scanned window for responsiveness, deep = use the full requested wallet window'),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
-    async ({ dataset, address, timeframe, include_tokens, include_nfts, limit_per_type, cursor }) => {
+    async ({ network, address, timeframe, from_timestamp, to_timestamp, include_tokens, include_nfts, limit_per_type, mode, cursor }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor ? decodeCursor<WalletSummaryCursor>(cursor, 'portal_get_wallet_summary') : undefined
-      const requestedDataset = dataset ? await resolveDataset(dataset) : undefined
-      dataset = paginationCursor?.dataset ?? requestedDataset
+      const requestedDataset = network ? await resolveDataset(network) : undefined
+      let dataset = paginationCursor?.dataset ?? requestedDataset
       if (!dataset) {
-        throw new ActionableError('dataset is required unless you are continuing with cursor.', [
-          'Provide dataset for a fresh wallet summary.',
+        throw new ActionableError('network is required unless you are continuing with cursor.', [
+          'Provide network for a fresh wallet summary.',
           'Reuse _pagination.next_cursor from a previous response to continue paging.',
         ])
       }
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
-        throw createUnsupportedChainError({
-          toolName: 'portal_get_wallet_summary',
+        return await buildNonEvmWalletSummary({
           dataset,
-          actualChainType: chainType,
-          supportedChains: ['evm'],
-          suggestions: [
-            'Use portal_get_recent_transactions for Solana or Bitcoin wallet previews.',
-            'Use portal_query_hyperliquid_fills for Hyperliquid accounts.',
-          ],
+          chainType,
+          address,
+          timeframe,
+          from_timestamp,
+          to_timestamp,
+          mode,
+          limit_per_type,
+          queryStartTime,
         })
       }
 
@@ -217,6 +297,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
 
       if (paginationCursor) {
         timeframe = paginationCursor.timeframe
+        mode = paginationCursor.mode
         include_tokens = paginationCursor.include_tokens
         include_nfts = paginationCursor.include_nfts
         limit_per_type = paginationCursor.limit_per_type
@@ -226,21 +307,54 @@ export function registerGetWalletSummaryTool(server: McpServer) {
       // time-based values use Portal's /timestamps/ API
       let fromBlock: number
       let windowToBlock: number
+      let head = paginationCursor ? await getBlockHead(dataset) : undefined
+      let resolvedWindow: { range_kind: string; from_lookup?: never; to_lookup?: never } | Awaited<ReturnType<typeof resolveTimeframeOrBlocks>>
+      let windowDescription = timeframe
 
       if (paginationCursor) {
         fromBlock = paginationCursor.window_from_block
         windowToBlock = paginationCursor.window_to_block
+        windowDescription = paginationCursor.timeframe
+        resolvedWindow = {
+          range_kind: /^\d+$/.test(timeframe) ? 'block_range' : 'timeframe',
+        }
       } else {
         const isBlockCount = /^\d+$/.test(timeframe)
-        if (isBlockCount) {
-          const head = await getBlockHead(dataset)
+        if (isBlockCount && from_timestamp === undefined && to_timestamp === undefined) {
+          head = await getBlockHead(dataset)
           const blockRange = parseInt(timeframe, 10)
           windowToBlock = head.number
           fromBlock = Math.max(0, windowToBlock - blockRange)
+          resolvedWindow = {
+            range_kind: 'block_range',
+          }
         } else {
-          const resolved = await resolveTimeframeOrBlocks({ dataset, timeframe })
+          const resolved = await resolveTimeframeOrBlocks({
+            dataset,
+            ...(from_timestamp !== undefined || to_timestamp !== undefined
+              ? {
+                  from_timestamp: from_timestamp as TimestampInput | undefined,
+                  to_timestamp: to_timestamp as TimestampInput | undefined,
+                }
+              : { timeframe }),
+          })
           fromBlock = resolved.from_block
           windowToBlock = resolved.to_block
+          resolvedWindow = resolved
+          head = await getBlockHead(dataset)
+          if (from_timestamp !== undefined || to_timestamp !== undefined) {
+            const fromLabel = resolved.from_lookup?.normalized_input ?? (from_timestamp !== undefined ? String(from_timestamp) : 'start')
+            const toLabel = resolved.to_lookup?.normalized_input ?? (to_timestamp !== undefined ? String(to_timestamp) : 'now')
+            windowDescription = `${fromLabel} -> ${toLabel}`
+          }
+        }
+      }
+
+      const requestedFromBlock = fromBlock
+      if (!paginationCursor && mode === 'fast') {
+        const requestedRange = windowToBlock - fromBlock + 1
+        if (requestedRange > FAST_MODE_BLOCK_CAP) {
+          fromBlock = Math.max(fromBlock, windowToBlock - FAST_MODE_BLOCK_CAP + 1)
         }
       }
 
@@ -312,16 +426,18 @@ export function registerGetWalletSummaryTool(server: McpServer) {
               const timestamp = typedBlock.timestamp ?? typedBlock.header?.timestamp
 
               return (typedBlock.transactions || []).map((tx) =>
-                formatTransactionFields({
-                  ...tx,
-                  ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
-                  ...(timestamp !== undefined
-                    ? {
-                        timestamp,
-                        timestamp_human: formatTimestamp(timestamp),
-                      }
-                    : {}),
-                }) as WalletTransactionItem,
+                normalizeEvmTransactionResult(
+                  formatTransactionFields({
+                    ...tx,
+                    ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
+                    ...(timestamp !== undefined
+                      ? {
+                          timestamp,
+                          timestamp_human: formatTimestamp(timestamp),
+                        }
+                      : {}),
+                  }),
+                ) as WalletTransactionItem,
               )
             }),
           ),
@@ -506,7 +622,8 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         ? createWalletSummaryCursor({
             dataset,
             address: normalizedAddress,
-            timeframe,
+            timeframe: windowDescription,
+            mode,
             include_tokens,
             include_nfts,
             limit_per_type,
@@ -530,39 +647,63 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           `Showing the latest ${limit_per_type} ${limitedItems.join(', ')} in this page. Use _pagination.next_cursor to continue.`,
         )
       }
+      if (!paginationCursor && mode === 'fast' && fromBlock > requestedFromBlock) {
+        notices.push(
+          `Fast mode analyzed the most recent ${FAST_MODE_BLOCK_CAP.toLocaleString()} blocks in the requested wallet window.`,
+        )
+      }
+
+      const compactTransactions = transactions.map(compactWalletTransactionItem)
+      const compactTokenTransfers = tokenTransfers.map(compactWalletTokenTransferItem)
+      const compactNftTransfers = nftTransfers.map(compactWalletNftTransferItem)
+      const combinedActivity = [...compactTransactions, ...compactTokenTransfers, ...compactNftTransfers].sort(
+        (left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0),
+      )
 
       const summary: Record<string, unknown> = {
-        address: normalizedAddress,
-        timeframe: {
-          from_block: fromBlock,
+        overview: {
+          network: dataset,
+          vm: 'evm',
+          address: normalizedAddress,
+          from_block: requestedFromBlock,
           to_block: windowToBlock,
-          description: timeframe,
+          analyzed_from_block: fromBlock,
+          description: windowDescription,
+          mode,
         },
-        transactions: {
-          count: transactions.length,
-          sent: transactions.filter((tx) => String(tx.from || '').toLowerCase() === normalizedAddress).length,
-          received: transactions.filter((tx) => String(tx.from || '').toLowerCase() !== normalizedAddress).length,
-          items: transactions,
+        activity: {
+          count: combinedActivity.length,
+          items: combinedActivity,
         },
-        token_transfers: include_tokens
-          ? {
-              count: tokenTransfers.length,
-              items: tokenTransfers,
-            }
-          : null,
-        nft_transfers: include_nfts
-          ? {
-              count: nftTransfers.length,
-              items: nftTransfers,
-            }
-          : null,
+        assets: {
+          token_transfers: include_tokens ? compactTokenTransfers.length : 0,
+          nft_transfers: include_nfts ? compactNftTransfers.length : 0,
+        },
+        evm: {
+          transactions: {
+            count: compactTransactions.length,
+            sent: transactions.filter((tx) => String(tx.from || '').toLowerCase() === normalizedAddress).length,
+            received: transactions.filter((tx) => String(tx.from || '').toLowerCase() !== normalizedAddress).length,
+          },
+          token_transfers: include_tokens
+            ? {
+                count: compactTokenTransfers.length,
+              }
+            : null,
+          nft_transfers: include_nfts
+            ? {
+                count: compactNftTransfers.length,
+              }
+            : null,
+        },
       }
 
       const message = hasMore
-        ? `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers from ${describeWalletWindow(timeframe)} (preview page capped at ${limit_per_type}).`
-        : `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers from ${describeWalletWindow(timeframe)}.`
+        ? `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers from ${describeWalletWindow(windowDescription)} (preview page capped at ${limit_per_type}).`
+        : `Wallet summary for ${normalizedAddress}: ${transactions.length} txs, ${tokenTransfers.length} token transfers, ${nftTransfers.length} NFT transfers from ${describeWalletWindow(windowDescription)}.`
 
       return formatResult(summary, message, {
+        toolName: 'portal_get_wallet_summary',
         notices,
         pagination: {
           type: 'cursor',
@@ -576,7 +717,35 @@ export function registerGetWalletSummaryTool(server: McpServer) {
             ...(include_nfts ? { nft_transfers: buildSectionPagination(nftTransfers.length, nftHasMore) } : {}),
           },
         },
+        freshness: buildQueryFreshness({
+          finality: 'latest',
+          headBlockNumber: head?.number ?? windowToBlock,
+          windowToBlock,
+          resolvedWindow,
+        }),
+        coverage: buildSectionCoverage({
+          windowFromBlock: requestedFromBlock,
+          windowToBlock,
+          hasMore,
+          sections: {
+            transactions: buildSectionPagination(transactions.length, txHasMore),
+            ...(include_tokens ? { token_transfers: buildSectionPagination(tokenTransfers.length, tokenHasMore) } : {}),
+            ...(include_nfts ? { nft_transfers: buildSectionPagination(nftTransfers.length, nftHasMore) } : {}),
+          },
+        }),
+        execution: buildExecutionMetadata({
+          mode,
+          from_block: fromBlock,
+          to_block: windowToBlock,
+          range_kind: resolvedWindow.range_kind,
+          limit: limit_per_type,
+          notes: [
+            include_tokens ? 'Token-transfer section included.' : 'Token-transfer section omitted.',
+            include_nfts ? 'NFT section included.' : 'NFT section omitted.',
+          ],
+        }),
         metadata: {
+          network: dataset,
           dataset,
           from_block: fromBlock,
           to_block: windowToBlock,
@@ -585,4 +754,375 @@ export function registerGetWalletSummaryTool(server: McpServer) {
       })
     },
   )
+}
+
+async function buildNonEvmWalletSummary(params: {
+  dataset: string
+  chainType: ReturnType<typeof detectChainType>
+  address?: string
+  timeframe: string
+  from_timestamp?: string | number
+  to_timestamp?: string | number
+  mode: 'fast' | 'deep'
+  limit_per_type: number
+  queryStartTime: number
+}) {
+  const { dataset, chainType, address, timeframe, from_timestamp, to_timestamp, mode, limit_per_type, queryStartTime } = params
+  if (!address) {
+    throw new ActionableError('address is required for wallet summary.', [
+      'Provide address for a fresh wallet summary.',
+    ])
+  }
+
+  const head = await getBlockHead(dataset)
+  const resolvedWindow =
+    from_timestamp !== undefined || to_timestamp !== undefined || !/^\d+$/.test(timeframe)
+      ? await resolveTimeframeOrBlocks({
+          dataset,
+          ...(from_timestamp !== undefined || to_timestamp !== undefined
+            ? {
+                from_timestamp: from_timestamp as TimestampInput | undefined,
+                to_timestamp: to_timestamp as TimestampInput | undefined,
+              }
+            : { timeframe }),
+        })
+      : {
+          from_block: Math.max(0, head.number - parseInt(timeframe, 10)),
+          to_block: head.number,
+          range_kind: 'block_range' as const,
+        }
+
+  const requestedFromBlock = resolvedWindow.from_block
+  const toBlock = resolvedWindow.to_block
+  let fromBlock = requestedFromBlock
+  const notices = ['This non-EVM wallet summary currently returns a fast cross-chain overview rather than the richer EVM multi-section scan.']
+
+  if (mode === 'fast') {
+    const fastBlockCap =
+      chainType === 'solana'
+        ? 250
+        : chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
+          ? 2_000
+          : undefined
+
+    if (fastBlockCap !== undefined && toBlock - fromBlock + 1 > fastBlockCap) {
+      fromBlock = Math.max(fromBlock, toBlock - fastBlockCap + 1)
+      notices.push(`Fast mode analyzed the most recent ${fastBlockCap.toLocaleString()} blocks in the requested wallet window.`)
+    }
+  }
+
+  if (chainType === 'solana') {
+    const txQuery = {
+      type: 'solana',
+      fromBlock,
+      toBlock,
+      fields: {
+        block: { number: true, timestamp: true },
+        transaction: {
+          transactionIndex: true,
+          signatures: true,
+          fee: true,
+          feePayer: true,
+          err: true,
+        },
+      },
+      transactions: [{ feePayer: [address] }],
+    }
+
+    const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery, {
+      itemKeys: ['transactions'],
+      limit: limit_per_type,
+      chunkSize: Math.max(25, Math.min(100, limit_per_type * 4)),
+    })
+
+    const items = results.flatMap((block: any) => {
+      const blockNumber = block.number ?? block.header?.number
+      const timestamp = block.timestamp ?? block.header?.timestamp
+      return (block.transactions || []).map((tx: any) => ({
+        ...tx,
+        block_number: blockNumber,
+        slot_number: blockNumber,
+        timestamp,
+        timestamp_human: timestamp ? formatTimestamp(timestamp) : undefined,
+        primary_id: tx.signatures?.[0],
+        tx_hash: tx.signatures?.[0],
+        chain_kind: 'solana',
+        record_type: 'transaction',
+      }))
+    })
+    const totalFees = items.reduce((sum, item) => sum + Number(item.fee || 0), 0)
+
+    return formatResult({
+      overview: {
+        network: dataset,
+        vm: 'solana',
+        address,
+        from_block: requestedFromBlock,
+        to_block: toBlock,
+        analyzed_from_block: fromBlock,
+        recent_activity_count: items.length,
+        mode,
+      },
+      activity: {
+        count: items.length,
+        items,
+      },
+      assets: {
+        token_balance_changes: [],
+      },
+      solana: {
+        fee_summary: {
+          total_fees_lamports: totalFees,
+          avg_fee_lamports: items.length > 0 ? totalFees / items.length : 0,
+        },
+      },
+    }, `Wallet summary for ${address} on ${dataset}: ${items.length} recent Solana transactions.`, {
+      toolName: 'portal_get_wallet_summary',
+      notices,
+      pagination: buildSectionPagination(items.length, false),
+      freshness: buildQueryFreshness({
+        finality: 'latest',
+        headBlockNumber: head.number,
+        windowToBlock: toBlock,
+        resolvedWindow,
+      }),
+      execution: buildExecutionMetadata({
+        mode,
+        from_block: fromBlock,
+        to_block: toBlock,
+        range_kind: resolvedWindow.range_kind,
+        normalized_output: true,
+      }),
+      coverage: buildSectionCoverage({
+        windowFromBlock: fromBlock,
+        windowToBlock: toBlock,
+        hasMore: false,
+        sections: {
+          activity: buildSectionPagination(items.length, false),
+        },
+      }),
+      metadata: {
+        network: dataset,
+        dataset,
+        from_block: fromBlock,
+        to_block: toBlock,
+        query_start_time: queryStartTime,
+      },
+    })
+  }
+
+  if (chainType === 'bitcoin') {
+    const [outputBlocks, inputBlocks] = await Promise.all([
+      portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+        type: 'bitcoin',
+        fromBlock,
+        toBlock,
+        fields: {
+          block: { number: true, timestamp: true },
+          output: { transactionIndex: true, outputIndex: true, value: true, scriptPubKeyAddress: true },
+          transaction: { hash: true },
+        },
+        outputs: [{ scriptPubKeyAddress: [address], transaction: true }],
+      }, {
+        itemKeys: ['outputs'],
+        limit: limit_per_type,
+        chunkSize: 20,
+      }),
+      portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+        type: 'bitcoin',
+        fromBlock,
+        toBlock,
+        fields: {
+          block: { number: true, timestamp: true },
+          input: { transactionIndex: true, inputIndex: true, prevoutValue: true, prevoutScriptPubKeyAddress: true },
+          transaction: { hash: true },
+        },
+        inputs: [{ prevoutScriptPubKeyAddress: [address], transaction: true }],
+      }, {
+        itemKeys: ['inputs'],
+        limit: limit_per_type,
+        chunkSize: 20,
+      }),
+    ])
+
+    const outputs = outputBlocks.flatMap((block: any) => (block.outputs || []).map((output: any) => ({
+      ...output,
+      block_number: block.number ?? block.header?.number,
+      timestamp: block.timestamp ?? block.header?.timestamp,
+      timestamp_human: (block.timestamp ?? block.header?.timestamp) ? formatTimestamp(block.timestamp ?? block.header?.timestamp) : undefined,
+      chain_kind: 'bitcoin',
+      record_type: 'output',
+      primary_id: output.transaction?.hash && output.outputIndex !== undefined ? `${output.transaction.hash}:${output.outputIndex}` : output.transaction?.hash,
+      tx_hash: output.transaction?.hash,
+      recipient: output.scriptPubKeyAddress,
+    })))
+    const inputs = inputBlocks.flatMap((block: any) => (block.inputs || []).map((input: any) => ({
+      ...input,
+      block_number: block.number ?? block.header?.number,
+      timestamp: block.timestamp ?? block.header?.timestamp,
+      timestamp_human: (block.timestamp ?? block.header?.timestamp) ? formatTimestamp(block.timestamp ?? block.header?.timestamp) : undefined,
+      chain_kind: 'bitcoin',
+      record_type: 'input',
+      primary_id: input.transaction?.hash && input.inputIndex !== undefined ? `${input.transaction.hash}:${input.inputIndex}` : input.transaction?.hash,
+      tx_hash: input.transaction?.hash,
+      sender: input.prevoutScriptPubKeyAddress,
+    })))
+    const totalIn = outputs.reduce((sum, item) => sum + Number(item.value || 0), 0)
+    const totalOut = inputs.reduce((sum, item) => sum + Number(item.prevoutValue || 0), 0)
+
+    return formatResult({
+      overview: {
+        network: dataset,
+        vm: 'bitcoin',
+        address,
+        from_block: requestedFromBlock,
+        to_block: toBlock,
+        analyzed_from_block: fromBlock,
+        mode,
+      },
+      activity: {
+        count: outputs.length + inputs.length,
+        items: [...outputs, ...inputs].sort((a, b) => (Number(a.timestamp || 0) - Number(b.timestamp || 0))),
+      },
+      assets: {
+        total_btc_received_sats: totalIn,
+        total_btc_spent_sats: totalOut,
+      },
+      bitcoin: {
+        outputs_count: outputs.length,
+        inputs_count: inputs.length,
+        recent_outputs: outputs,
+        recent_inputs: inputs,
+      },
+    }, `Wallet summary for ${address} on ${dataset}: ${outputs.length} recent outputs and ${inputs.length} recent inputs.`, {
+      toolName: 'portal_get_wallet_summary',
+      notices,
+      freshness: buildQueryFreshness({
+        finality: 'latest',
+        headBlockNumber: head.number,
+        windowToBlock: toBlock,
+        resolvedWindow,
+      }),
+      execution: buildExecutionMetadata({
+        mode,
+        from_block: fromBlock,
+        to_block: toBlock,
+        range_kind: resolvedWindow.range_kind,
+        normalized_output: true,
+      }),
+      coverage: buildSectionCoverage({
+        windowFromBlock: fromBlock,
+        windowToBlock: toBlock,
+        hasMore: false,
+        sections: {
+          activity: buildSectionPagination(outputs.length + inputs.length, false),
+        },
+      }),
+      metadata: {
+        network: dataset,
+        dataset,
+        from_block: fromBlock,
+        to_block: toBlock,
+        query_start_time: queryStartTime,
+      },
+    })
+  }
+
+  const fillBlocks = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+    type: 'hyperliquidFills',
+    fromBlock,
+    toBlock,
+    fields: {
+      block: { number: true, timestamp: true },
+      fill: { fillIndex: true, user: true, coin: true, px: true, sz: true, fee: true, dir: true, side: true, hash: true, time: true },
+    },
+    fills: [{ user: [address.toLowerCase()] }],
+  }, {
+    itemKeys: ['fills'],
+    limit: limit_per_type,
+    chunkSize: Math.max(50, Math.min(250, limit_per_type * 10)),
+    maxBytes: 25 * 1024 * 1024,
+  })
+
+  const fills = fillBlocks.flatMap((block: any) => (block.fills || []).map((fill: any) => {
+    const timestamp = block.timestamp ?? block.header?.timestamp
+    return {
+      ...fill,
+      block_number: block.number ?? block.header?.number,
+      timestamp,
+      timestamp_human: timestamp ? formatTimestamp(timestamp) : undefined,
+      chain_kind: 'hyperliquid',
+      record_type: 'fill',
+      primary_id: fill.hash && fill.fillIndex !== undefined ? `${fill.hash}:${fill.fillIndex}` : fill.hash,
+      tx_hash: fill.hash,
+      sender: fill.user,
+    }
+  }))
+  const byCoin = new Map<string, number>()
+  let totalFees = 0
+  fills.forEach((fill: any) => {
+    const coin = String(fill.coin || 'UNKNOWN')
+    byCoin.set(coin, (byCoin.get(coin) || 0) + Number(fill.px || 0) * Number(fill.sz || 0))
+    totalFees += Math.abs(Number(fill.fee || 0))
+  })
+
+  return formatResult({
+    overview: {
+      network: dataset,
+      vm: 'hyperliquid',
+      address,
+      from_block: requestedFromBlock,
+      to_block: toBlock,
+      analyzed_from_block: fromBlock,
+      mode,
+    },
+    activity: {
+      count: fills.length,
+      items: fills,
+    },
+    assets: {
+      volume_by_coin: Array.from(byCoin.entries()).map(([coin, volume]) => ({ coin, volume_usd: volume })),
+    },
+    hyperliquid: {
+      fee_summary: {
+        total_fees: totalFees,
+      },
+      side_breakdown: fills.reduce((acc: Record<string, number>, fill: any) => {
+        const side = String(fill.side || 'unknown')
+        acc[side] = (acc[side] || 0) + 1
+        return acc
+      }, {}),
+    },
+  }, `Wallet summary for ${address} on ${dataset}: ${fills.length} recent fills.`, {
+    toolName: 'portal_get_wallet_summary',
+    notices,
+    freshness: buildQueryFreshness({
+      finality: 'latest',
+      headBlockNumber: head.number,
+      windowToBlock: toBlock,
+      resolvedWindow,
+    }),
+    execution: buildExecutionMetadata({
+      mode,
+      from_block: fromBlock,
+      to_block: toBlock,
+      range_kind: resolvedWindow.range_kind,
+      normalized_output: true,
+    }),
+    coverage: buildSectionCoverage({
+      windowFromBlock: fromBlock,
+      windowToBlock: toBlock,
+      hasMore: false,
+      sections: {
+        activity: buildSectionPagination(fills.length, false),
+      },
+    }),
+    metadata: {
+      network: dataset,
+      dataset,
+      from_block: fromBlock,
+      to_block: toBlock,
+      query_start_time: queryStartTime,
+    },
+  })
 }

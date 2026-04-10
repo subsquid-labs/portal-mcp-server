@@ -1,11 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
-import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { getBlockHead, resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { buildTimeSeriesChart, buildTimeSeriesTable } from '../../helpers/chart-metadata.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatNumber } from '../../helpers/formatting.js'
+import { buildBucketCoverage, buildBucketGapDiagnostics, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { parseTimeframeToSeconds } from '../../helpers/timeframe.js'
 import { computeSolanaTimeSeries } from './time-series-shared.js'
 
 // ============================================================================
@@ -36,6 +39,7 @@ EXAMPLES:
     async ({ dataset, metric, interval, duration }) => {
       const queryStartTime = Date.now()
       dataset = await resolveDataset(dataset)
+      const head = await getBlockHead(dataset)
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'solana') {
@@ -59,6 +63,23 @@ EXAMPLES:
       })
 
       const { statistics, time_series: timeSeries } = result
+      const filledBuckets = timeSeries.filter((point) => point.slots_in_bucket > 0).length
+      const gapDiagnostics = buildBucketGapDiagnostics({
+        buckets: timeSeries,
+        intervalSeconds: parseTimeframeToSeconds(interval),
+        isFilled: (bucket) => bucket.slots_in_bucket > 0,
+        anchor: 'latest_block',
+        windowComplete:
+          result.first_observed_timestamp !== undefined
+            ? result.first_observed_timestamp <= timeSeries[0]?.timestamp
+            : true,
+        ...(result.first_observed_timestamp !== undefined
+          ? { firstObservedTimestamp: result.first_observed_timestamp }
+          : {}),
+        ...(result.last_observed_timestamp !== undefined
+          ? { lastObservedTimestamp: result.last_observed_timestamp }
+          : {}),
+      })
       const summary: any = {
         metric: result.metric,
         unit: result.unit,
@@ -83,9 +104,49 @@ EXAMPLES:
       }
 
       return formatResult(
-        { summary, time_series: timeSeries },
+        {
+          summary,
+          chart: buildTimeSeriesChart({
+            interval,
+            totalPoints: timeSeries.length,
+            unit: result.unit,
+            title: `Solana ${metric}`,
+            yAxisLabel: metric,
+          }),
+          tables: [
+            buildTimeSeriesTable({
+              rowCount: timeSeries.length,
+              title: 'Time series buckets',
+              valueLabel: metric,
+              valueFormat: metric === 'success_rate' ? 'percent' : 'decimal',
+              unit: result.unit,
+              timestampField: 'timestamp',
+              blocksInBucketField: 'blocks_in_bucket',
+              blocksInBucketLabel: 'Slots',
+              defaultSort: { key: 'bucket_index', direction: 'asc' },
+            }),
+          ],
+          gap_diagnostics: gapDiagnostics,
+          time_series: timeSeries,
+        },
         `Solana ${metric} over ${duration} in ${interval} intervals. ${timeSeries.length} data points. Avg: ${statistics.avg_formatted}, Min: ${formatNumber(statistics.min)} ${result.unit}, Max: ${formatNumber(statistics.max)} ${result.unit}`,
         {
+          freshness: buildQueryFreshness({
+            finality: 'latest',
+            headBlockNumber: head.number,
+            windowToBlock: result.to_block,
+            resolvedWindow: { range_kind: 'timeframe' },
+          }),
+          coverage: buildBucketCoverage({
+            expectedBuckets: result.expected_buckets,
+            returnedBuckets: timeSeries.length,
+            filledBuckets,
+            anchor: 'latest_block',
+            windowComplete:
+              result.first_observed_timestamp !== undefined
+                ? result.first_observed_timestamp <= timeSeries[0]?.timestamp
+                : true,
+          }),
           metadata: {
             dataset,
             from_block: result.from_block,

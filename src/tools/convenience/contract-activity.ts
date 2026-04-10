@@ -11,7 +11,8 @@ import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { hashString53 } from '../../helpers/hash.js'
 import { buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { resolveTimeframeOrBlocks, type TimestampInput } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -30,16 +31,24 @@ export function registerGetContractActivityTool(server: McpServer) {
   const FAST_MODE_BLOCK_CAP = 3000
 
   server.tool(
-    'portal_get_contract_activity',
-    'Analyze smart contract activity: interaction count, unique callers, event emissions, and top users over a time period.',
+    'portal_evm_get_contract_activity',
+    buildToolDescription('portal_evm_get_contract_activity'),
     {
-      dataset: z.string().describe('Dataset name or alias'),
+      network: z.string().describe('Network name or alias'),
       contract_address: z.string().describe('Contract address to analyze'),
       timeframe: z
         .string()
         .optional()
         .default('1000')
         .describe("Analysis period as timeframe or block count. Examples: '1h', '24h', '7d', '3d', '1000'."),
+      from_timestamp: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Natural start time like "1h ago", ISO datetime, or Unix timestamp'),
+      to_timestamp: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Natural end time like "now", ISO datetime, or Unix timestamp'),
       include_events: z.boolean().optional().default(true).describe('Include event log summary'),
       mode: z
         .enum(['fast', 'deep'])
@@ -47,19 +56,19 @@ export function registerGetContractActivityTool(server: McpServer) {
         .default('fast')
         .describe('fast = recent preview with capped scan size, deep = scan the full requested window'),
     },
-    async ({ dataset, contract_address, timeframe, include_events, mode }) => {
+    async ({ network, contract_address, timeframe, from_timestamp, to_timestamp, include_events, mode }) => {
       const queryStartTime = Date.now()
-      dataset = await resolveDataset(dataset)
+      let dataset = await resolveDataset(network)
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'evm') {
         throw createUnsupportedChainError({
-          toolName: 'portal_get_contract_activity',
+          toolName: 'portal_evm_get_contract_activity',
           dataset,
           actualChainType: chainType,
           supportedChains: ['evm'],
           suggestions: [
-            'Use portal_get_recent_transactions for a quick wallet-style activity preview.',
+            'Use portal_get_recent_activity for a quick wallet-style activity preview.',
             'Use chain-specific Solana or Bitcoin analytics tools for non-EVM datasets.',
           ],
         })
@@ -74,8 +83,9 @@ export function registerGetContractActivityTool(server: McpServer) {
       const isBlockCount = /^\d+$/.test(timeframe)
       let resolvedWindow: { range_kind: string; from_lookup?: never; to_lookup?: never } | Awaited<ReturnType<typeof resolveTimeframeOrBlocks>>
       const head = await getBlockHead(dataset)
+      let windowDescription = timeframe
 
-      if (isBlockCount) {
+      if (isBlockCount && from_timestamp === undefined && to_timestamp === undefined) {
         const blockRange = parseInt(timeframe)
         toBlock = head.number
         fromBlock = Math.max(0, toBlock - blockRange)
@@ -83,10 +93,23 @@ export function registerGetContractActivityTool(server: McpServer) {
           range_kind: 'block_range',
         }
       } else {
-        const resolved = await resolveTimeframeOrBlocks({ dataset, timeframe })
+        const resolved = await resolveTimeframeOrBlocks({
+          dataset,
+          ...(from_timestamp !== undefined || to_timestamp !== undefined
+            ? {
+                from_timestamp: from_timestamp as TimestampInput | undefined,
+                to_timestamp: to_timestamp as TimestampInput | undefined,
+              }
+            : { timeframe }),
+        })
         fromBlock = resolved.from_block
         toBlock = resolved.to_block
         resolvedWindow = resolved
+        if (from_timestamp !== undefined || to_timestamp !== undefined) {
+          const fromLabel = resolved.from_lookup?.normalized_input ?? (from_timestamp !== undefined ? String(from_timestamp) : 'start')
+          const toLabel = resolved.to_lookup?.normalized_input ?? (to_timestamp !== undefined ? String(to_timestamp) : 'now')
+          windowDescription = `${fromLabel} -> ${toLabel}`
+        }
       }
 
       const notices: string[] = []
@@ -173,7 +196,7 @@ export function registerGetContractActivityTool(server: McpServer) {
           from_block: requestedFromBlock,
           to_block: toBlock,
           analyzed_from_block: fromBlock,
-          description: timeframe,
+          description: windowDescription,
         },
         mode,
         interactions: {
@@ -195,6 +218,7 @@ export function registerGetContractActivityTool(server: McpServer) {
         summary,
         `Contract ${normalizedContract}: ${totalTransactions} interactions from ${uniqueCallerHashes.size} unique callers, ${totalEvents} events`,
         {
+          toolName: 'portal_evm_get_contract_activity',
           notices,
           freshness: buildQueryFreshness({
             finality: 'latest',
@@ -212,7 +236,15 @@ export function registerGetContractActivityTool(server: McpServer) {
             page_to_block: toBlock,
             returned_items: totalTransactions,
           },
+          execution: buildExecutionMetadata({
+            mode,
+            from_block: fromBlock,
+            to_block: toBlock,
+            range_kind: resolvedWindow.range_kind,
+            notes: [include_events ? 'Event summaries were included.' : 'Event summaries were disabled.'],
+          }),
           metadata: {
+            network: dataset,
             dataset,
             from_block: fromBlock,
             to_block: toBlock,

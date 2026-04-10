@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { getDatasets } from '../../cache/datasets.js'
 import { formatResult } from '../../helpers/format.js'
+import { buildToolDescription } from '../../helpers/tool-ux.js'
 
 // ============================================================================
 // Tool: List Datasets
@@ -10,20 +11,26 @@ import { formatResult } from '../../helpers/format.js'
 
 export function registerListDatasetsTool(server: McpServer) {
   server.tool(
-    'portal_list_datasets',
-    'List and search available blockchain datasets. Filter by chain type (evm/solana), network type (mainnet/testnet), or search by name. Returns dataset names, aliases, chain metadata, and available tables.',
+    'portal_list_networks',
+    buildToolDescription('portal_list_networks'),
     {
-      chain_type: z.enum(['evm', 'solana', 'hyperliquidFills', 'hyperliquidReplicaCmds']).optional().describe('Filter by chain type'),
+      vm: z.enum(['evm', 'solana', 'bitcoin', 'hyperliquid']).optional().describe('Filter by VM family'),
       network_type: z.enum(['mainnet', 'testnet', 'devnet']).optional().describe('Filter by network type'),
       query: z.string().optional().describe('Search by name, alias, or chain ID'),
       real_time_only: z.boolean().optional().describe('Only show real-time datasets'),
       limit: z.number().max(100).optional().default(25).describe('Max results to return (default: 25, max: 100)'),
     },
-    async ({ chain_type, network_type, query, real_time_only, limit }) => {
+    async ({ vm, network_type, query, real_time_only, limit }) => {
       let datasets = await getDatasets()
 
-      if (chain_type) {
-        datasets = datasets.filter((d) => d.metadata?.kind === chain_type)
+      if (vm) {
+        datasets = datasets.filter((d) => {
+          const kind = d.metadata?.kind
+          if (vm === 'hyperliquid') {
+            return kind === 'hyperliquidFills' || kind === 'hyperliquidReplicaCmds'
+          }
+          return kind === vm
+        })
       }
 
       if (network_type) {
@@ -82,9 +89,12 @@ export function registerListDatasetsTool(server: McpServer) {
           inferredType = 'mainnet'
         }
         return {
-          dataset: d.dataset,
+          network: d.dataset,
           aliases: d.aliases.length > 0 ? d.aliases : undefined,
-          kind: d.metadata?.kind,
+          vm:
+            d.metadata?.kind === 'hyperliquidFills' || d.metadata?.kind === 'hyperliquidReplicaCmds'
+              ? 'hyperliquid'
+              : d.metadata?.kind,
           type: inferredType,
           chain_id: d.metadata?.evm?.chain_id,
           display_name: d.metadata?.display_name,
@@ -100,7 +110,9 @@ export function registerListDatasetsTool(server: McpServer) {
           ? `Found ${totalAvailable} datasets (showing ${limitedResults.length}). Use limit parameter to see more.`
           : `Found ${limitedResults.length} datasets`
 
-      return formatResult(limitedResults, message)
+      return formatResult(limitedResults, message, {
+        toolName: 'portal_list_networks',
+      })
     },
   )
 }

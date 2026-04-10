@@ -5,9 +5,11 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
+import { normalizeHyperliquidReplicaCmdResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
-import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 
 // ============================================================================
 // Tool: Query Hyperliquid Replica Commands
@@ -59,14 +61,14 @@ function sortActions(items: HyperliquidActionItem[]) {
 
 export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
   server.tool(
-    'portal_query_hyperliquid_replica_cmds',
-    'Query Hyperliquid order actions — orders, cancels, transfers, leverage updates. Filter by user, action type, vault, or status. NOTE: Requires hyperliquid-replica-cmds dataset (check availability with portal_list_datasets).',
+    'portal_debug_hyperliquid_query_replica_commands',
+    buildToolDescription('portal_debug_hyperliquid_query_replica_commands'),
     {
-      dataset: z
+      network: z
         .string()
         .optional()
         .default('hyperliquid-replica-cmds')
-        .describe("Dataset name (default: 'hyperliquid-replica-cmds'). Optional when continuing with cursor."),
+        .describe("Network name (default: 'hyperliquid-replica-cmds'). Optional when continuing with cursor."),
       timeframe: z
         .string()
         .optional()
@@ -93,7 +95,7 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
     async ({
-      dataset,
+      network,
       timeframe,
       from_block,
       to_block,
@@ -109,9 +111,9 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
     }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
-        ? decodeRecentPageCursor<HyperliquidReplicaRequest>(cursor, 'portal_query_hyperliquid_replica_cmds')
+        ? decodeRecentPageCursor<HyperliquidReplicaRequest>(cursor, 'portal_debug_hyperliquid_query_replica_commands')
         : undefined
-      dataset = paginationCursor?.dataset ?? (dataset ? await resolveDataset(dataset) : 'hyperliquid-replica-cmds')
+      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : 'hyperliquid-replica-cmds')
       if (paginationCursor) {
         dataset = paginationCursor.dataset
         timeframe = paginationCursor.request.timeframe
@@ -198,11 +200,13 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
             header?: { number: number; timestamp: number }
             actions?: Array<Record<string, unknown>>
           }
-          return (b.actions || []).map((action) => ({
-            block_number: b.header?.number,
-            block_timestamp: b.header?.timestamp,
-            ...action,
-          }))
+          return (b.actions || []).map((action) =>
+            normalizeHyperliquidReplicaCmdResult({
+              ...action,
+              ...(b.header?.number !== undefined ? { block_number: b.header.number } : {}),
+              ...(b.header?.timestamp !== undefined ? { block_timestamp: b.header.timestamp } : {}),
+            }),
+          )
         }) as HyperliquidActionItem[],
       )
       const page = paginateAscendingItems(
@@ -218,7 +222,7 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
       )
       const nextCursor = page.hasMore && page.nextBoundary
         ? encodeRecentPageCursor<HyperliquidReplicaRequest>({
-            tool: 'portal_query_hyperliquid_replica_cmds',
+          tool: 'portal_debug_hyperliquid_query_replica_commands',
             dataset,
             request: {
               ...(timeframe ? { timeframe } : {}),
@@ -258,11 +262,26 @@ export function registerQueryHyperliquidReplicaCmdsTool(server: McpServer) {
         page.pageItems,
         `Retrieved ${page.pageItems.length} Hyperliquid actions${page.hasMore ? ` from the most recent matching range (preview page limited to ${limit})` : ''}`,
         {
+          toolName: 'portal_debug_hyperliquid_query_replica_commands',
           notices,
           pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+          ordering: buildChronologicalPageOrdering({
+            sortedBy: 'block_number',
+            tieBreakers: ['timestamp', 'user', 'status'],
+          }),
           freshness,
           coverage,
+          execution: buildExecutionMetadata({
+            finalized_only,
+            limit,
+            from_block: resolvedFromBlock,
+            to_block: endBlock,
+            page_to_block: pageToBlock,
+            range_kind: resolvedBlocks.range_kind,
+            normalized_output: true,
+          }),
           metadata: {
+            network: dataset,
             dataset,
             from_block: resolvedFromBlock,
             to_block: pageToBlock,

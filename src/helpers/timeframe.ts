@@ -197,6 +197,14 @@ export async function getHeadTimestamp(dataset: string, headBlock: number): Prom
       type = 'bitcoin'
       fieldKey = 'block'
       break
+    case 'hyperliquidFills':
+      type = 'hyperliquidFills'
+      fieldKey = 'block'
+      break
+    case 'hyperliquidReplicaCmds':
+      type = 'hyperliquidReplicaCmds'
+      fieldKey = 'block'
+      break
     default:
       type = 'evm'
       fieldKey = 'block'
@@ -226,7 +234,11 @@ export async function getHeadTimestamp(dataset: string, headBlock: number): Prom
   }
 
   const block = (response[0] as any).header || response[0]
-  return block.timestamp
+  const timestamp = Number(block.timestamp)
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    throw new Error(`Could not parse timestamp for head block ${headBlock}`)
+  }
+  return timestamp > 1_000_000_000_000 ? Math.floor(timestamp / 1000) : Math.floor(timestamp)
 }
 
 function parseRelativeTimestamp(input: string, nowUnix: number): ParsedTimestampInput | undefined {
@@ -489,7 +501,7 @@ export async function resolveTimeframeOrBlocks(params: {
         'from_timestamp resolves after to_timestamp.',
         [
           'Swap the timestamps so from_timestamp is earlier than to_timestamp.',
-          'Use portal_block_at_timestamp first if you want to inspect the resolved block numbers.',
+          'Use portal_debug_resolve_time_to_block first if you want to inspect the resolved block numbers.',
         ],
         {
           from_timestamp: resolvedFrom?.normalized_input ?? from_timestamp,

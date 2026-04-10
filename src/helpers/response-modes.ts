@@ -240,6 +240,7 @@ export function summarizeHyperliquidFills(fills: any[]): any {
  */
 export function compactHyperliquidFills(fills: any[]): any[] {
   return fills.map((fill) => ({
+    ...pickCommonAliases(fill),
     user: fill.user,
     coin: fill.coin,
     px: fill.px,

@@ -1,14 +1,77 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
-import { getBlockHead, resolveDataset, validateBlockRange } from '../../cache/datasets.js'
+import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatNumber, formatBTC, formatPct, formatDuration } from '../../helpers/formatting.js'
-import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { buildAnalysisCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import type { ResponseFormat } from '../../helpers/response-modes.js'
+import { buildPercentileSummary } from '../../helpers/statistics.js'
+import { resolveTimeframeOrBlocks, type TimestampInput } from '../../helpers/timeframe.js'
+import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+
+function formatBitcoinAnalyticsResponse(response: Record<string, any>, responseFormat: ResponseFormat) {
+  if (responseFormat === 'full') {
+    return response
+  }
+
+  if (responseFormat === 'summary') {
+    return {
+      overview: {
+        mode: response.block_details?.mode,
+        blocks_analyzed: response.block_details?.blocks_analyzed,
+        block_range: response.block_details?.block_range,
+        avg_block_time_seconds: response.block_details?.avg_block_time_seconds,
+        avg_transactions_per_block: response.block_details?.avg_transactions_per_block,
+        total_transactions: response.block_details?.total_transactions,
+        segwit_percentage: response.transaction_stats?.segwit_percentage,
+        tx_rate_per_second: response.transaction_stats?.tx_rate_per_second,
+        avg_fee_per_tx_btc: response.fee_analysis?.avg_fee_per_tx_btc,
+        unique_addresses: response.network_activity?.unique_addresses,
+      },
+      percentiles: {
+        tx_size_bytes: response.transaction_stats?.tx_size_percentiles_bytes,
+        transactions_per_block: response.block_details?.tx_count_percentiles,
+      },
+    }
+  }
+
+  return {
+    block_details: response.block_details,
+    transaction_stats: {
+      avg_tx_size_bytes: response.transaction_stats?.avg_tx_size_bytes,
+      avg_tx_vsize: response.transaction_stats?.avg_tx_vsize,
+      avg_tx_weight: response.transaction_stats?.avg_tx_weight,
+      total_size_mb: response.transaction_stats?.total_size_mb,
+      segwit_percentage: response.transaction_stats?.segwit_percentage,
+      tx_rate_per_second: response.transaction_stats?.tx_rate_per_second,
+      tx_size_percentiles_bytes: response.transaction_stats?.tx_size_percentiles_bytes,
+    },
+    ...(response.network_activity ? { network_activity: response.network_activity } : {}),
+    ...(response.script_type_adoption
+      ? {
+          script_type_adoption: {
+            taproot_percentage: response.script_type_adoption.taproot_percentage,
+            segwit_v0_percentage: response.script_type_adoption.segwit_v0_percentage,
+          },
+        }
+      : {}),
+    ...(response.fee_analysis
+      ? {
+          fee_analysis: {
+            blocks_sampled: response.fee_analysis.blocks_sampled,
+            total_fees_btc: response.fee_analysis.total_fees_btc,
+            avg_fee_per_tx_btc: response.fee_analysis.avg_fee_per_tx_btc,
+            fees_per_block_btc: response.fee_analysis.fees_per_block_btc,
+          },
+        }
+      : {}),
+  }
+}
 
 // ============================================================================
 // Tool: Bitcoin Network Analytics
@@ -19,76 +82,88 @@ import { resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
  * address activity, segwit/taproot adoption, and UTXO patterns.
  */
 export function registerBitcoinAnalyticsTool(server: McpServer) {
+  const FAST_MODE_MAX_BLOCKS = 72
+  const DEEP_MODE_MAX_BLOCKS = 200
+
   server.tool(
-    'portal_bitcoin_analytics',
-    `Comprehensive Bitcoin network analytics. Returns block stats (size, time, tx count), fee analysis (total/avg fees in BTC), address activity (unique addresses, output value), and script type adoption (segwit, taproot %).
-
-WHEN TO USE:
-- "How's the Bitcoin network doing?"
-- "What are Bitcoin fees right now?"
-- "Show me Bitcoin block stats"
-- "What's the taproot adoption rate?"
-- "How many unique addresses are active on Bitcoin?"
-
-EXAMPLES:
-- Quick snapshot: { timeframe: "1h" }
-- Daily analysis: { timeframe: "24h" }
-- Custom range: { from_block: 800000, to_block: 800010 }`,
+    'portal_bitcoin_get_analytics',
+    buildToolDescription('portal_bitcoin_get_analytics'),
     {
-      dataset: z.string().default('bitcoin-mainnet').describe('Dataset name (default: bitcoin-mainnet)'),
+      network: z.string().default('bitcoin-mainnet').describe('Network name (default: bitcoin-mainnet)'),
       timeframe: z
         .string()
         .optional()
         .describe("Time range: '1h' (~6 blocks), '6h' (~36 blocks), '24h' (~144 blocks). Default: '1h'"),
+      mode: z
+        .enum(['fast', 'deep'])
+        .optional()
+        .default('fast')
+        .describe('fast = lighter preview with a smaller scan cap, deep = analyze a larger Bitcoin window'),
       from_block: z.number().optional().describe('Starting block number (use this OR timeframe)'),
       to_block: z.number().optional().describe('Ending block number'),
+      from_timestamp: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Natural start time like "6h ago", "yesterday 09:00", ISO datetime, or Unix timestamp'),
+      to_timestamp: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Natural end time like "now", ISO datetime, or Unix timestamp'),
       include_address_activity: z
         .boolean()
         .optional()
         .default(true)
         .describe('Include unique address count and output value (requires extra queries, slower)'),
+      response_format: z
+        .enum(['full', 'compact', 'summary'])
+        .optional()
+        .default('full')
+        .describe("Response format: 'summary' (high-level metrics only), 'compact' (core sections, lighter payload), 'full' (complete analytics)."),
     },
-    async ({ dataset, timeframe, from_block, to_block, include_address_activity }) => {
+    async ({ network, timeframe, mode, from_block, to_block, from_timestamp, to_timestamp, include_address_activity, response_format }) => {
       const queryStartTime = Date.now()
-      dataset = await resolveDataset(dataset)
+      let dataset = await resolveDataset(network)
       const chainType = detectChainType(dataset)
 
       if (chainType !== 'bitcoin') {
         throw createUnsupportedChainError({
-          toolName: 'portal_bitcoin_analytics',
+          toolName: 'portal_bitcoin_get_analytics',
           dataset,
           actualChainType: chainType,
           supportedChains: ['bitcoin'],
           suggestions: [
-            'Use portal_solana_analytics for Solana snapshots.',
+            'Use portal_solana_get_analytics for Solana snapshots.',
             'Use EVM convenience tools like portal_get_contract_activity for smart-contract chains.',
           ],
         })
       }
 
       // Default to 1h
-      if (!timeframe && from_block === undefined) {
+      if (!timeframe && from_block === undefined && from_timestamp === undefined) {
         timeframe = '1h'
       }
 
-      const { from_block: resolvedFromBlock, to_block: resolvedToBlock } = await resolveTimeframeOrBlocks({
+      const resolvedWindow = await resolveTimeframeOrBlocks({
         dataset,
         timeframe,
         from_block,
         to_block,
+        from_timestamp: from_timestamp as TimestampInput | undefined,
+        to_timestamp: to_timestamp as TimestampInput | undefined,
       })
+      const resolvedFromBlock = resolvedWindow.from_block
 
-      const { validatedToBlock: endBlock } = await validateBlockRange(
+      const { validatedToBlock: endBlock, head } = await validateBlockRange(
         dataset,
         resolvedFromBlock,
-        resolvedToBlock ?? Number.MAX_SAFE_INTEGER,
+        resolvedWindow.to_block ?? Number.MAX_SAFE_INTEGER,
         false,
       )
 
       // Cap block range for performance
-      const blockRange = endBlock - resolvedFromBlock
-      const maxBlocks = Math.min(blockRange, 200) // ~33 hours max
-      const effectiveFrom = blockRange > maxBlocks ? endBlock - maxBlocks : resolvedFromBlock
+      const requestedBlocks = endBlock - resolvedFromBlock + 1
+      const maxBlocks = mode === 'deep' ? DEEP_MODE_MAX_BLOCKS : FAST_MODE_MAX_BLOCKS
+      const effectiveFrom = requestedBlocks > maxBlocks ? endBlock - maxBlocks + 1 : resolvedFromBlock
 
       // Query 1: Blocks + transactions (for block stats and tx counts)
       const txQuery = {
@@ -124,6 +199,7 @@ EXAMPLES:
       let totalWeight = 0
       const blockTimes: number[] = []
       const blockTxCounts: number[] = []
+      const txSizes: number[] = []
       const versions = new Map<number, number>()
 
       for (let i = 0; i < txResults.length; i++) {
@@ -137,6 +213,7 @@ EXAMPLES:
           totalSize += tx.size || 0
           totalVsize += tx.vsize || 0
           totalWeight += tx.weight || 0
+          if (typeof tx.size === 'number' && Number.isFinite(tx.size)) txSizes.push(tx.size)
           const v = tx.version || 0
           versions.set(v, (versions.get(v) || 0) + 1)
         })
@@ -172,6 +249,7 @@ EXAMPLES:
 
       const response: any = {
         block_details: {
+          mode,
           blocks_analyzed: numBlocks,
           block_range: `${effectiveFrom}-${endBlock}`,
           avg_block_time_seconds: parseFloat(avgBlockTime.toFixed(1)),
@@ -182,6 +260,7 @@ EXAMPLES:
           avg_txs_formatted: formatNumber(avgTxsPerBlock),
           total_transactions: totalTxs,
           total_transactions_formatted: formatNumber(totalTxs),
+          tx_count_percentiles: buildPercentileSummary(blockTxCounts),
         },
         transaction_stats: {
           avg_tx_size_bytes: Math.round(avgTxSize),
@@ -193,6 +272,7 @@ EXAMPLES:
           version_breakdown: Object.fromEntries(versions),
           tx_rate_per_second: parseFloat(txRate.toFixed(2)),
           tx_rate_formatted: formatNumber(txRate) + ' tx/s',
+          tx_size_percentiles_bytes: buildPercentileSummary(txSizes),
         },
       }
 
@@ -358,15 +438,44 @@ EXAMPLES:
       }
 
       const notices =
-        blockRange > maxBlocks
-          ? [`Analyzed ${numBlocks} of ${blockRange} requested blocks (capped for performance).`]
+        requestedBlocks > maxBlocks
+          ? [`${mode === 'fast' ? 'Fast' : 'Deep'} mode analyzed ${numBlocks} of ${requestedBlocks} requested blocks to keep the snapshot responsive.`]
           : undefined
+      const formattedResponse = formatBitcoinAnalyticsResponse(response, response_format as ResponseFormat)
+      const message = response_format === 'summary'
+        ? `Bitcoin summary: ${numBlocks} blocks, ${totalTxs.toLocaleString()} txs, ${avgBlockTime.toFixed(0)}s avg block time`
+        : `Bitcoin network analytics: ${numBlocks} blocks, ${totalTxs.toLocaleString()} txs, ${avgTxsPerBlock.toFixed(0)} avg txs/block, ${avgBlockTime.toFixed(0)}s avg block time, ${segwitPct.toFixed(0)}% segwit`
 
       return formatResult(
-        response,
-        `Bitcoin network analytics: ${numBlocks} blocks, ${totalTxs.toLocaleString()} txs, ${avgTxsPerBlock.toFixed(0)} avg txs/block, ${avgBlockTime.toFixed(0)}s avg block time, ${segwitPct.toFixed(0)}% segwit`,
+        formattedResponse,
+        message,
         {
+          toolName: 'portal_bitcoin_get_analytics',
           notices,
+          ordering: {
+            kind: 'sections',
+            block_series: 'oldest_to_newest',
+          },
+          freshness: buildQueryFreshness({
+            finality: 'latest',
+            headBlockNumber: head.number,
+            windowToBlock: endBlock,
+            resolvedWindow,
+          }),
+          coverage: buildAnalysisCoverage({
+            windowFromBlock: resolvedFromBlock,
+            windowToBlock: endBlock,
+            analyzedFromBlock: effectiveFrom,
+            analyzedToBlock: endBlock,
+          }),
+          execution: buildExecutionMetadata({
+            mode,
+            response_format,
+            from_block: effectiveFrom,
+            to_block: endBlock,
+            range_kind: resolvedWindow.range_kind,
+            notes: [include_address_activity ? 'Address-activity enrichment was included.' : 'Address-activity enrichment was skipped for speed.'],
+          }),
           metadata: {
             dataset,
             from_block: effectiveFrom,
