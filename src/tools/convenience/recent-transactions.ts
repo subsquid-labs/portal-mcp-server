@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
-import { ActionableError } from '../../helpers/errors.js'
+import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { formatResult } from '../../helpers/format.js'
@@ -20,6 +20,7 @@ import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness
 import { getTimestampWindowNotices, resolveTimeframeOrBlocks, type ResolvedBlockWindow, type TimestampInput } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { getQueryExamples, getValidationNotices, normalizeAddresses, validateQuerySize } from '../../helpers/validation.js'
+import { fetchRecentHyperliquidFillBlocks } from '../hyperliquid/fill-stream.js'
 
 // ============================================================================
 // Tool: Get Recent Transactions (Convenience Wrapper)
@@ -263,6 +264,20 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
           resolvedBlocks,
           headBlockNumber: head.number,
           queryStartTime,
+        })
+      }
+
+      if (chainType === 'substrate') {
+        throw createUnsupportedChainError({
+          toolName: 'portal_get_recent_activity',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
+          suggestions: [
+            'Use portal_debug_query_blocks to inspect recent Substrate blocks today.',
+            'Use portal_debug_resolve_time_to_block if you need to turn a natural time into a Substrate block number.',
+            'Add dedicated Substrate event or call query tools before using this as a general recent-activity feed.',
+          ],
         })
       }
 
@@ -726,34 +741,29 @@ async function queryHyperliquidRecent(params: {
 }) {
   const { dataset, fromBlock, pageToBlock, windowToBlock, timeframe, fromTimestamp, toTimestamp, rangeLabel, limit, fetchLimit, cursor, resolvedBlocks, headBlockNumber, queryStartTime } = params
 
-  const query = {
-    type: 'hyperliquidFills',
+  const recentFetch = await fetchRecentHyperliquidFillBlocks({
+    dataset,
     fromBlock,
     toBlock: pageToBlock,
-    fields: {
-      block: { number: true, timestamp: true },
-      fill: {
-        fillIndex: true,
-        user: true,
-        coin: true,
-        px: true,
-        sz: true,
-        dir: true,
-        side: true,
-        fee: true,
-        hash: true,
-        time: true,
-      },
+    fillFilter: {},
+    fillFields: {
+      fillIndex: true,
+      user: true,
+      coin: true,
+      px: true,
+      sz: true,
+      dir: true,
+      side: true,
+      fee: true,
+      hash: true,
+      time: true,
     },
-    fills: [{}],
-  }
-
-  const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
-    itemKeys: ['fills'],
     limit: fetchLimit,
-    chunkSize: 5_000,
+    initialChunkSize: 100,
+    maxChunkSize: 5_000,
     maxBytes: 100 * 1024 * 1024,
   })
+  const results = recentFetch.blocks
 
   const allFills = sortRecentTransactions(results.flatMap((block: unknown) => {
     const typedBlock = block as {
@@ -839,6 +849,9 @@ async function queryHyperliquidRecent(params: {
         page_to_block: pageToBlock,
         range_kind: resolvedBlocks.range_kind,
         normalized_output: true,
+        notes: [
+          `Adaptive recent fill scan fetched ${recentFetch.returnedFills.toLocaleString()} fill(s) across ${recentFetch.chunksFetched} chunk(s) to build this page.`,
+        ],
       }),
       metadata: {
         network: dataset,

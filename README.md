@@ -1,6 +1,6 @@
 # SQD Portal MCP Server
 
-MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperliquid through the [SQD Portal API](https://portal.sqd.dev).
+MCP server for querying blockchain data across EVM, Solana, Bitcoin, Substrate, and Hyperliquid through the [SQD Portal API](https://portal.sqd.dev).
 
 ## What v0.7.7 Changes
 
@@ -14,7 +14,7 @@ MCP server for querying blockchain data across EVM, Solana, Bitcoin, and Hyperli
 
 This release exposes:
 
-- 20 public tools
+- 23 public tools
 - 3 advanced/debug tools
 - 0 legacy tool names
 
@@ -49,6 +49,9 @@ Start with these tools first. They are the most agent-friendly entry points.
 | "How is Solana doing right now?" | `portal_solana_get_analytics` | Solana throughput, fee, and program snapshot |
 | "Give me raw Bitcoin transactions / UTXO context" | `portal_bitcoin_query_transactions` | Raw Bitcoin tx tool with inline `inputs` / `outputs` |
 | "How is Bitcoin doing right now?" | `portal_bitcoin_get_analytics` | Network-level Bitcoin analytics |
+| "Show me raw Substrate events" | `portal_substrate_query_events` | Raw Substrate event tool with optional extrinsic and call context |
+| "Show me raw Substrate calls" | `portal_substrate_query_calls` | Raw Substrate call tool with optional subcalls, events, and extrinsic context |
+| "How is this Substrate network doing?" | `portal_substrate_get_analytics` | Substrate snapshot with event, call, and extrinsic activity rankings |
 | "Show me Hyperliquid fills" | `portal_hyperliquid_query_fills` | Raw fill records with trader, coin, fee, and PnL context |
 | "How is Hyperliquid trading right now?" | `portal_hyperliquid_get_analytics` | Grouped Hyperliquid trading analytics |
 | "Give me candles / OHLC" | `portal_hyperliquid_get_ohlc` or `portal_evm_get_ohlc` | Use OHLC tools only when you truly need candle-shaped output |
@@ -80,7 +83,7 @@ Start with these tools first. They are the most agent-friendly entry points.
 | `portal_evm_query_token_transfers` | Query token transfer activity on EVM networks |
 | `portal_evm_get_contract_activity` | Summarize a contract’s recent interaction activity |
 | `portal_evm_get_analytics` | Get network-wide EVM analytics, including top-contract rankings |
-| `portal_evm_get_ohlc` | Build chart-ready EVM OHLC candles from supported pool/event sources |
+| `portal_evm_get_ohlc` | Build chart-ready EVM OHLC candles from supported pool/event sources such as Uniswap v3, Uniswap v4 PoolManager swaps, Aerodrome Slipstream, and generic Sync-derived CPMM pools |
 
 ### Solana
 
@@ -97,6 +100,14 @@ Start with these tools first. They are the most agent-friendly entry points.
 | `portal_bitcoin_query_transactions` | Query Bitcoin transactions and optionally attach `inputs` / `outputs` inline |
 | `portal_bitcoin_get_analytics` | Get Bitcoin analytics for transactions, fees, and block-level activity |
 
+### Substrate
+
+| Tool | Description |
+|------|-------------|
+| `portal_substrate_query_events` | Query Substrate events with optional parent extrinsic, emitting call, and call-stack context |
+| `portal_substrate_query_calls` | Query Substrate calls with optional subcalls, parent extrinsic, call stack, and emitted events |
+| `portal_substrate_get_analytics` | Get Substrate analytics for event, call, and extrinsic activity over a selected window |
+
 ### Hyperliquid
 
 | Tool | Description |
@@ -111,8 +122,8 @@ These tools stay available, but they are not part of the core public surface.
 
 | Tool | Description |
 |------|-------------|
-| `portal_debug_query_blocks` | ADVANCED: query raw block records for EVM, Solana, or Bitcoin |
-| `portal_debug_resolve_time_to_block` | ADVANCED: resolve a timestamp to the nearest indexed block/slot |
+| `portal_debug_query_blocks` | ADVANCED: query raw block records for EVM, Solana, Bitcoin, or Substrate |
+| `portal_debug_resolve_time_to_block` | ADVANCED: resolve a timestamp to the nearest indexed block/slot on supported networks |
 | `portal_debug_hyperliquid_query_replica_commands` | ADVANCED: inspect Hyperliquid replica command records |
 
 ## Public API Conventions
@@ -133,6 +144,7 @@ These tools stay available, but they are not part of the core public surface.
 Public tools use a shared metadata envelope when applicable:
 
 - `_summary`
+- `_llm`
 - `_tool_contract`
 - `_execution`
 - `_freshness`
@@ -142,8 +154,18 @@ Public tools use a shared metadata envelope when applicable:
 
 Chart responses also include `chart`, and time-series / OHLC responses include `gap_diagnostics`.
 
+### LLM-friendly rendering contract
+
+Chart-heavy and dashboard-style responses now also expose:
+
+- `_ui`: a `portal_ui_v1` presentation contract for cards, panels, and follow-up actions
+- `_llm`: a `portal_llm_v1` layer with primary paths, flattened key metrics, section order, and render hints
+- `chart`: chart metadata with tooltip, interaction, and formatting hints
+- `tables`: sortable/searchable table descriptors for primary arrays
+
 ### Agent-specific response hints
 
+- `_llm` gives models the shortest path to a good answer: what section to read first, which data path is primary, what metrics to surface, what render/view is preferred, and what follow-up targets exist.
 - `_tool_contract` tells an agent what kind of tool it is using: audience, category, intent, VM family, result kind, normalized output, and key support flags such as pagination or response formats.
 - `_execution` tells an agent how the result was produced: scan window, fast/deep mode, response format, chart interval, compare/group settings, and similar runtime details.
 - Raw query tools now prefer normalized aliases such as `chain_kind`, `record_type`, `primary_id`, `tx_hash`, `timestamp`, and `timestamp_human` so clients can switch between VMs with less custom parsing.
@@ -153,6 +175,7 @@ Chart responses also include `chart`, and time-series / OHLC responses include `
 - **EVM**: Ethereum, Base, Arbitrum, Optimism, Polygon, Monad, Hyperliquid EVM, and many more
 - **Solana**: mainnet and related indexed environments
 - **Bitcoin**: mainnet
+- **Substrate**: Polkadot-family and related indexed networks, currently without real-time tailing
 - **Hyperliquid**: fills and replica-command datasets
 
 ## Time Windows
@@ -190,7 +213,10 @@ npm start
 npm run start:http
 ```
 
-Prometheus metrics are exposed at `/metrics` in HTTP mode.
+HTTP mode exposes:
+
+- `/metrics` for Prometheus metrics
+- `/health` for a simple health check
 
 ## Claude Desktop
 

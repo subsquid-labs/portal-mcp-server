@@ -2,7 +2,6 @@ import { createServer } from 'node:http'
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
-import { PORTAL_URL } from './constants/index.js'
 import { register } from './metrics.js'
 import { createPortalServer } from './server.js'
 import { npmVersion } from './version.js'

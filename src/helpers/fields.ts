@@ -295,3 +295,60 @@ export function buildBitcoinOutputFields() {
     // scriptPubKeyDesc REMOVED: descriptor format rarely needed in MCP context
   }
 }
+
+// ============================================================================
+// Substrate Field Builders
+// ============================================================================
+
+export function buildSubstrateBlockFields() {
+  return {
+    number: true,
+    hash: true,
+    parentHash: true,
+    stateRoot: true,
+    extrinsicsRoot: true,
+    specName: true,
+    specVersion: true,
+    implName: true,
+    implVersion: true,
+    validator: true,
+    timestamp: true,
+  }
+}
+
+export function buildSubstrateExtrinsicFields() {
+  return {
+    index: true,
+    version: true,
+    success: true,
+    hash: true,
+    fee: true,
+    tip: true,
+    signature: true,
+    error: true,
+  }
+}
+
+export function buildSubstrateCallFields() {
+  return {
+    extrinsicIndex: true,
+    address: true,
+    name: true,
+    success: true,
+    args: true,
+    origin: true,
+    error: true,
+  }
+}
+
+export function buildSubstrateEventFields() {
+  return {
+    index: true,
+    extrinsicIndex: true,
+    name: true,
+    phase: true,
+    callAddress: true,
+    topics: true,
+    args: true,
+  }
+}

@@ -2,6 +2,7 @@
 // Result Formatting
 // ============================================================================
 
+import { buildLlmHints, type LlmOverrides } from './llm-hints.js'
 import { getToolContract } from './tool-ux.js'
 
 const MAX_RESPONSE_LENGTH = 50_000 // 50KB - keeps responses within MCP client context limits
@@ -16,6 +17,8 @@ export interface FormatOptions {
   coverage?: unknown
   toolName?: string
   execution?: Record<string, unknown>
+  ui?: unknown
+  llm?: LlmOverrides
   metadata?: {
     network?: string
     dataset?: string
@@ -312,6 +315,10 @@ export function formatResult(
     if (execution) {
       payloadRecord._execution = execution
     }
+    if (options?.ui !== undefined) {
+      payloadRecord._ui = options.ui
+    }
+    payloadRecord._llm = buildLlmHints(payloadRecord, options?.llm)
     if (notices.length === 1) {
       payloadRecord._notice = notices[0]
     } else if (notices.length > 1) {

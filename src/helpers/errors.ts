@@ -267,6 +267,8 @@ function describeChainType(chainType: string): string {
       return 'Solana'
     case 'bitcoin':
       return 'Bitcoin'
+    case 'substrate':
+      return 'Substrate'
     case 'hyperliquidFills':
       return 'Hyperliquid fills'
     case 'hyperliquidReplicaCmds':

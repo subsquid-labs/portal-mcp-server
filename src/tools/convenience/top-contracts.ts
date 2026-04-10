@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
 
 import { PORTAL_URL } from '../../constants/index.js'
+import { buildTableDescriptor } from '../../helpers/chart-metadata.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { getRecordBlockNumber, portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
@@ -12,6 +13,7 @@ import { buildAnalysisCoverage, buildQueryFreshness, buildRankedOrdering } from 
 import { buildPaginationInfo, decodeOffsetPageCursor, encodeOffsetPageCursor, paginateOffsetItems } from '../../helpers/pagination.js'
 import { getTimestampWindowNotices, type ResolvedBlockWindow, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { buildMetricCard, buildPortalUi, buildRankedBarsPanel, buildTablePanel } from '../../helpers/ui-metadata.js'
 
 type TopContractsCursorRequest = {
   num_blocks?: number
@@ -308,6 +310,24 @@ export function registerGetTopContractsTool(server: McpServer) {
             window: windowDescription,
           },
           summary,
+          tables: [
+            buildTableDescriptor({
+              id: 'top_contracts',
+              dataKey: 'top_contracts',
+              rowCount: pageItems.length,
+              title: 'Top contracts',
+              subtitle: 'Ranked by transaction count across the selected analysis window',
+              keyField: 'address',
+              defaultSort: { key: 'rank', direction: 'asc' },
+              dense: true,
+              columns: [
+                { key: 'rank', label: 'Rank', kind: 'rank', format: 'integer', align: 'right' },
+                { key: 'address', label: 'Contract', kind: 'dimension', format: 'address' },
+                { key: 'transaction_count', label: 'Transactions', kind: 'metric', format: 'integer', align: 'right' },
+                { key: 'percentage', label: 'Share', kind: 'metric', format: 'percent', unit: '%', align: 'right' },
+              ],
+            }),
+          ],
           top_contracts: pageItems,
         },
         `Analyzed ${totalTxs.toLocaleString()} EVM transactions across ${windowDescription}. Top contract: ${sortedContracts[0]?.address} (${sortedContracts[0]?.transaction_count} txs, ${sortedContracts[0]?.percentage}%)`,
@@ -340,6 +360,53 @@ export function registerGetTopContractsTool(server: McpServer) {
             range_kind: resolvedWindow.range_kind,
             notes: [include_details ? 'Sample transaction hashes were included for ranked contracts.' : 'Compact ranked-contract view.'],
           }),
+          ui: buildPortalUi({
+            version: 'portal_ui_v1',
+            layout: 'dashboard',
+            density: 'compact',
+            design_intent: 'analytics_dashboard',
+            headline: {
+              title: `Top contracts on ${dataset}`,
+              subtitle: windowDescription,
+            },
+            metric_cards: [
+              buildMetricCard({ id: 'total-transactions', label: 'Transactions', value_path: 'summary.total_transactions', format: 'integer', emphasis: 'primary' }),
+              buildMetricCard({ id: 'unique-contracts', label: 'Unique contracts', value_path: 'summary.unique_contracts', format: 'integer' }),
+              buildMetricCard({ id: 'top-contract-txs', label: 'Top contract txs', value_path: 'summary.top_contract_txs', format: 'integer' }),
+            ],
+            panels: [
+              buildRankedBarsPanel({
+                id: 'contract-bars',
+                kind: 'ranked_bars_panel',
+                title: 'Top contracts',
+                subtitle: 'Horizontal ranking by transaction count.',
+                data_key: 'top_contracts',
+                category_key: 'address',
+                value_key: 'transaction_count',
+                rank_key: 'rank',
+                value_format: 'integer',
+                emphasis: 'primary',
+              }),
+              buildTablePanel({
+                id: 'contract-table',
+                kind: 'table_panel',
+                title: 'Top contracts table',
+                subtitle: 'Ranked contract rows with count and share.',
+                table_id: 'top_contracts',
+              }),
+            ],
+            follow_up_actions: [
+              ...(nextCursor ? [{ label: 'Load more ranked contracts', intent: 'continue' as const, target: '_pagination.next_cursor' }] : []),
+              { label: 'Show raw ranked rows', intent: 'show_raw', target: 'top_contracts' },
+            ],
+          }),
+          llm: {
+            answer_sequence: ['overview', 'summary.total_transactions', 'summary.unique_contracts', 'summary.top_contract', 'summary.top_contract_txs', 'top_contracts'],
+            parser_notes: [
+              'overview is the network and window context; top_contracts is the ranked result set for the actual leaders.',
+              'top_contracts is sorted by transaction_count descending, so rank 1 is the most active contract in the selected window.',
+            ],
+          },
           metadata: {
             network: dataset,
             dataset,

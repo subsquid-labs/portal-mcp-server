@@ -252,6 +252,65 @@ export function validateSolanaQuerySize(options: SolanaQueryValidationOptions): 
   return { valid: true }
 }
 
+// ============================================================================
+// Substrate Query Size Validation
+// ============================================================================
+
+export interface SubstrateQueryValidationOptions {
+  blockRange: number
+  hasFilters: boolean
+  queryType: 'events' | 'calls'
+  limit: number
+}
+
+const SUBSTRATE_RECOMMENDED_RANGES = {
+  events: { filtered: 5000, unfiltered: 500 },
+  calls: { filtered: 5000, unfiltered: 500 },
+}
+
+const SUBSTRATE_MAXIMUM_RANGES = {
+  events: { filtered: 20000, unfiltered: 2000 },
+  calls: { filtered: 20000, unfiltered: 2000 },
+}
+
+export function validateSubstrateQuerySize(options: SubstrateQueryValidationOptions): QueryValidationResult {
+  const { blockRange, hasFilters, queryType, limit } = options
+  const recommended = hasFilters ? SUBSTRATE_RECOMMENDED_RANGES[queryType].filtered : SUBSTRATE_RECOMMENDED_RANGES[queryType].unfiltered
+  const maximum = hasFilters ? SUBSTRATE_MAXIMUM_RANGES[queryType].filtered : SUBSTRATE_MAXIMUM_RANGES[queryType].unfiltered
+  const hasLowLimit = limit <= 100
+
+  if (blockRange > maximum && !hasLowLimit) {
+    return {
+      valid: false,
+      error: `Query too large (${blockRange.toLocaleString()} blocks${hasFilters ? '' : ' unfiltered'}). ` +
+        `Substrate ${queryType} queries should stay under ${maximum.toLocaleString()} blocks for safe MCP-sized responses.`,
+      recommendation: hasFilters
+        ? `Split the request into smaller windows of about ${recommended.toLocaleString()} blocks each.`
+        : `Add name filters or reduce the range to about ${recommended.toLocaleString()} blocks.`,
+    }
+  }
+
+  if (hasLowLimit && blockRange > maximum && blockRange > recommended) {
+    return {
+      valid: true,
+      warning: `Scanning ${blockRange.toLocaleString()} blocks. This is allowed because limit=${limit} caps the number of returned rows.`,
+      recommendation: 'If you want a faster scan, add event/call name filters or use a shorter time window.',
+    }
+  }
+
+  if (blockRange > recommended) {
+    return {
+      valid: true,
+      warning: `Scanning ${blockRange.toLocaleString()} blocks. This may be slower on event-heavy Substrate windows.`,
+      recommendation: hasFilters
+        ? `For a snappier response, keep filtered Substrate ${queryType} queries under about ${recommended.toLocaleString()} blocks.`
+        : `For a snappier response, add filters or keep the range under about ${recommended.toLocaleString()} blocks.`,
+    }
+  }
+
+  return { valid: true }
+}
+
 /**
  * Format block range validation warning for user display
  */

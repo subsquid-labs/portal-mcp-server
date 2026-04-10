@@ -28,15 +28,21 @@ async function fetchHeadTimestamp(dataset: string, chainType: string, blockNumbe
           includeAllBlocks: true,
           ...baseQuery,
         }
-      : chainType === 'bitcoin'
-        ? {
-            type: 'bitcoin',
-            includeAllBlocks: true,
-            ...baseQuery,
-          }
-        : chainType === 'hyperliquidFills'
+        : chainType === 'bitcoin'
           ? {
-              type: 'hyperliquidFills',
+              type: 'bitcoin',
+              includeAllBlocks: true,
+              ...baseQuery,
+            }
+          : chainType === 'substrate'
+            ? {
+                type: 'substrate',
+                includeAllBlocks: true,
+                ...baseQuery,
+              }
+          : chainType === 'hyperliquidFills'
+            ? {
+                type: 'hyperliquidFills',
               ...baseQuery,
               fields: {
                 ...baseQuery.fields,

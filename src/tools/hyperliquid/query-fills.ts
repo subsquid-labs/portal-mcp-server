@@ -2,8 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
-import { PORTAL_URL } from '../../constants/index.js'
-import { portalFetchRecentRecords } from '../../helpers/fetch.js'
+import { buildTableDescriptor, type TableColumnDescriptor } from '../../helpers/chart-metadata.js'
 import { formatResult } from '../../helpers/format.js'
 import { normalizeHyperliquidFillResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
@@ -11,6 +10,8 @@ import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness
 import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { buildMetricCard, buildPortalUi, buildTablePanel, buildTimelinePanel } from '../../helpers/ui-metadata.js'
+import { fetchRecentHyperliquidFillBlocks } from './fill-stream.js'
 
 // ============================================================================
 // Tool: Query Hyperliquid Fills
@@ -63,6 +64,91 @@ function sortFills(items: HyperliquidFillItem[]) {
     if (leftIndex !== rightIndex) return leftIndex - rightIndex
 
     return String(left.hash ?? '').localeCompare(String(right.hash ?? ''))
+  })
+}
+
+function buildHyperliquidFillTable(params: {
+  rowCount: number
+  includePnl: boolean
+  includeBuilderInfo: boolean
+}) {
+  const columns: TableColumnDescriptor[] = [
+    { key: 'timestamp_human', label: 'Time', kind: 'time', format: 'timestamp_human' },
+    { key: 'coin', label: 'Coin', kind: 'dimension' },
+    { key: 'dir', label: 'Direction', kind: 'dimension' },
+    { key: 'side', label: 'Side', kind: 'dimension' },
+    { key: 'px', label: 'Price', kind: 'metric', format: 'currency_usd', unit: 'USD', align: 'right' },
+    { key: 'sz', label: 'Size', kind: 'metric', format: 'decimal', align: 'right' },
+    { key: 'fee', label: 'Fee', kind: 'metric', format: 'currency_usd', unit: 'USD', align: 'right' },
+  ]
+
+  if (params.includePnl) {
+    columns.push({ key: 'closedPnl', label: 'Closed PnL', kind: 'metric', format: 'currency_usd', unit: 'USD', align: 'right' })
+  }
+
+  columns.push({ key: 'sender', path: 'sender', label: 'Trader', kind: 'dimension', format: 'address' })
+
+  if (params.includeBuilderInfo) {
+    columns.push({ key: 'builder', label: 'Builder', kind: 'dimension', format: 'address' })
+  }
+
+  columns.push({ key: 'block_number', label: 'Block', kind: 'metric', format: 'integer', align: 'right' })
+
+  return buildTableDescriptor({
+    id: 'fills',
+    dataKey: 'items',
+    rowCount: params.rowCount,
+    title: 'Hyperliquid fills',
+    subtitle: 'Chronological raw fills for the selected page',
+    keyField: 'primary_id',
+    defaultSort: { key: 'timestamp', direction: 'asc' },
+    dense: true,
+    columns,
+  })
+}
+
+function buildHyperliquidFillUi(params: {
+  title: string
+  subtitle: string
+  nextCursor?: string
+}) {
+  return buildPortalUi({
+    version: 'portal_ui_v1',
+    layout: 'split',
+    density: 'compact',
+    design_intent: 'activity_investigator',
+    headline: {
+      title: params.title,
+      subtitle: params.subtitle,
+    },
+    metric_cards: [
+      buildMetricCard({ id: 'visible-fills', label: 'Visible fills', value_path: 'page_summary.visible_fills', format: 'integer', emphasis: 'primary' }),
+    ],
+    panels: [
+      buildTimelinePanel({
+        id: 'fills-timeline',
+        kind: 'timeline_panel',
+        title: 'Fill timeline',
+        subtitle: 'Chronological fills with coin, direction, and trader context.',
+        data_key: 'items',
+        timestamp_key: 'timestamp_human',
+        title_key: 'coin',
+        subtitle_keys: ['dir', 'sender', 'px', 'sz'],
+        badge_key: 'record_type',
+        emphasis: 'primary',
+      }),
+      buildTablePanel({
+        id: 'fills-table',
+        kind: 'table_panel',
+        title: 'Fill table',
+        subtitle: 'Exact rows for the current fill page.',
+        table_id: 'fills',
+      }),
+    ],
+    follow_up_actions: [
+      ...(params.nextCursor ? [{ label: 'Load older fills', intent: 'continue' as const, target: '_pagination.next_cursor' }] : []),
+      { label: 'Show raw rows', intent: 'show_raw', target: 'items' },
+    ],
   })
 }
 
@@ -216,26 +302,21 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         fillFields.twapId = true
       }
 
-      const query = {
-        type: 'hyperliquidFills',
-        fromBlock: resolvedFromBlock,
-        toBlock: pageToBlock,
-        fields: {
-          block: { number: true, timestamp: true },
-          fill: fillFields,
-        },
-        fills: [fillFilter],
-      }
-
       const hasFilters = !!(user || coin || dir || builder || fee_token || cloid)
       const cursorSkip = paginationCursor?.skip_inclusive_block ?? 0
       const fetchLimit = limit + cursorSkip + 1
-      const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
-        itemKeys: ['fills'],
+      const recentFetch = await fetchRecentHyperliquidFillBlocks({
+        dataset,
+        fromBlock: resolvedFromBlock,
+        toBlock: pageToBlock,
+        fillFilter,
+        fillFields,
         limit: fetchLimit,
-        chunkSize: hasFilters ? 40_000 : 5_000,
+        initialChunkSize: hasFilters ? 250 : 100,
+        maxChunkSize: hasFilters ? 40_000 : 5_000,
         maxBytes: 100 * 1024 * 1024,
       })
+      const results = recentFetch.blocks
 
       const allFills = sortFills(
         results.flatMap((block: unknown) => {
@@ -308,8 +389,26 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         hasMore: page.hasMore,
       })
 
+      const showFillPresentation = Array.isArray(formattedData)
+      const fillTable = showFillPresentation
+        ? buildHyperliquidFillTable({
+            rowCount: page.pageItems.length,
+            includePnl: include_pnl,
+            includeBuilderInfo: include_builder_info,
+          })
+        : undefined
+      const responsePayload = showFillPresentation && fillTable
+        ? {
+            page_summary: {
+              visible_fills: page.pageItems.length,
+            },
+            items: formattedData,
+            tables: [fillTable],
+          }
+        : formattedData
+
       return formatResult(
-        formattedData,
+        responsePayload,
         `Retrieved ${page.pageItems.length} Hyperliquid fills${page.hasMore ? ` from the most recent matching range (preview page limited to ${limit})` : ''}`,
         {
           toolName: 'portal_hyperliquid_query_fills',
@@ -334,8 +433,28 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
               include_pnl || include_builder_info
                 ? 'Additional fill context was requested with include flags.'
                 : 'Using the lightweight fill view.',
+              `Adaptive recent scan fetched ${recentFetch.returnedFills.toLocaleString()} fill(s) across ${recentFetch.chunksFetched} chunk(s) to build this page.`,
+              recentFetch.chunkSizeExpanded
+                ? 'Chunk size expanded during the backward scan because early chunks did not contain enough matching fills.'
+                : 'The first recent chunk already contained enough matching fills for this page.',
             ],
           }),
+          ...(showFillPresentation && fillTable
+            ? {
+                ui: buildHyperliquidFillUi({
+                  title: 'Recent Hyperliquid fills',
+                  subtitle: 'Raw fills with a timeline-first view plus exact rows for the current page.',
+                  nextCursor,
+                }),
+                llm: {
+                  answer_sequence: ['page_summary', 'items', '_pagination.next_cursor'],
+                  parser_notes: [
+                    'items is a chronological page ordered oldest_to_newest, so the latest visible fill is the last row.',
+                    'Use the fills table or timeline metadata directly instead of inferring a chart or grid from the raw rows.',
+                  ],
+                },
+              }
+            : {}),
           metadata: {
             network: dataset,
             dataset,

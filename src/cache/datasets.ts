@@ -18,6 +18,7 @@ const metadataCache = createCache<{ start_block: number; head: BlockHead; finali
   100,
 )
 let datasetsCache: { data: Dataset[]; timestamp: number } | null = null
+const knownDatasetKinds = new Map<string, ChainType>()
 
 const pendingRequests = new Map<string, Promise<any>>()
 
@@ -27,6 +28,20 @@ function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
     pendingRequests.set(key, promise)
   }
   return pendingRequests.get(key) as Promise<T>
+}
+
+function rememberDatasetKinds(datasets: Dataset[]) {
+  for (const dataset of datasets) {
+    const kind = dataset.metadata?.kind
+    if (!kind) continue
+
+    knownDatasetKinds.set(dataset.dataset.toLowerCase(), kind)
+    dataset.aliases.forEach((alias) => knownDatasetKinds.set(alias.toLowerCase(), kind))
+  }
+}
+
+export function peekKnownChainType(dataset: string): ChainType | undefined {
+  return knownDatasetKinds.get(dataset.toLowerCase())
 }
 
 /**
@@ -42,6 +57,7 @@ export async function getDatasets(): Promise<Dataset[]> {
     const data = await portalFetch<Dataset[]>(
       `${PORTAL_URL}/datasets?expand%5B%5D=metadata&expand%5B%5D=schema`,
     )
+    rememberDatasetKinds(data)
     datasetsCache = { data, timestamp: Date.now() }
     return data
   })
@@ -57,10 +73,56 @@ export async function getChainType(dataset: string): Promise<ChainType> {
   if (ds?.metadata?.kind) {
     return ds.metadata.kind
   }
+
+  const cachedKind = peekKnownChainType(dataset)
+  if (cachedKind) {
+    return cachedKind
+  }
+
   // Fallback heuristic for datasets without metadata
   const lower = dataset.toLowerCase()
   if (lower.includes('solana') || lower.includes('eclipse')) {
     return 'solana'
+  }
+  if (lower.includes('bitcoin')) {
+    return 'bitcoin'
+  }
+  if (lower === 'hyperliquid-fills') {
+    return 'hyperliquidFills'
+  }
+  if (lower === 'hyperliquid-replica-cmds') {
+    return 'hyperliquidReplicaCmds'
+  }
+  if (
+    lower.includes('substrate') ||
+    [
+      'acala',
+      'aleph-zero',
+      'asset-hub-kusama',
+      'asset-hub-polkadot',
+      'astar-substrate',
+      'avail',
+      'basilisk',
+      'bifrost-kusama',
+      'bifrost-polkadot',
+      'bridge-hub-kusama',
+      'bridge-hub-polkadot',
+      'hydradx',
+      'interlay',
+      'karura',
+      'kusama',
+      'moonbeam-substrate',
+      'moonriver-substrate',
+      'people-chain',
+      'polkadot',
+      'rococo',
+      'shibuya-substrate',
+      'shiden-substrate',
+      'vara',
+      'westend',
+    ].includes(lower)
+  ) {
+    return 'substrate'
   }
   return 'evm'
 }
@@ -119,6 +181,19 @@ const CHAIN_ALIASES: Record<string, string[]> = {
   'hyperliquid-replica-cmds': ['hl-replica', 'hlreplica', 'hl-cmds'],
   'solana-mainnet': ['solana', 'sol'],
   'bitcoin-mainnet': ['bitcoin', 'btc'],
+  polkadot: ['dot'],
+  kusama: ['ksm'],
+  'asset-hub-polkadot': ['asset-hub', 'assethub-polkadot', 'ah-polkadot'],
+  'people-chain': ['people'],
+  hydradx: ['hydra'],
+  acala: ['aca'],
+  'moonbeam-substrate': ['moonbeam-substrate', 'moonbeam substrate'],
+  'moonriver-substrate': ['moonriver-substrate', 'moonriver substrate'],
+  'astar-substrate': ['astar-substrate'],
+  'shiden-substrate': ['shiden'],
+  'shibuya-substrate': ['shibuya'],
+  vara: ['gear', 'vara-network'],
+  avail: ['data-avail'],
 }
 
 /**

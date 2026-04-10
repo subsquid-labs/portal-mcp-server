@@ -14,7 +14,7 @@ export function registerListDatasetsTool(server: McpServer) {
     'portal_list_networks',
     buildToolDescription('portal_list_networks'),
     {
-      vm: z.enum(['evm', 'solana', 'bitcoin', 'hyperliquid']).optional().describe('Filter by VM family'),
+      vm: z.enum(['evm', 'solana', 'bitcoin', 'substrate', 'hyperliquid']).optional().describe('Filter by VM family'),
       network_type: z.enum(['mainnet', 'testnet', 'devnet']).optional().describe('Filter by network type'),
       query: z.string().optional().describe('Search by name, alias, or chain ID'),
       real_time_only: z.boolean().optional().describe('Only show real-time datasets'),

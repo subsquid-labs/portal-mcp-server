@@ -24,6 +24,7 @@ const BLOCK_TIME_ESTIMATES: Record<string, number> = {
   evm: 12, // Ethereum mainnet default (~12s)
   solana: 0.4, // Solana slots (~400ms)
   bitcoin: 600, // Bitcoin (~10 min)
+  substrate: 6, // Polkadot-family default (~6s)
   hyperliquidFills: 0.083, // ~12 blocks/second
   hyperliquidReplicaCmds: 0.083,
 }
@@ -50,6 +51,19 @@ const DATASET_BLOCK_TIMES: Record<string, number> = {
   'mode-': 2,
   'zora-': 2,
   'celo-': 5,
+  'polkadot': 6,
+  'kusama': 6,
+  'westend': 6,
+  'rococo': 6,
+  'asset-hub-polkadot': 6,
+  'asset-hub-kusama': 6,
+  'people-chain': 6,
+  'moonbeam-substrate': 12,
+  'moonriver-substrate': 12,
+  'moonbase-substrate': 12,
+  'astar-substrate': 12,
+  'shiden-substrate': 12,
+  'shibuya-substrate': 12,
 }
 
 export type ParsedTimestampInput = {
@@ -166,7 +180,7 @@ const TIMESTAMP_INDEXER_LAG = 2 * 3600 // 2 hours in seconds
 
 /**
  * Convert a Unix timestamp to a block number using Portal's /timestamps/ endpoint.
- * Works for all EVM, Solana, and Bitcoin chains. NOT supported for Hyperliquid.
+ * Works for all EVM, Solana, Bitcoin, and Substrate chains. NOT supported for Hyperliquid.
  *
  * Uses a short timeout and zero retries — the caller should fall back to
  * block time estimation on failure.
@@ -195,6 +209,10 @@ export async function getHeadTimestamp(dataset: string, headBlock: number): Prom
       break
     case 'bitcoin':
       type = 'bitcoin'
+      fieldKey = 'block'
+      break
+    case 'substrate':
+      type = 'substrate'
       fieldKey = 'block'
       break
     case 'hyperliquidFills':
@@ -407,7 +425,7 @@ export async function resolveBlockAtTimestamp(dataset: string, input: string | n
  *
  * Strategy:
  * 1. Hyperliquid → always estimate (no /timestamps/ support)
- * 2. Short timeframes (≤ 2h) → always estimate (indexer can't resolve recent timestamps)
+ * 2. Short timeframes (≤ 2h) → always estimate (indexer may not resolve recent timestamps close to head)
  * 3. Cached failure for this dataset → estimate (avoid known-broken endpoint)
  * 4. Otherwise → try /timestamps/ with fast timeout (3s, 0 retries)
  *    - On success → return accurate block range

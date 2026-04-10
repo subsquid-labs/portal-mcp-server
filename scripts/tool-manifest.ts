@@ -1,6 +1,20 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { EVENT_SIGNATURES } from '../src/constants/index.js'
 
+const POLKADOT_SAMPLE_FROM_BLOCK = 30_736_840
+const POLKADOT_SAMPLE_TO_BLOCK = 30_736_842
+const BASE_RPC_URL = 'https://mainnet.base.org'
+const BASE_USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
+const BASE_UNISWAP_V4_POOL_MANAGER = '0x498581ff718922c3f8e6a244956af099b2652b2b'
+const AERODROME_SLIPSTREAM_FACTORY = '0xf8f2eb4940cfe7d13603dddd87f123820fc061ef'
+const SELECTORS = {
+  allPools: '0x41d1de97',
+} as const
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 export interface ToolTestContext {
   nowTimestamp: number
   baseHead: number
@@ -10,6 +24,8 @@ export interface ToolTestContext {
   hlReplicaHead: number
   usdcBase: string
   baseUniswapV3Pool: string
+  baseUniswapV4PoolId: string
+  aerodromeSlipstreamPool: string
   evmWallet: string
   solWallet: string
   btcAddress: string
@@ -52,6 +68,8 @@ function getItems(data: any): any[] {
   if (Array.isArray(data?.candles)) return data.candles
   if (Array.isArray(data?.ohlc)) return data.ohlc
   if (Array.isArray(data?.top_contracts)) return data.top_contracts
+  if (Array.isArray(data?.top_events)) return data.top_events
+  if (Array.isArray(data?.top_calls)) return data.top_calls
   if (Array.isArray(data?.volume_by_coin)) return data.volume_by_coin
   if (Array.isArray(data?.top_traders_by_volume)) return data.top_traders_by_volume
   if (Array.isArray(data?.programs)) return data.programs
@@ -103,6 +121,63 @@ async function getHeadNumber(client: Client, network: string): Promise<number> {
   return extractJson(getText(result)).number
 }
 
+function encodeAddress(value: string) {
+  return value.toLowerCase().replace(/^0x/, '').padStart(64, '0')
+}
+
+function encodeUint(value: number) {
+  return value.toString(16).padStart(64, '0')
+}
+
+async function baseRpcCall(method: string, params: unknown[]) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const response = await fetch(BASE_RPC_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method,
+        params,
+      }),
+    })
+
+    if (response.status === 429 && attempt < 4) {
+      await sleep(500 * (attempt + 1))
+      continue
+    }
+
+    assert(response.ok, `Base RPC ${method} failed with HTTP ${response.status}`)
+    const data = await response.json() as { result?: unknown; error?: { message?: string } }
+    assert(!data.error, `Base RPC ${method} error: ${data.error?.message || 'unknown error'}`)
+    assert(data.result !== undefined, `Base RPC ${method} returned no result`)
+    return data.result
+  }
+
+  throw new Error(`Base RPC ${method} failed after retries`)
+}
+
+function decodeAddressWord(value: string) {
+  const clean = value.toLowerCase().replace(/^0x/, '')
+  assert(clean.length >= 40, 'Expected ABI-encoded address word')
+  return `0x${clean.slice(-40)}`
+}
+
+function isZeroAddress(value: string) {
+  return /^0x0{40}$/.test(value)
+}
+
+async function baseEthCall(to: string, data: string) {
+  const result = await baseRpcCall('eth_call', [{ to, data }, 'latest'])
+  assert(typeof result === 'string', 'Expected eth_call to return a hex string')
+  return result
+}
+
+async function getFactoryPoolAtIndex(factory: string, index: number) {
+  const result = await baseEthCall(factory, `${SELECTORS.allPools}${encodeUint(index)}`)
+  return decodeAddressWord(result)
+}
+
 export async function loadToolTestContext(client: Client): Promise<ToolTestContext> {
   const [baseHead, solHead, btcHead, hlFillsHead, hlReplicaHead] = await Promise.all([
     getHeadNumber(client, 'base-mainnet'),
@@ -112,7 +187,7 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
     getHeadNumber(client, 'hyperliquid-replica-cmds'),
   ])
 
-  const [recentSwapResult, evmTxResult, solTxResult, btcTxResult, hlFillResult] = await Promise.all([
+  const [recentSwapResult, recentV4SwapResult, evmTxResult, solTxResult, btcTxResult, hlFillResult] = await Promise.all([
     client.callTool({
       name: 'portal_evm_query_logs',
       arguments: {
@@ -122,6 +197,18 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
         topic0: [EVENT_SIGNATURES.UNISWAP_V3_SWAP],
         limit: 1,
         field_preset: 'minimal',
+      },
+    }),
+    client.callTool({
+      name: 'portal_evm_query_logs',
+      arguments: {
+        network: 'base-mainnet',
+        from_block: baseHead - 2_000,
+        to_block: baseHead,
+        addresses: [BASE_UNISWAP_V4_POOL_MANAGER],
+        topic0: [EVENT_SIGNATURES.UNISWAP_V4_SWAP],
+        limit: 50,
+        field_preset: 'standard',
       },
     }),
     client.callTool({
@@ -166,6 +253,19 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
   assert(recentSwapItems.length > 0, 'Expected at least one active Base Uniswap V3 pool')
   const baseUniswapV3Pool = String(recentSwapItems[0].address || '').toLowerCase()
 
+  const recentV4SwapItems = getItems(extractJson(getText(recentV4SwapResult)))
+  assert(recentV4SwapItems.length > 0, 'Expected at least one active Base Uniswap v4 pool id')
+  const baseUniswapV4PoolId =
+    [...recentV4SwapItems.reduce((counts, item: any) => {
+      const poolId = String(item?.topics?.[1] || '').toLowerCase()
+      if (poolId) counts.set(poolId, (counts.get(poolId) || 0) + 1)
+      return counts
+    }, new Map<string, number>()).entries()].sort((left, right) => right[1] - left[1])[0]?.[0] || ''
+  assert(/^0x[0-9a-f]{64}$/.test(baseUniswapV4PoolId), 'Expected a recent Base Uniswap v4 pool id')
+
+  const aerodromeSlipstreamPool = (await getFactoryPoolAtIndex(AERODROME_SLIPSTREAM_FACTORY, 0)).toLowerCase()
+  assert(!isZeroAddress(aerodromeSlipstreamPool), 'Expected the Aerodrome Slipstream factory to expose an initial pool on Base')
+
   const evmWallet = String(extractJson(getText(evmTxResult)).items?.[0]?.from || '')
   assert(evmWallet.startsWith('0x'), 'Expected an active Base wallet')
 
@@ -190,8 +290,10 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
     btcHead,
     hlFillsHead,
     hlReplicaHead,
-    usdcBase: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+    usdcBase: BASE_USDC,
     baseUniswapV3Pool,
+    baseUniswapV4PoolId,
+    aerodromeSlipstreamPool,
     evmWallet,
     solWallet,
     btcAddress,
@@ -477,6 +579,54 @@ export const TOOL_SPECS: ToolSpec[] = [
       expectOrdering(data, 'portal_evm_get_ohlc')
       expectPresentation(data, 'portal_evm_get_ohlc', { chartDataKey: 'ohlc', tableId: 'ohlc' })
     },
+    validateFollowUp: async (_text, client, context) => {
+      const [aerodromeSlipstreamResult, uniswapV4Result] = await Promise.all([
+        client.callTool({
+          name: 'portal_evm_get_ohlc',
+          arguments: {
+            network: 'base-mainnet',
+            pool_address: context.aerodromeSlipstreamPool,
+            source: 'aerodrome_slipstream_swap',
+            duration: '1h',
+            interval: '5m',
+          },
+        }),
+        client.callTool({
+          name: 'portal_evm_get_ohlc',
+          arguments: {
+            network: 'base-mainnet',
+            source: 'uniswap_v4_swap',
+            pool_id: context.baseUniswapV4PoolId,
+            duration: '1h',
+            interval: '5m',
+          },
+        }),
+      ])
+
+      const aerodromeSlipstreamData = extractJson(getText(aerodromeSlipstreamResult))
+      const aerodromeSlipstreamCandles = Array.isArray(aerodromeSlipstreamData.ohlc) ? aerodromeSlipstreamData.ohlc : []
+      assert(aerodromeSlipstreamData.summary?.source === 'aerodrome_slipstream_swap', 'Expected Aerodrome Slipstream OHLC source')
+      assert(aerodromeSlipstreamData.summary?.source_family === 'aerodrome_slipstream', 'Expected Aerodrome Slipstream source family')
+      assert(aerodromeSlipstreamData.summary?.price_method === 'sqrt_price_x96', 'Expected sqrt_price_x96 price method for Slipstream')
+      assert(aerodromeSlipstreamData.summary?.volume_available === true, 'Expected volume_available=true for Slipstream swaps')
+      assert(aerodromeSlipstreamCandles.length > 0, 'Expected Aerodrome Slipstream candles')
+      expectWindowMetadata(aerodromeSlipstreamData, 'portal_evm_get_ohlc aerodrome slipstream')
+      expectGapDiagnostics(aerodromeSlipstreamData, 'portal_evm_get_ohlc aerodrome slipstream')
+      expectPresentation(aerodromeSlipstreamData, 'portal_evm_get_ohlc aerodrome slipstream', { chartDataKey: 'ohlc', tableId: 'ohlc' })
+
+      const uniswapV4Data = extractJson(getText(uniswapV4Result))
+      const uniswapV4Candles = Array.isArray(uniswapV4Data.ohlc) ? uniswapV4Data.ohlc : []
+      assert(uniswapV4Data.summary?.source === 'uniswap_v4_swap', 'Expected Uniswap v4 OHLC source')
+      assert(uniswapV4Data.summary?.source_family === 'uniswap_v4', 'Expected Uniswap v4 source family')
+      assert(uniswapV4Data.summary?.price_method === 'sqrt_price_x96', 'Expected sqrt_price_x96 price method for Uniswap v4')
+      assert(uniswapV4Data.summary?.volume_available === true, 'Expected volume_available=true for Uniswap v4 swaps')
+      assert(uniswapV4Data.summary?.pool_id === context.baseUniswapV4PoolId, 'Expected the requested Uniswap v4 pool id in summary')
+      assert(uniswapV4Data.summary?.pool_manager_address === BASE_UNISWAP_V4_POOL_MANAGER, 'Expected the official Base PoolManager address')
+      assert(uniswapV4Candles.length > 0, 'Expected Uniswap v4 candles')
+      expectWindowMetadata(uniswapV4Data, 'portal_evm_get_ohlc uniswap v4')
+      expectGapDiagnostics(uniswapV4Data, 'portal_evm_get_ohlc uniswap v4')
+      expectPresentation(uniswapV4Data, 'portal_evm_get_ohlc uniswap v4', { chartDataKey: 'ohlc', tableId: 'ohlc' })
+    },
   },
   {
     name: 'portal_solana_query_transactions',
@@ -540,6 +690,70 @@ export const TOOL_SPECS: ToolSpec[] = [
       const data = extractJson(text)
       assert(data.overview !== undefined, 'Expected Bitcoin analytics summary')
       expectWindowMetadata(data, 'portal_bitcoin_get_analytics')
+    },
+  },
+  {
+    name: 'portal_substrate_query_events',
+    prompt: 'show me raw Polkadot events and keep the parent context inline',
+    args: () => ({
+      network: 'polkadot',
+      from_block: POLKADOT_SAMPLE_FROM_BLOCK,
+      to_block: POLKADOT_SAMPLE_TO_BLOCK,
+      event_names: ['ParaInclusion.CandidateIncluded'],
+      include_extrinsic: true,
+      include_call: true,
+      limit: 3,
+    }),
+    validate: (text) => {
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(items.length > 0, 'Expected Substrate event rows')
+      assert(items[0].event_name === 'ParaInclusion.CandidateIncluded' || items[0].name === 'ParaInclusion.CandidateIncluded', 'Expected CandidateIncluded events')
+      assert(items[0].extrinsic !== undefined, 'Expected inline extrinsic context on Substrate events')
+      assert(items[0].call !== undefined, 'Expected inline call context on Substrate events')
+      expectWindowMetadata(data, 'portal_substrate_query_events')
+      expectOrdering(data, 'portal_substrate_query_events')
+    },
+  },
+  {
+    name: 'portal_substrate_query_calls',
+    prompt: 'show me raw Polkadot calls with emitted events',
+    args: () => ({
+      network: 'polkadot',
+      from_block: POLKADOT_SAMPLE_FROM_BLOCK,
+      to_block: POLKADOT_SAMPLE_TO_BLOCK,
+      call_names: ['ParaInherent.enter'],
+      include_extrinsic: true,
+      include_events: true,
+      limit: 3,
+    }),
+    validate: (text) => {
+      const data = extractJson(text)
+      const items = getItems(data)
+      assert(items.length > 0, 'Expected Substrate call rows')
+      assert(items[0].call_name === 'ParaInherent.enter' || items[0].name === 'ParaInherent.enter', 'Expected ParaInherent.enter calls')
+      assert(items[0].extrinsic !== undefined, 'Expected inline extrinsic context on Substrate calls')
+      assert(Array.isArray(items[0].events) && items[0].events.length > 0, 'Expected emitted events on Substrate calls')
+      expectWindowMetadata(data, 'portal_substrate_query_calls')
+      expectOrdering(data, 'portal_substrate_query_calls')
+    },
+  },
+  {
+    name: 'portal_substrate_get_analytics',
+    prompt: 'give me the big picture for Polkadot activity in this sample window',
+    args: () => ({
+      network: 'polkadot',
+      from_block: POLKADOT_SAMPLE_FROM_BLOCK,
+      to_block: POLKADOT_SAMPLE_TO_BLOCK,
+    }),
+    validate: (text) => {
+      const data = extractJson(text)
+      assert(data.overview !== undefined, 'Expected Substrate analytics overview')
+      assert(Array.isArray(data.top_events) && data.top_events.length > 0, 'Expected ranked Substrate events')
+      assert(Array.isArray(data.top_calls) && data.top_calls.length > 0, 'Expected ranked Substrate calls')
+      assert(Array.isArray(data.tables) && data.tables.some((table: any) => table?.id === 'top_events'), 'Expected top_events table metadata')
+      assert(Array.isArray(data.tables) && data.tables.some((table: any) => table?.id === 'top_calls'), 'Expected top_calls table metadata')
+      expectWindowMetadata(data, 'portal_substrate_get_analytics')
     },
   },
   {

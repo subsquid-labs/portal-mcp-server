@@ -305,6 +305,77 @@ export function compactSolanaTransactions(txs: any[]): any[] {
   }))
 }
 
+export function summarizeSubstrateEvents(events: any[]): any {
+  if (events.length === 0) return { count: 0, summary: 'No events found' }
+
+  const eventNames = new Map<string, number>()
+  const blocks = events.map((event) => getBlockNumber(event)).filter(isNumber)
+
+  events.forEach((event) => {
+    const name = event.event_name || event.name || 'unknown'
+    eventNames.set(name, (eventNames.get(name) || 0) + 1)
+  })
+
+  return {
+    total_events: events.length,
+    unique_event_names: eventNames.size,
+    top_event_names: Array.from(eventNames.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count })),
+    block_range: blocks.length > 0 ? { from: Math.min(...blocks), to: Math.max(...blocks) } : undefined,
+  }
+}
+
+export function compactSubstrateEvents(events: any[]): any[] {
+  return events.map((event) => ({
+    ...pickCommonAliases(event),
+    event_name: event.event_name || event.name,
+    extrinsic_index: event.extrinsicIndex ?? event.extrinsic_index,
+    phase: event.phase,
+    call_address: event.call_address || (Array.isArray(event.callAddress) ? event.callAddress.join('.') : event.callAddress),
+    blockNumber: getBlockNumber(event),
+    timestamp: getTimestamp(event),
+  }))
+}
+
+export function summarizeSubstrateCalls(calls: any[]): any {
+  if (calls.length === 0) return { count: 0, summary: 'No calls found' }
+
+  const callNames = new Map<string, number>()
+  const blocks = calls.map((call) => getBlockNumber(call)).filter(isNumber)
+  let successCount = 0
+
+  calls.forEach((call) => {
+    const name = call.call_name || call.name || 'unknown'
+    callNames.set(name, (callNames.get(name) || 0) + 1)
+    if (call.success === true) successCount++
+  })
+
+  return {
+    total_calls: calls.length,
+    unique_call_names: callNames.size,
+    success_rate: parseFloat(((successCount / calls.length) * 100).toFixed(1)),
+    top_call_names: Array.from(callNames.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count })),
+    block_range: blocks.length > 0 ? { from: Math.min(...blocks), to: Math.max(...blocks) } : undefined,
+  }
+}
+
+export function compactSubstrateCalls(calls: any[]): any[] {
+  return calls.map((call) => ({
+    ...pickCommonAliases(call),
+    call_name: call.call_name || call.name,
+    success: call.success,
+    extrinsic_index: call.extrinsicIndex ?? call.extrinsic_index,
+    call_address: call.call_address || (Array.isArray(call.address) ? call.address.join('.') : call.address),
+    blockNumber: getBlockNumber(call),
+    timestamp: getTimestamp(call),
+  }))
+}
+
 /**
  * Summarize Bitcoin transactions - reduces by ~90%
  */
@@ -441,7 +512,7 @@ export function compactBitcoinOutputs(outputs: any[]): any[] {
 export function applyResponseFormat(
   data: any,
   format: ResponseFormat,
-  dataType: 'logs' | 'transactions' | 'bitcoin_transactions' | 'bitcoin_inputs' | 'bitcoin_outputs' | 'hyperliquid_fills' | 'solana_transactions',
+  dataType: 'logs' | 'transactions' | 'bitcoin_transactions' | 'bitcoin_inputs' | 'bitcoin_outputs' | 'hyperliquid_fills' | 'solana_transactions' | 'substrate_events' | 'substrate_calls',
 ): any {
   if (format === 'full' || !Array.isArray(data)) {
     return data
@@ -456,6 +527,8 @@ export function applyResponseFormat(
       case 'bitcoin_outputs': return summarizeBitcoinOutputs(data)
       case 'hyperliquid_fills': return summarizeHyperliquidFills(data)
       case 'solana_transactions': return summarizeSolanaTransactions(data)
+      case 'substrate_events': return summarizeSubstrateEvents(data)
+      case 'substrate_calls': return summarizeSubstrateCalls(data)
       default: return data
     }
   }
@@ -469,6 +542,8 @@ export function applyResponseFormat(
       case 'bitcoin_outputs': return compactBitcoinOutputs(data)
       case 'hyperliquid_fills': return compactHyperliquidFills(data)
       case 'solana_transactions': return compactSolanaTransactions(data)
+      case 'substrate_events': return compactSubstrateEvents(data)
+      case 'substrate_calls': return compactSubstrateCalls(data)
       default: return data
     }
   }

@@ -41,6 +41,11 @@ import {
   registerHyperliquidAnalyticsTool,
   registerHyperliquidOhlcTool,
 } from './hyperliquid/index.js'
+import {
+  registerSubstrateAnalyticsTool,
+  registerSubstrateQueryCallsTool,
+  registerSubstrateQueryEventsTool,
+} from './substrate/index.js'
 
 export function registerAllTools(server: McpServer) {
   // Public discovery (3)
@@ -69,6 +74,11 @@ export function registerAllTools(server: McpServer) {
   // Public Bitcoin (2)
   registerQueryBitcoinTransactionsTool(server)
   registerBitcoinAnalyticsTool(server)
+
+  // Public Substrate (3)
+  registerSubstrateQueryEventsTool(server)
+  registerSubstrateQueryCallsTool(server)
+  registerSubstrateAnalyticsTool(server)
 
   // Public Hyperliquid (3)
   registerQueryHyperliquidFillsTool(server)

@@ -32,7 +32,7 @@ export function registerBlockAtTimestampTool(server: McpServer) {
           toolName: 'portal_debug_resolve_time_to_block',
           dataset,
           actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin'],
+          supportedChains: ['evm', 'solana', 'bitcoin', 'substrate'],
           suggestions: [
             'Use portal_get_head for the current head block.',
             'Use portal_hyperliquid_query_fills with a recent block window for Hyperliquid activity.',

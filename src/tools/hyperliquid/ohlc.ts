@@ -2,13 +2,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
-import { buildCandlestickChart, buildOhlcTable } from '../../helpers/chart-metadata.js'
+import { buildCandlestickChart, buildOhlcTable, type ChartTooltipDescriptor } from '../../helpers/chart-metadata.js'
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp } from '../../helpers/formatting.js'
 import { buildBucketCoverage, buildBucketGapDiagnostics, buildChronologicalPageOrdering, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { buildPaginationInfo, decodeCursor, encodeCursor } from '../../helpers/pagination.js'
 import { estimateBlockTime, parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { buildChartPanel, buildMetricCard, buildPortalUi, buildTablePanel } from '../../helpers/ui-metadata.js'
 import { visitHyperliquidFillBlocks } from './fill-stream.js'
 
 type OhlcDuration = '1h' | '6h' | '12h' | '24h' | '7d' | '30d'
@@ -432,6 +433,62 @@ export function registerHyperliquidOhlcTool(server: McpServer) {
         resolvedWindow,
       })
 
+      const chartTooltip: ChartTooltipDescriptor = {
+        mode: 'axis',
+        title_field: 'timestamp_human',
+        title_label: 'Time',
+        title_format: 'timestamp_human',
+        fields: [
+          { key: 'open', label: 'Open', format: 'decimal', emphasis: 'primary' },
+          { key: 'high', label: 'High', format: 'decimal' },
+          { key: 'low', label: 'Low', format: 'decimal' },
+          { key: 'close', label: 'Close', format: 'decimal', emphasis: 'primary' },
+          { key: 'volume', label: 'Volume', format: 'currency_usd', unit: 'USD' },
+          { key: 'base_volume', label: `${coin} size`, format: 'decimal', unit: coin },
+          { key: 'fill_count', label: 'Fills', format: 'integer' },
+          { key: 'vwap', label: 'VWAP', format: 'decimal' },
+        ],
+      }
+
+      const ui = buildPortalUi({
+        version: 'portal_ui_v1',
+        layout: 'chart_focus',
+        density: 'compact',
+        design_intent: 'market_terminal',
+        headline: {
+          title: `${coin} Hyperliquid candles`,
+          subtitle: `${resolvedInterval} candles over ${duration}${user ? ` for ${user.toLowerCase()}` : ''}`,
+        },
+        metric_cards: [
+          buildMetricCard({ id: 'last_close', label: 'Last close', value_path: 'summary.series_close', format: 'decimal', emphasis: 'primary' }),
+          buildMetricCard({ id: 'volume', label: 'Volume', value_path: 'summary.total_volume', format: 'currency_usd', unit: 'USD' }),
+          buildMetricCard({ id: 'fills', label: 'Fills', value_path: 'summary.total_fills', format: 'integer' }),
+          buildMetricCard({ id: 'filled_buckets', label: 'Filled buckets', value_path: 'summary.filled_buckets', format: 'integer' }),
+        ],
+        panels: [
+          buildChartPanel({
+            id: 'candles',
+            kind: 'chart_panel',
+            title: `${coin} price action`,
+            subtitle: 'Hover for OHLC, volume, fills, and VWAP. Drag horizontally to zoom.',
+            chart_key: 'chart',
+            emphasis: 'primary',
+          }),
+          buildTablePanel({
+            id: 'ohlc-table',
+            kind: 'table_panel',
+            title: 'Candle table',
+            subtitle: 'Each bucket with OHLC, USD volume, and fill count.',
+            table_id: 'ohlc',
+          }),
+        ],
+        follow_up_actions: [
+          ...(nextCursor ? [{ label: 'Load older candles', intent: 'continue' as const, target: '_pagination.next_cursor' }] : []),
+          { label: 'Show raw candle rows', intent: 'show_raw', target: 'ohlc' },
+          { label: 'Zoom into the latest move', intent: 'zoom_in', target: 'chart' },
+        ],
+      })
+
       return formatResult(
         {
           summary,
@@ -440,14 +497,18 @@ export function registerHyperliquidOhlcTool(server: McpServer) {
             interval: resolvedInterval,
             totalCandles: ohlc.length,
             title: `${coin} Hyperliquid candles`,
+            subtitle: 'Interactive OHLC chart with hover labels, zoom, and candle table',
             volumePanel: true,
             volumeField: 'volume',
             volumeUnit: 'USD',
+            tooltip: chartTooltip,
           }),
           tables: [
             buildOhlcTable({
+              id: 'ohlc',
               rowCount: ohlc.length,
               title: `${coin} candle table`,
+              subtitle: 'Bucket-aligned OHLC candles with USD volume and fill counts available in the rows',
               volumeField: 'volume',
               volumeLabel: 'Volume',
               volumeUnit: 'USD',
@@ -473,6 +534,14 @@ export function registerHyperliquidOhlcTool(server: McpServer) {
             to_block: endBlock,
             range_kind: resolvedWindow.range_kind,
           }),
+          ui,
+          llm: {
+            answer_sequence: ['summary.series_close', 'summary.total_volume', 'summary.total_fills', 'summary.filled_buckets', 'ohlc'],
+            parser_notes: [
+              'Use summary.series_close as the headline price and primary_preview as the latest candle instead of scanning the whole ohlc array.',
+              'Check _coverage and gap_diagnostics before claiming the candle window is fully filled.',
+            ],
+          },
           coverage: buildBucketCoverage({
             expectedBuckets,
             returnedBuckets: ohlc.length,

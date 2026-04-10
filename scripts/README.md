@@ -22,6 +22,13 @@ Ranks naive user prompts against the live `listTools()` catalog to catch naming 
 - adds extra "dumb user" prompts for common confusion cases
 - fails when the expected tool does not rank highly enough
 
+### `npm run test:substrate`
+Runs a focused live QA pass for Substrate readiness. It:
+
+- verifies Substrate discovery, network info, head lookup, timestamp resolution, and block queries through the MCP
+- checks that unsupported Substrate convenience flows fail clearly instead of leaking raw Portal parse errors
+- validates the underlying Portal Substrate backend directly with event and call queries so wrapper gaps are easy to distinguish from backend gaps
+
 ### `npx tsx scripts/deep-test.ts`
 Runs the same manifest with user-style prompts in the output so it is easier to scan as a realistic end-to-end QA pass.
 

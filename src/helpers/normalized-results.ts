@@ -5,7 +5,7 @@ type RecordLike = Record<string, unknown>
 function withCommonAliases(
   item: RecordLike,
   aliases: {
-    chain_kind: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid'
+    chain_kind: 'evm' | 'solana' | 'bitcoin' | 'substrate' | 'hyperliquid'
     record_type: string
     primary_id?: string
     tx_hash?: string
@@ -33,6 +33,20 @@ function withCommonAliases(
         }
       : {}),
   }
+}
+
+function normalizeUnixTimestamp(value: unknown): number | undefined {
+  const raw = typeof value === 'number'
+    ? value
+    : typeof value === 'string'
+      ? Number(value)
+      : undefined
+
+  if (raw === undefined || !Number.isFinite(raw) || raw <= 0) {
+    return undefined
+  }
+
+  return raw > 1e12 ? Math.floor(raw / 1000) : raw
 }
 
 export function normalizeEvmTransactionResult(item: RecordLike): RecordLike {
@@ -271,6 +285,67 @@ export function normalizeBitcoinOutputResult(item: RecordLike): RecordLike {
   })
 }
 
+export function normalizeSubstrateEventResult(item: RecordLike): RecordLike {
+  const blockNumber = typeof item.block_number === 'number' ? item.block_number : undefined
+  const eventIndex = typeof item.index === 'number'
+    ? item.index
+    : typeof item.event_index === 'number'
+      ? item.event_index
+      : undefined
+  const eventName = typeof item.name === 'string' ? item.name : undefined
+  const txHash = typeof item.extrinsic_hash === 'string' ? item.extrinsic_hash : undefined
+  const timestamp = normalizeUnixTimestamp(item.timestamp)
+  const primaryId = blockNumber !== undefined
+    ? `${blockNumber}:${eventIndex ?? eventName ?? 'event'}`
+    : txHash
+
+  return withCommonAliases(
+    {
+      ...item,
+      ...(eventName ? { event_name: eventName } : {}),
+    },
+    {
+      chain_kind: 'substrate',
+      record_type: 'event',
+      primary_id: primaryId,
+      tx_hash: txHash,
+      block_number: blockNumber,
+      timestamp,
+    },
+  )
+}
+
+export function normalizeSubstrateCallResult(item: RecordLike): RecordLike {
+  const blockNumber = typeof item.block_number === 'number' ? item.block_number : undefined
+  const callName = typeof item.name === 'string' ? item.name : undefined
+  const callAddress = Array.isArray(item.address)
+    ? item.address.join('.')
+    : typeof item.call_address === 'string'
+      ? item.call_address
+      : undefined
+  const txHash = typeof item.extrinsic_hash === 'string' ? item.extrinsic_hash : undefined
+  const timestamp = normalizeUnixTimestamp(item.timestamp)
+  const primaryId = blockNumber !== undefined
+    ? `${blockNumber}:${callAddress ?? callName ?? 'call'}`
+    : txHash
+
+  return withCommonAliases(
+    {
+      ...item,
+      ...(callName ? { call_name: callName } : {}),
+      ...(callAddress ? { call_address: callAddress } : {}),
+    },
+    {
+      chain_kind: 'substrate',
+      record_type: 'call',
+      primary_id: primaryId,
+      tx_hash: txHash,
+      block_number: blockNumber,
+      timestamp,
+    },
+  )
+}
+
 export function normalizeHyperliquidFillResult(item: RecordLike): RecordLike {
   const txHash = typeof item.hash === 'string' ? item.hash : undefined
   const fillIndex = typeof item.fillIndex === 'number'
@@ -281,16 +356,7 @@ export function normalizeHyperliquidFillResult(item: RecordLike): RecordLike {
   const sender = typeof item.user === 'string' ? item.user : undefined
   const blockNumber = typeof item.block_number === 'number' ? item.block_number : undefined
   const timestampValue = item.time ?? item.block_timestamp ?? item.timestamp
-  const rawTimestamp = typeof timestampValue === 'number'
-    ? timestampValue
-    : typeof timestampValue === 'string'
-      ? Number(timestampValue)
-      : undefined
-  const timestamp = rawTimestamp !== undefined
-    ? rawTimestamp > 1e12
-      ? Math.floor(rawTimestamp / 1000)
-      : rawTimestamp
-    : undefined
+  const timestamp = normalizeUnixTimestamp(timestampValue)
 
   return withCommonAliases(item, {
     chain_kind: 'hyperliquid',
@@ -312,16 +378,7 @@ export function normalizeHyperliquidReplicaCmdResult(item: RecordLike): RecordLi
       : undefined
   const sender = typeof item.user === 'string' ? item.user : undefined
   const timestampValue = item.timestamp ?? item.block_timestamp ?? item.time
-  const rawTimestamp = typeof timestampValue === 'number'
-    ? timestampValue
-    : typeof timestampValue === 'string'
-      ? Number(timestampValue)
-      : undefined
-  const timestamp = rawTimestamp !== undefined
-    ? rawTimestamp > 1e12
-      ? Math.floor(rawTimestamp / 1000)
-      : rawTimestamp
-    : undefined
+  const timestamp = normalizeUnixTimestamp(timestampValue)
   const primaryId = blockNumber !== undefined && actionIndex !== undefined
     ? `${blockNumber}:${actionIndex}`
     : blockNumber !== undefined

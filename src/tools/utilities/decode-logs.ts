@@ -99,6 +99,20 @@ const KNOWN_EVENTS: Record<string, { name: string; inputs: EventInput[] }> = {
       { name: 'tick', indexed: false },
     ],
   },
+  // Uniswap V4 - Swap(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1, uint160 sqrtPriceX96, uint128 liquidity, int24 tick, uint24 fee)
+  '0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f': {
+    name: 'Swap',
+    inputs: [
+      { name: 'id', indexed: true },
+      { name: 'sender', indexed: true },
+      { name: 'amount0', indexed: false },
+      { name: 'amount1', indexed: false },
+      { name: 'sqrtPriceX96', indexed: false },
+      { name: 'liquidity', indexed: false },
+      { name: 'tick', indexed: false },
+      { name: 'fee', indexed: false },
+    ],
+  },
   // WETH - Deposit(address indexed dst, uint wad)
   '0xe1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c': {
     name: 'Deposit',

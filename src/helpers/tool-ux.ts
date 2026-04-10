@@ -5,10 +5,11 @@ type ToolCategory =
   | 'evm'
   | 'solana'
   | 'bitcoin'
+  | 'substrate'
   | 'hyperliquid'
   | 'debug'
 type ToolIntent = 'discover' | 'lookup' | 'query' | 'summary' | 'analytics' | 'chart' | 'debug'
-type ToolVm = 'cross-chain' | 'evm' | 'solana' | 'bitcoin' | 'hyperliquid'
+type ToolVm = 'cross-chain' | 'evm' | 'solana' | 'bitcoin' | 'substrate' | 'hyperliquid'
 type ToolResultKind = 'list' | 'summary' | 'chart' | 'lookup'
 type TimeInput = 'blocks' | 'timeframe' | 'timestamps'
 
@@ -73,7 +74,7 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     result_kind: 'list',
     normalized_output: false,
     first_choice_for: ['finding the correct network before any other query'],
-    summary: 'Find the right network or chain name to use across EVM, Solana, Bitcoin, and Hyperliquid.',
+    summary: 'Find the right network or chain name to use across EVM, Solana, Bitcoin, Substrate, and Hyperliquid.',
     when_to_use: [
       'You are not sure which network name, chain name, or alias to use.',
       'You want to filter networks by VM family, network type, or real-time availability.',
@@ -82,6 +83,7 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     examples: [
       { label: 'Find Base-like networks', input: { query: 'base', limit: 10 } },
       { label: 'Show Solana mainnets', input: { vm: 'solana', network_type: 'mainnet' } },
+      { label: 'Show Substrate mainnets', input: { vm: 'substrate', network_type: 'mainnet' } },
     ],
     supports: {
       time_inputs: [],
@@ -205,6 +207,90 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       group_by: ['none', 'contract'],
     },
   },
+  portal_substrate_query_events: {
+    name: 'portal_substrate_query_events',
+    audience: 'public',
+    category: 'substrate',
+    intent: 'query',
+    vm: ['substrate'],
+    result_kind: 'list',
+    normalized_output: true,
+    first_choice_for: ['raw Substrate or Polkadot event rows with optional parent call or extrinsic context'],
+    summary: 'Query raw Substrate or Polkadot event rows with pallet/event-name filters and optional parent call or extrinsic context.',
+    when_to_use: [
+      'You need raw event records on a Substrate network.',
+      'You want pallet-level event activity like Balances.Transfer or Contracts.ContractEmitted.',
+      'You want event rows first, even if the network is a Polkadot-family chain.',
+    ],
+    avoid_when: ['You want calls or aggregate analytics rather than event rows.'],
+    examples: [
+      { label: 'Balances.Transfer events on Polkadot', input: { network: 'polkadot', timeframe: '1h', event_names: ['Balances.Transfer'], limit: 20 } },
+    ],
+    supports: {
+      pagination: true,
+      response_formats: ['full', 'compact', 'summary'],
+      time_inputs: ['blocks', 'timeframe', 'timestamps'],
+    },
+  },
+  portal_substrate_query_calls: {
+    name: 'portal_substrate_query_calls',
+    audience: 'public',
+    category: 'substrate',
+    intent: 'query',
+    vm: ['substrate'],
+    result_kind: 'list',
+    normalized_output: true,
+    first_choice_for: ['raw Substrate or Polkadot call rows, especially when you want the events emitted by those calls'],
+    summary: 'Query raw Substrate or Polkadot calls with pallet/call-name filters and optional child-call, emitted-event, or extrinsic context.',
+    when_to_use: [
+      'You need raw call records on a Substrate network.',
+      'You want pallet call activity like Balances.transfer_keep_alive or Ethereum.transact.',
+      'You want calls plus the events emitted by those calls.',
+    ],
+    avoid_when: ['You want events or aggregate analytics rather than call rows.'],
+    examples: [
+      { label: 'Recent Balances calls', input: { network: 'polkadot', timeframe: '1h', call_names: ['Balances.transfer_keep_alive'], limit: 20 } },
+      { label: 'Polkadot calls with emitted events', input: { network: 'polkadot', timeframe: '1h', call_names: ['ParaInherent.enter'], include_events: true, limit: 20 } },
+    ],
+    supports: {
+      pagination: true,
+      response_formats: ['full', 'compact', 'summary'],
+      time_inputs: ['blocks', 'timeframe', 'timestamps'],
+    },
+  },
+  portal_substrate_get_analytics: {
+    name: 'portal_substrate_get_analytics',
+    audience: 'public',
+    category: 'substrate',
+    intent: 'analytics',
+    vm: ['substrate'],
+    result_kind: 'summary',
+    normalized_output: false,
+    first_choice_for: [
+      'Polkadot activity analytics in an indexed window',
+      'how Polkadot is doing in an indexed window',
+      'analytics snapshot for Polkadot or another Substrate network in an indexed window',
+    ],
+    summary: 'Analytics snapshot for Substrate or Polkadot activity in an indexed window, with event, call, and extrinsic counts plus top event and call names.',
+    when_to_use: [
+      'You want Polkadot activity analytics in a selected indexed window.',
+      'You want to ask "how is Polkadot doing in this indexed window?" and get an analytics answer rather than just network freshness metadata.',
+      'You want a quick Substrate network snapshot or health check.',
+      'You want top pallet events and calls rather than raw rows.',
+      'You want to know how a Substrate network is doing in the selected indexed window.',
+    ],
+    avoid_when: ['You need full raw event or call records.'],
+    examples: [
+      { label: 'Polkadot activity snapshot', input: { network: 'polkadot', timeframe: '1h' } },
+      { label: 'Big picture for Polkadot activity', input: { network: 'polkadot', timeframe: '1h' } },
+      { label: 'How is Polkadot doing?', input: { network: 'polkadot', timeframe: '6h' } },
+    ],
+    supports: {
+      modes: ['fast', 'deep'],
+      response_formats: ['full', 'compact', 'summary'],
+      time_inputs: ['blocks', 'timeframe', 'timestamps'],
+    },
+  },
   portal_evm_query_transactions: {
     name: 'portal_evm_query_transactions',
     audience: 'public',
@@ -285,8 +371,10 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['evm'],
     result_kind: 'summary',
     normalized_output: false,
-    summary: 'Summarize one contract’s recent interactions, unique callers, and optional event activity.',
+    first_choice_for: ['what one specific contract has been doing lately on an EVM network'],
+    summary: 'Summarize what one specific contract has been doing lately, including recent interactions, unique callers, and optional event activity.',
     when_to_use: [
+      'You want to ask "what has this contract been doing?" and get a contract-level answer.',
       'You want a contract-centric activity summary instead of raw records.',
       'You need top callers and interaction volume for one contract.',
     ],
@@ -307,8 +395,10 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['evm'],
     result_kind: 'summary',
     normalized_output: false,
-    summary: 'Analyze network-wide EVM activity with ranked contracts and compact overview metrics.',
+    first_choice_for: ['the big picture for activity on an EVM network like Base or Optimism'],
+    summary: 'Get the big picture for network-wide EVM activity with ranked contracts and compact overview metrics.',
     when_to_use: [
+      'You want the big picture for activity on an EVM network.',
       'You want the most active contracts on an EVM network.',
       'You want an analytics-style network overview instead of a raw record list.',
     ],
@@ -329,14 +419,18 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['evm'],
     result_kind: 'chart',
     normalized_output: false,
-    summary: 'Build chart-ready EVM OHLC candles from supported swap or pool event sources.',
+    summary: 'Build chart-ready EVM OHLC candles from supported event-derived DEX sources, including real Uniswap v4 PoolManager swaps filtered by pool_id.',
     when_to_use: [
       'You need OHLC candles for supported EVM event-derived price sources.',
       'You want a candle chart instead of scalar time-series buckets.',
     ],
-    avoid_when: ['You only need counts or scalar metrics over time.'],
+    avoid_when: [
+      'You only need counts or scalar metrics over time.',
+    ],
     examples: [
       { label: 'Base Uniswap candles', input: { network: 'base-mainnet', source: 'uniswap_v3_swap', duration: '1h', interval: '5m' } },
+      { label: 'Base Uniswap v4 candles', input: { network: 'base-mainnet', source: 'uniswap_v4_swap', pool_id: '0x<pool-id>', duration: '1h', interval: '5m' } },
+      { label: 'Base Aerodrome Slipstream candles', input: { network: 'base-mainnet', source: 'aerodrome_slipstream_swap', duration: '1h', interval: '5m' } },
     ],
     supports: {
       pagination: true,
@@ -398,8 +492,10 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['solana'],
     result_kind: 'summary',
     normalized_output: false,
-    summary: 'Analyze Solana throughput, fees, wallet activity, and optional top-program usage.',
+    first_choice_for: ['the big picture for Solana right now'],
+    summary: 'Get the big picture for Solana throughput, fees, wallet activity, and optional top-program usage.',
     when_to_use: [
+      'You want the big picture for Solana right now.',
       'You want a quick health snapshot for Solana.',
       'You want throughput, fee, success-rate, or top-program analytics rather than raw records.',
     ],
@@ -446,8 +542,10 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['bitcoin'],
     result_kind: 'summary',
     normalized_output: false,
-    summary: 'Analyze Bitcoin block, fee, and address activity over a recent or explicit window.',
+    first_choice_for: ['the big picture for Bitcoin right now'],
+    summary: 'Get the big picture for Bitcoin block, fee, and address activity over a recent or explicit window.',
     when_to_use: [
+      'You want the big picture for Bitcoin right now.',
       'You want a network-level Bitcoin snapshot.',
       'You care about block cadence, fees, SegWit/Taproot adoption, or activity metrics.',
     ],
@@ -557,7 +655,7 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     audience: 'advanced',
     category: 'debug',
     intent: 'debug',
-    vm: ['evm', 'solana', 'bitcoin'],
+    vm: ['evm', 'solana', 'bitcoin', 'substrate'],
     result_kind: 'lookup',
     normalized_output: false,
     summary: 'ADVANCED: Resolve a timestamp to the nearest indexed block or slot.',
@@ -566,7 +664,10 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       'You want to inspect exact versus estimated timestamp-to-block resolution.',
     ],
     avoid_when: ['You just want to query by time; most public tools already accept natural timestamps directly.'],
-    examples: [{ label: 'Resolve one hour ago on Base', input: { network: 'base-mainnet', timestamp: '1h ago' } }],
+    examples: [
+      { label: 'Resolve one hour ago on Base', input: { network: 'base-mainnet', timestamp: '1h ago' } },
+      { label: 'Resolve an older time on Polkadot', input: { network: 'polkadot', timestamp: '2026-04-08T12:00:00Z' } },
+    ],
     supports: {
       time_inputs: ['timestamps'],
     },

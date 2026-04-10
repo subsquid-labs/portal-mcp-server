@@ -1,6 +1,7 @@
 // Re-exports from cache/datasets.ts
 export { getChainType, isL2Chain } from '../cache/datasets.js'
 
+import { peekKnownChainType } from '../cache/datasets.js'
 import type { ChainType } from '../types/index.js'
 
 /**
@@ -8,6 +9,11 @@ import type { ChainType } from '../types/index.js'
  * Prefer getChainType() for metadata-driven detection.
  */
 export function detectChainType(dataset: string): ChainType {
+  const cachedKind = peekKnownChainType(dataset)
+  if (cachedKind) {
+    return cachedKind
+  }
+
   const lower = dataset.toLowerCase()
   if (lower.includes('solana') || lower.includes('eclipse')) {
     return 'solana'
@@ -20,6 +26,32 @@ export function detectChainType(dataset: string): ChainType {
   }
   if (lower.includes('bitcoin')) {
     return 'bitcoin'
+  }
+  if (
+    lower.includes('substrate') ||
+    [
+      'acala',
+      'aleph-zero',
+      'asset-hub-kusama',
+      'asset-hub-polkadot',
+      'astar-substrate',
+      'avail',
+      'basilisk',
+      'hydradx',
+      'karura',
+      'kusama',
+      'moonbeam-substrate',
+      'moonriver-substrate',
+      'people-chain',
+      'polkadot',
+      'rococo',
+      'shibuya-substrate',
+      'shiden-substrate',
+      'vara',
+      'westend',
+    ].includes(lower)
+  ) {
+    return 'substrate'
   }
   return 'evm'
 }

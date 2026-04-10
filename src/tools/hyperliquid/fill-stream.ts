@@ -1,5 +1,5 @@
 import { PORTAL_URL } from '../../constants/index.js'
-import { portalFetchStreamVisit } from '../../helpers/fetch.js'
+import { portalFetchStreamRange, portalFetchStreamVisit } from '../../helpers/fetch.js'
 
 export type HyperliquidFillBlock = {
   header?: {
@@ -20,6 +20,106 @@ interface VisitHyperliquidFillBlocksOptions {
   minChunkSize?: number
   maxBytes?: number
   concurrency?: number
+}
+
+interface FetchRecentHyperliquidFillBlocksOptions {
+  dataset: string
+  fromBlock: number
+  toBlock: number
+  fillFilter: Record<string, unknown>
+  fillFields: Record<string, boolean>
+  limit: number
+  initialChunkSize?: number
+  maxChunkSize?: number
+  maxBytes?: number
+}
+
+function countFills(blocks: HyperliquidFillBlock[]): number {
+  return blocks.reduce((sum, block) => sum + (block.fills?.length || 0), 0)
+}
+
+export async function fetchRecentHyperliquidFillBlocks({
+  dataset,
+  fromBlock,
+  toBlock,
+  fillFilter,
+  fillFields,
+  limit,
+  initialChunkSize = 100,
+  maxChunkSize = 5000,
+  maxBytes = 150 * 1024 * 1024,
+}: FetchRecentHyperliquidFillBlocksOptions): Promise<{
+  blocks: HyperliquidFillBlock[]
+  chunksFetched: number
+  returnedBlocks: number
+  returnedFills: number
+  chunkSizeExpanded: boolean
+}> {
+  const blocks: HyperliquidFillBlock[] = []
+  let chunksFetched = 0
+  let returnedBlocks = 0
+  let returnedFills = 0
+  let chunkSizeExpanded = false
+  let currentTo = toBlock
+  let chunkSize = Math.max(1, Math.min(initialChunkSize, Math.max(1, toBlock - fromBlock + 1)))
+
+  while (currentTo >= fromBlock && returnedFills < limit) {
+    const chunkFrom = Math.max(fromBlock, currentTo - chunkSize + 1)
+    const chunk = (await portalFetchStreamRange(
+      `${PORTAL_URL}/datasets/${dataset}/stream`,
+      {
+        type: 'hyperliquidFills',
+        fromBlock: chunkFrom,
+        toBlock: currentTo,
+        fields: {
+          block: { number: true, timestamp: true },
+          fill: fillFields,
+        },
+        fills: [fillFilter],
+      },
+      {
+        maxBytes,
+      },
+    )) as HyperliquidFillBlock[]
+    chunksFetched += 1
+
+    if (chunk.length > 0) {
+      blocks.unshift(...chunk)
+      returnedBlocks += chunk.length
+      const chunkFillCount = countFills(chunk)
+      returnedFills += chunkFillCount
+
+      if (returnedFills >= limit || chunkFrom === fromBlock) {
+        break
+      }
+
+      const remainingNeeded = limit - returnedFills
+      const shouldExpand = chunkFillCount === 0 || chunkFillCount < Math.max(remainingNeeded, Math.ceil(limit / 2))
+      if (shouldExpand) {
+        const nextChunkSize = Math.min(maxChunkSize, chunkSize * 2)
+        chunkSizeExpanded = chunkSizeExpanded || nextChunkSize > chunkSize
+        chunkSize = nextChunkSize
+      }
+    } else if (chunkFrom !== fromBlock) {
+      const nextChunkSize = Math.min(maxChunkSize, chunkSize * 2)
+      chunkSizeExpanded = chunkSizeExpanded || nextChunkSize > chunkSize
+      chunkSize = nextChunkSize
+    }
+
+    if (chunkFrom === fromBlock) {
+      break
+    }
+
+    currentTo = chunkFrom - 1
+  }
+
+  return {
+    blocks,
+    chunksFetched,
+    returnedBlocks,
+    returnedFills,
+    chunkSizeExpanded,
+  }
 }
 
 export async function visitHyperliquidFillBlocks({

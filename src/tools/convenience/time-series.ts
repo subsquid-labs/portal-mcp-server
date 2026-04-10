@@ -17,6 +17,7 @@ import { formatDuration, formatTimestamp } from '../../helpers/formatting.js'
 import { buildBucketCoverage, buildBucketGapDiagnostics, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { getHeadTimestamp, parseTimeframeToSeconds, parseTimestampInput, resolveTimeframeOrBlocks, type TimestampInput } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { buildChartPanel, buildMetricCard, buildPortalUi, buildTablePanel } from '../../helpers/ui-metadata.js'
 import { computeSolanaTimeSeries } from '../solana/time-series-shared.js'
 import { computeWindowSeries } from './compare-periods.js'
 import { visitHyperliquidFillBlocks } from '../hyperliquid/fill-stream.js'
@@ -200,6 +201,199 @@ function getMetricUnit(metric: TimeSeriesMetric): string | undefined {
   }
 }
 
+function buildSimpleSeriesUi(params: {
+  title: string
+  subtitle: string
+  metricLabel: string
+  valueFormat: TableValueFormat
+  unit?: string
+  avgValuePath?: string
+  primaryValuePath?: string
+  primaryLabel?: string
+  tableId?: string
+  followUpActions?: Array<{ label: string; intent: 'show_raw' | 'zoom_in' | 'compare_previous'; target?: string }>
+}): ReturnType<typeof buildPortalUi> {
+  const metricCards = [
+    buildMetricCard({
+      id: 'filled-buckets',
+      label: 'Filled buckets',
+      value_path: 'summary.filled_buckets',
+      format: 'integer',
+    }),
+    ...(params.primaryValuePath
+      ? [buildMetricCard({
+          id: 'primary-value',
+          label: params.primaryLabel ?? params.metricLabel,
+          value_path: params.primaryValuePath,
+          format: params.valueFormat,
+          ...(params.unit ? { unit: params.unit } : {}),
+          emphasis: 'primary',
+        })]
+      : []),
+    ...(params.avgValuePath
+      ? [buildMetricCard({
+          id: 'average-value',
+          label: `Average ${params.metricLabel.toLowerCase()}`,
+          value_path: params.avgValuePath,
+          format: params.valueFormat,
+          ...(params.unit ? { unit: params.unit } : {}),
+        })]
+      : []),
+  ]
+
+  return buildPortalUi({
+    version: 'portal_ui_v1',
+    layout: 'chart_focus',
+    density: 'compact',
+    design_intent: 'analytics_dashboard',
+    headline: {
+      title: params.title,
+      subtitle: params.subtitle,
+    },
+    metric_cards: metricCards,
+    panels: [
+      buildChartPanel({
+        id: 'series-chart',
+        kind: 'chart_panel',
+        title: params.metricLabel,
+        subtitle: 'Hover to inspect bucket values and drag horizontally to zoom into a narrower range.',
+        chart_key: 'chart',
+        emphasis: 'primary',
+      }),
+      buildTablePanel({
+        id: 'series-table',
+        kind: 'table_panel',
+        title: 'Buckets',
+        subtitle: 'Exact bucket-level values in ascending time order.',
+        table_id: params.tableId ?? 'main',
+      }),
+    ],
+    follow_up_actions: params.followUpActions,
+  })
+}
+
+function buildComparePreviousUi(metric: TimeSeriesMetric): ReturnType<typeof buildPortalUi> {
+  const metricLabel = getMetricLabel(metric)
+  const valueFormat = getMetricValueFormat(metric)
+  const unit = getMetricUnit(metric)
+
+  return buildPortalUi({
+    version: 'portal_ui_v1',
+    layout: 'dashboard',
+    density: 'compact',
+    design_intent: 'analytics_dashboard',
+    headline: {
+      title: `${metricLabel}: current vs previous`,
+      subtitle: 'Compare aligned buckets, inspect deltas, and switch between the line chart and the summary tables.',
+    },
+    metric_cards: [
+      buildMetricCard({
+        id: 'current-total',
+        label: 'Current total',
+        value_path: 'summary_rows[0].current_value',
+        format: valueFormat,
+        ...(unit ? { unit } : {}),
+        emphasis: 'primary',
+      }),
+      buildMetricCard({
+        id: 'previous-total',
+        label: 'Previous total',
+        value_path: 'summary_rows[0].previous_value',
+        format: valueFormat,
+        ...(unit ? { unit } : {}),
+      }),
+      buildMetricCard({
+        id: 'pct-change',
+        label: 'Pct change',
+        value_path: 'summary_rows[0].pct_change',
+        format: 'percent',
+        unit: '%',
+      }),
+    ],
+    panels: [
+      buildChartPanel({
+        id: 'comparison-chart',
+        kind: 'chart_panel',
+        title: 'Comparison chart',
+        subtitle: 'Hover over either series to see the aligned bucket values.',
+        chart_key: 'chart',
+        emphasis: 'primary',
+      }),
+      buildTablePanel({
+        id: 'comparison-summary',
+        kind: 'table_panel',
+        title: 'Summary',
+        subtitle: 'Totals and averages for the current and previous windows.',
+        table_id: 'summary_rows',
+      }),
+      buildTablePanel({
+        id: 'comparison-buckets',
+        kind: 'table_panel',
+        title: 'Aligned buckets',
+        subtitle: 'Each current bucket paired with its previous-period counterpart.',
+        table_id: 'comparison_series',
+      }),
+      buildTablePanel({
+        id: 'bucket-deltas',
+        kind: 'table_panel',
+        title: 'Bucket deltas',
+        subtitle: 'Absolute and percentage deltas for each aligned bucket.',
+        table_id: 'bucket_deltas',
+      }),
+    ],
+    follow_up_actions: [
+      { label: 'Show raw comparison rows', intent: 'show_raw', target: 'comparison_series' },
+      { label: 'Zoom into the latest divergence', intent: 'zoom_in', target: 'chart' },
+    ],
+  })
+}
+
+function buildGroupedContractUi(): ReturnType<typeof buildPortalUi> {
+  return buildPortalUi({
+    version: 'portal_ui_v1',
+    layout: 'dashboard',
+    density: 'compact',
+    design_intent: 'analytics_dashboard',
+    headline: {
+      title: 'Transactions by contract',
+      subtitle: 'Track the busiest contracts, compare their bucketed activity, and drill into the ranked contract table.',
+    },
+    metric_cards: [
+      buildMetricCard({ id: 'tracked-contracts', label: 'Tracked contracts', value_path: 'summary.tracked_contracts', format: 'integer', emphasis: 'primary' }),
+      buildMetricCard({ id: 'total-transactions', label: 'Transactions', value_path: 'summary.total_transactions', format: 'integer' }),
+      buildMetricCard({ id: 'group-limit', label: 'Group limit', value_path: 'summary.group_limit', format: 'integer', subtitle: 'The grouped chart tracks only the top-ranked contracts.' }),
+    ],
+    panels: [
+      buildChartPanel({
+        id: 'contract-chart',
+        kind: 'chart_panel',
+        title: 'Contract activity chart',
+        subtitle: 'Stacked contract trends with hover labels and series toggles.',
+        chart_key: 'chart',
+        emphasis: 'primary',
+      }),
+      buildTablePanel({
+        id: 'top-contracts',
+        kind: 'table_panel',
+        title: 'Tracked contracts',
+        subtitle: 'The ranked contract set driving the grouped chart.',
+        table_id: 'top_contracts',
+      }),
+      buildTablePanel({
+        id: 'contract-series',
+        kind: 'table_panel',
+        title: 'Bucketed contract activity',
+        subtitle: 'All contract buckets with timestamps and ranks.',
+        table_id: 'contract_series',
+      }),
+    ],
+    follow_up_actions: [
+      { label: 'Show raw grouped rows', intent: 'show_raw', target: 'time_series' },
+      { label: 'Zoom into the latest buckets', intent: 'zoom_in', target: 'chart' },
+    ],
+  })
+}
+
 export function registerGetTimeSeriesDataTool(server: McpServer) {
   server.tool(
     'portal_get_time_series',
@@ -257,6 +451,19 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
 
       if (compare_previous && group_by === 'contract') {
         throw new Error('compare_previous and group_by="contract" cannot be used together in v0.7.7.')
+      }
+
+      if (chainType === 'substrate') {
+        throw createUnsupportedChainError({
+          toolName: 'portal_get_time_series',
+          dataset,
+          actualChainType: chainType,
+          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
+          suggestions: [
+            'Use portal_debug_query_blocks for block-by-block Substrate inspection right now.',
+            'Add a Substrate time-series implementation with event, call, or extrinsic metrics before using this chart tool on Substrate networks.',
+          ],
+        })
       }
 
       // Gas-related metrics are EVM-only
@@ -397,6 +604,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             xField: 'bucket_index',
             recommendedVisual: 'line',
             title: `${getMetricLabel(metric)}: current vs previous`,
+            subtitle: 'Aligned bucket comparison for the selected window and the immediately previous one',
             xAxisLabel: 'Bucket',
             yAxisLabel: getMetricLabel(metric),
             valueFormat: getMetricValueFormat(metric),
@@ -466,6 +674,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             compare_previous: true,
             range_kind: 'timeframe',
           }),
+          ui: buildComparePreviousUi(metric),
           metadata: {
             network: dataset,
             dataset,
@@ -622,6 +831,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             recommendedVisual: 'stacked_area',
             dataKey: 'time_series',
             title: `${getMetricLabel(metric)} by contract`,
+            subtitle: 'Top-ranked contracts split into bucketed activity over the requested window',
             yAxisLabel: getMetricLabel(metric),
             valueFormat: getMetricValueFormat(metric),
             unit: getMetricUnit(metric),
@@ -687,6 +897,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             from_block: fromBlock,
             to_block: toBlock,
           }),
+          ui: buildGroupedContractUi(),
           metadata: {
             network: dataset,
             dataset,
@@ -782,6 +993,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               interval,
               totalPoints: solanaResult.time_series.length,
               title: `Solana ${getMetricLabel(metric)}`,
+              subtitle: `Bucketed ${getMetricLabel(metric).toLowerCase()} across the selected Solana window`,
               yAxisLabel: getMetricLabel(metric),
               valueFormat: getMetricValueFormat(metric),
               unit: solanaResult.unit,
@@ -829,6 +1041,19 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               from_block: solanaResult.from_block,
               to_block: solanaResult.to_block,
               range_kind: 'timeframe',
+            }),
+            ui: buildSimpleSeriesUi({
+              title: `Solana ${getMetricLabel(metric)}`,
+              subtitle: `${interval} buckets over ${duration}`,
+              metricLabel: getMetricLabel(metric),
+              valueFormat: getMetricValueFormat(metric),
+              unit: solanaResult.unit,
+              avgValuePath: 'summary.statistics.avg',
+              followUpActions: [
+                { label: 'Show raw bucket rows', intent: 'show_raw', target: 'time_series' },
+                { label: 'Zoom into the latest buckets', intent: 'zoom_in', target: 'chart' },
+                { label: 'Compare against the previous window', intent: 'compare_previous' },
+              ],
             }),
             metadata: {
               network: dataset,
@@ -933,6 +1158,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             interval,
             totalPoints: timeSeries.length,
             title: `Hyperliquid ${getMetricLabel(metric)}`,
+            subtitle: `Bucketed ${getMetricLabel(metric).toLowerCase()} across the selected Hyperliquid window`,
             yAxisLabel: getMetricLabel(metric),
             valueFormat: getMetricValueFormat(metric),
             unit: getMetricUnit(metric),
@@ -980,6 +1206,20 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             from_block: fromBlock,
             to_block: toBlock,
             range_kind: resolvedWindow.range_kind,
+          }),
+          ui: buildSimpleSeriesUi({
+            title: `Hyperliquid ${getMetricLabel(metric)}`,
+            subtitle: `${interval} buckets over ${duration}`,
+            metricLabel: getMetricLabel(metric),
+            valueFormat: getMetricValueFormat(metric),
+            unit: getMetricUnit(metric),
+            primaryValuePath: 'summary.total_buckets',
+            primaryLabel: 'Buckets',
+            followUpActions: [
+              { label: 'Show raw bucket rows', intent: 'show_raw', target: 'time_series' },
+              { label: 'Zoom into the latest buckets', intent: 'zoom_in', target: 'chart' },
+              { label: 'Compare against the previous window', intent: 'compare_previous' },
+            ],
           }),
           metadata: {
             network: dataset,
@@ -1494,6 +1734,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             interval,
             totalPoints: timeSeries.length,
             title: getMetricLabel(metric),
+            subtitle: `Bucketed ${getMetricLabel(metric).toLowerCase()} across the selected window`,
             yAxisLabel: getMetricLabel(metric),
             valueFormat: getMetricValueFormat(metric),
             unit: getMetricUnit(metric),
@@ -1537,6 +1778,19 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             from_block: effectiveFromBlock,
             to_block: toBlock,
             range_kind: resolvedWindow.range_kind,
+          }),
+          ui: buildSimpleSeriesUi({
+            title: getMetricLabel(metric),
+            subtitle: `${interval} buckets over ${duration}`,
+            metricLabel: getMetricLabel(metric),
+            valueFormat: getMetricValueFormat(metric),
+            unit: getMetricUnit(metric),
+            avgValuePath: 'summary.statistics.avg',
+            followUpActions: [
+              { label: 'Show raw bucket rows', intent: 'show_raw', target: 'time_series' },
+              { label: 'Zoom into the latest buckets', intent: 'zoom_in', target: 'chart' },
+              { label: 'Compare against the previous window', intent: 'compare_previous' },
+            ],
           }),
           metadata: {
             network: dataset,

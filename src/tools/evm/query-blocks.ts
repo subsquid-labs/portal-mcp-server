@@ -159,7 +159,14 @@ export function registerQueryBlocksTool(server: McpServer) {
                 timestamp: true,
               }
 
-      const queryType = chainType === 'bitcoin' ? 'bitcoin' : chainType === 'solana' ? 'solana' : 'evm'
+      const queryType =
+        chainType === 'bitcoin'
+          ? 'bitcoin'
+          : chainType === 'solana'
+            ? 'solana'
+            : chainType === 'substrate'
+              ? 'substrate'
+              : 'evm'
 
       const query = {
         type: queryType,
