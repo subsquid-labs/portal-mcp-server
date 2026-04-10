@@ -34,6 +34,8 @@ const EXTRA_ROUTING_CASES: RoutingEvalCase[] = [
   { prompt: 'is this base contract busy lately', expected: 'portal_evm_get_contract_activity', max_rank: 1, source: 'extra' },
   { prompt: 'what are the hottest contracts on base right now', expected: 'portal_evm_get_analytics', max_rank: 1, source: 'extra' },
   { prompt: 'make me 5 minute candles for this pool on base', expected: 'portal_evm_get_ohlc', max_rank: 1, source: 'extra' },
+  { prompt: 'give me a quick preview chart for this base pool with trades', expected: 'portal_evm_get_ohlc', max_rank: 1, source: 'extra' },
+  { prompt: 'make me a dexscreener style chart for this base pool and include recent trades', expected: 'portal_evm_get_ohlc', max_rank: 1, source: 'extra' },
   { prompt: 'show me raw solana transactions for the last few slots', expected: 'portal_solana_query_transactions', max_rank: 1, source: 'extra' },
   { prompt: 'show me token program instructions on solana', expected: 'portal_solana_query_instructions', max_rank: 1, source: 'extra' },
   { prompt: 'how healthy is solana right now', expected: 'portal_solana_get_analytics', max_rank: 1, source: 'extra' },

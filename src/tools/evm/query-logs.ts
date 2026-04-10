@@ -13,7 +13,7 @@ import { buildEvmLogFields, buildEvmTraceFields, buildEvmTransactionFields } fro
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp } from '../../helpers/formatting.js'
 import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
+import { type ResponseFormat, applyResponseFormat, resolveDefaultResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import {
@@ -182,9 +182,8 @@ export function registerQueryLogsTool(server: McpServer) {
       response_format: z
         .enum(['full', 'compact', 'summary'])
         .optional()
-        .default('full')
         .describe(
-          "Response format: 'summary' (~95% smaller, aggregated stats only), 'compact' (~70% smaller, strips verbose fields), 'full' (complete data). Use 'summary' for counting/categorizing.",
+          "Response format: defaults to 'compact' for chat-friendly output, or stays 'full' when inline transaction context is requested. Use 'summary' for counting or categorizing.",
         ),
       include_transaction: z.boolean().optional().default(false).describe('Include parent transaction data'),
       include_transaction_traces: z
@@ -264,6 +263,9 @@ export function registerQueryLogsTool(server: McpServer) {
         include_transaction_logs = paginationCursor.request.include_transaction_logs
         decode = paginationCursor.request.decode ?? false
       }
+      const effectiveResponseFormat = resolveDefaultResponseFormat(response_format, {
+        preserveFullIf: include_transaction || include_transaction_traces || include_transaction_logs,
+      })
 
       // Resolve timeframe or use explicit blocks
       const resolvedBlocks = paginationCursor
@@ -394,7 +396,7 @@ export function registerQueryLogsTool(server: McpServer) {
               ...(topic2 ? { topic2 } : {}),
               ...(topic3 ? { topic3 } : {}),
               field_preset,
-              response_format: response_format as ResponseFormat,
+              response_format: effectiveResponseFormat,
               include_transaction,
               include_transaction_traces,
               include_transaction_logs,
@@ -424,7 +426,7 @@ export function registerQueryLogsTool(server: McpServer) {
             }
           })
         : page.pageItems
-      const formattedData = applyResponseFormat(decodedItems, response_format || 'full', 'logs')
+      const formattedData = applyResponseFormat(decodedItems, effectiveResponseFormat, 'logs')
       const notices = [...getTimestampWindowNotices(resolvedBlocks), ...getValidationNotices(validation)]
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
@@ -443,7 +445,7 @@ export function registerQueryLogsTool(server: McpServer) {
       })
 
       const message =
-        response_format === 'summary'
+        effectiveResponseFormat === 'summary'
           ? `Log summary for ${page.pageItems.length} logs${page.hasMore ? ' (latest preview page)' : ''}`
           : `Retrieved ${page.pageItems.length} logs${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
@@ -458,7 +460,7 @@ export function registerQueryLogsTool(server: McpServer) {
         freshness,
         coverage,
         execution: buildExecutionMetadata({
-          response_format,
+          response_format: effectiveResponseFormat,
           finalized_only,
           limit,
           from_block: resolvedFromBlock,

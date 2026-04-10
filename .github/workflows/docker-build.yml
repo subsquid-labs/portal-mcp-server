@@ -25,14 +25,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
-        run: npm run build
-
-      - name: Smoke tests
-        run: npm test
-
-      - name: Live MCP tool suite
-        run: npm run test:tools
+      - name: Full MCP verification
+        run: npm run test:ci
 
   build:
     runs-on: ubuntu-latest

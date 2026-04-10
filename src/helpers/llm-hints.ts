@@ -9,8 +9,8 @@ import type { PortalUiSpec, UiFollowUpAction, UiMetricCard, UiPanel } from './ui
 
 type RecordLike = Record<string, unknown>
 
-const SUMMARY_SECTION_KEYS = ['summary', 'overview', 'activity', 'assets', 'evm', 'solana', 'bitcoin', 'hyperliquid', 'liquidations']
-const RESERVED_TOP_LEVEL_KEYS = new Set(['chart', 'tables', 'gap_diagnostics'])
+const SUMMARY_SECTION_KEYS = ['summary', 'overview', 'activity', 'assets', 'market_context', 'guidance', 'evm', 'solana', 'bitcoin', 'hyperliquid', 'liquidations']
+const RESERVED_TOP_LEVEL_KEYS = new Set(['chart', 'tables', 'gap_diagnostics', 'answer', 'display', 'next_steps', 'technical_details'])
 const NORMALIZED_ALIAS_KEYS = [
   'chain_kind',
   'record_type',
@@ -34,7 +34,6 @@ interface LlmMetricCardHint {
   id?: string
   label: string
   value_path: string
-  raw_value?: unknown
   display_value?: string
   emphasis?: 'primary' | 'secondary'
 }
@@ -94,7 +93,6 @@ interface LlmViewHint {
 interface LlmPreviewCell {
   label: string
   value_path: string
-  raw_value?: unknown
   display_value?: string
 }
 
@@ -227,6 +225,8 @@ function inferArrayKind(path: string, chartDataPath?: string): string {
     return 'chart_data'
   }
   if (path.includes('ohlc')) return 'candles'
+  if (path.includes('recent_trades')) return 'records'
+  if (path.includes('query_suggestions')) return 'actions'
   if (path.endsWith('.items') || path === 'items') return 'records'
   if (path.includes('series') || path.includes('bucket')) return 'time_series'
   if (path.includes('top_') || path.includes('volume_by_')) return 'ranked_list'
@@ -235,7 +235,7 @@ function inferArrayKind(path: string, chartDataPath?: string): string {
 
 function buildMetricCardHints(payload: RecordLike, ui?: PortalUiSpec): LlmMetricCardHint[] {
   return asArray<UiMetricCard>(ui?.metric_cards)
-    .slice(0, 12)
+    .slice(0, 8)
     .map((card) => {
       const rawValue = getByPath(payload, card.value_path)
       const displayValue = formatScalar(rawValue, card.format, card.unit)
@@ -244,7 +244,6 @@ function buildMetricCardHints(payload: RecordLike, ui?: PortalUiSpec): LlmMetric
         ...(card.id ? { id: card.id } : {}),
         label: card.label,
         value_path: card.value_path,
-        ...(rawValue !== undefined ? { raw_value: rawValue } : {}),
         ...(displayValue ? { display_value: displayValue } : {}),
         ...(card.emphasis ? { emphasis: card.emphasis } : {}),
       }
@@ -254,7 +253,12 @@ function buildMetricCardHints(payload: RecordLike, ui?: PortalUiSpec): LlmMetric
 function buildHeadline(payload: RecordLike, ui?: PortalUiSpec): LlmHeadlineHint | undefined {
   const title = ui?.headline?.title
   const subtitle = ui?.headline?.subtitle
-  const summary = typeof payload._summary === 'string' ? payload._summary : undefined
+  const summary =
+    typeof payload.answer === 'string'
+      ? payload.answer
+      : typeof payload._summary === 'string'
+        ? payload._summary
+        : undefined
 
   if (!title && !subtitle && !summary) return undefined
 
@@ -327,7 +331,7 @@ function buildTableHints(payload: RecordLike): LlmTableHint[] {
       row_count: table.row_count,
       ...(table.key_field ? { key_field: table.key_field } : {}),
       ...(table.default_sort ? { default_sort: table.default_sort } : {}),
-      columns: table.columns.slice(0, 12).map((column) => ({
+      columns: table.columns.slice(0, 8).map((column) => ({
         key: column.key,
         label: column.label,
         ...(column.path ? { path: column.path } : {}),
@@ -395,7 +399,7 @@ function buildSections(payload: RecordLike, chartHint: LlmChartHint | undefined,
     }
   }
 
-  return sections.slice(0, 12)
+  return sections.slice(0, 8)
 }
 
 function annotateSections(sections: LlmSectionHint[], primaryPath: string, answerSequence: string[], recommendedViews: LlmViewHint[]): LlmSectionHint[] {
@@ -429,7 +433,7 @@ function buildRecommendedViews(
     views.push({ kind: 'metric_cards', title: 'Key metrics', source_path: '_llm.metric_cards', emphasis: 'primary' })
   }
 
-  for (const panel of asArray<UiPanel>(ui?.panels).slice(0, 8)) {
+  for (const panel of asArray<UiPanel>(ui?.panels).slice(0, 5)) {
     if (panel.kind === 'chart_panel') {
       views.push({
         kind: 'chart',
@@ -485,7 +489,7 @@ function buildRecommendedViews(
     }
   }
 
-  return views.slice(0, 8)
+  return views.slice(0, 5)
 }
 
 function inferPrimaryPath(
@@ -535,6 +539,7 @@ function buildAnswerSequence(
 ): string[] {
   const sequence = [
     ...(overrides?.answer_sequence ?? []),
+    typeof payload.answer === 'string' ? 'answer' : undefined,
     typeof payload._summary === 'string' ? '_summary' : undefined,
     metricCards.find((card) => card.emphasis === 'primary')?.value_path,
     ...metricCards.map((card) => card.value_path),
@@ -566,7 +571,6 @@ function buildPreviewRows(params: {
         return {
           label: column.label,
           value_path: valuePath,
-          ...(rawValue !== undefined ? { raw_value: rawValue } : {}),
           ...(displayValue ? { display_value: displayValue } : {}),
         }
       }),
@@ -625,7 +629,6 @@ function buildPrimaryPreview(
       .map(([key, value]) => ({
         label: key.replace(/_/g, ' '),
         value_path: `${primaryPath}.${key}`,
-        raw_value: value,
         display_value: formatScalar(value),
       }))
 
@@ -678,21 +681,30 @@ function buildParserNotes(
     ...(overrides?.parser_notes ?? []),
   ].filter((note): note is string => Boolean(note))
 
-  return notes.length > 0 ? Array.from(new Set(notes)).slice(0, 8) : undefined
+  return notes.length > 0 ? Array.from(new Set(notes)).slice(0, 6) : undefined
 }
 
 export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): PortalLlmHints {
   const ui = isRecord(payload._ui) ? (payload._ui as unknown as PortalUiSpec) : undefined
   const toolContract = isRecord(payload._tool_contract) ? payload._tool_contract : undefined
   const normalizedOutput = Boolean(toolContract?.normalized_output)
+  const payloadSize = JSON.stringify(payload).length
+  const compactHints = payloadSize > 12_000
   const headline = buildHeadline(payload, ui)
   const chartHint = buildChartHint(payload)
   const tableHints = buildTableHints(payload)
   const metricCards = buildMetricCardHints(payload, ui)
   const sections = buildSections(payload, chartHint, tableHints)
   const { primaryPath, primaryKind } = inferPrimaryPath(payload, chartHint, tableHints, sections, overrides)
-  const answerSequence = buildAnswerSequence(payload, metricCards, primaryPath, overrides)
-  const recommendedViews = buildRecommendedViews(ui, chartHint, tableHints, metricCards)
+  const llmMetricCards = compactHints ? metricCards.slice(0, 4) : metricCards
+  const llmTableHints = compactHints
+    ? tableHints.slice(0, 2).map((table) => ({
+        ...table,
+        columns: table.columns.slice(0, 4),
+      }))
+    : tableHints
+  const answerSequence = buildAnswerSequence(payload, llmMetricCards, primaryPath, overrides)
+  const recommendedViews = buildRecommendedViews(ui, chartHint, llmTableHints, llmMetricCards)
   if (recommendedViews.length === 0) {
     const primarySection = sections.find((section) => section.path === primaryPath)
     recommendedViews.push({
@@ -703,10 +715,15 @@ export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): Po
       emphasis: 'primary',
     })
   }
-  const primaryPreview = buildPrimaryPreview(payload, primaryPath, primaryKind, tableHints)
+  const primaryPreview = buildPrimaryPreview(payload, primaryPath, primaryKind, llmTableHints.length > 0 ? llmTableHints : tableHints)
   const annotatedSections = annotateSections(sections, primaryPath, answerSequence, recommendedViews)
+  const llmSections = compactHints ? annotatedSections.slice(0, 5) : annotatedSections
+  const llmRecommendedViews = compactHints ? recommendedViews.slice(0, 3) : recommendedViews
   const normalizedFields = inferNormalizedFields(payload, primaryPath, normalizedOutput)
-  const parserNotes = buildParserNotes(payload, normalizedOutput, metricCards, chartHint, tableHints, overrides)
+  const parserNotes = buildParserNotes(payload, normalizedOutput, llmMetricCards, chartHint, llmTableHints, overrides)
+  const llmParserNotes = compactHints ? parserNotes?.slice(0, 3) : parserNotes
+  const followUpActions = asArray<UiFollowUpAction>(ui?.follow_up_actions)
+  const llmFollowUpActions = compactHints ? followUpActions.slice(0, 2) : followUpActions.slice(0, 5)
 
   return {
     version: 'portal_llm_v1',
@@ -714,22 +731,22 @@ export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): Po
     primary_kind: overrides?.primary_kind ?? primaryKind,
     answer_sequence: answerSequence,
     ...(headline ? { headline } : {}),
-    ...(metricCards.length > 0 ? { metric_cards: metricCards } : {}),
+    ...(llmMetricCards.length > 0 ? { metric_cards: llmMetricCards } : {}),
     ...(chartHint ? { chart: chartHint } : {}),
-    ...(tableHints.length > 0 ? { tables: tableHints } : {}),
-    sections: annotatedSections,
-    recommended_views: recommendedViews,
+    ...(llmTableHints.length > 0 ? { tables: llmTableHints } : {}),
+    sections: llmSections,
+    recommended_views: llmRecommendedViews,
     ...(primaryPreview ? { primary_preview: primaryPreview } : {}),
     ...(normalizedFields ? { normalized_fields: normalizedFields } : {}),
-    ...((typeof payload._pagination === 'object' && payload._pagination !== null) || asArray<UiFollowUpAction>(ui?.follow_up_actions).length > 0
+    ...((typeof payload._pagination === 'object' && payload._pagination !== null) || llmFollowUpActions.length > 0
       ? {
           follow_up: {
             ...(isRecord(payload._pagination) && typeof payload._pagination.next_cursor === 'string'
               ? { continue_cursor_path: '_pagination.next_cursor' }
               : {}),
-            ...(asArray<UiFollowUpAction>(ui?.follow_up_actions).length > 0
+            ...(llmFollowUpActions.length > 0
               ? {
-                  actions: asArray<UiFollowUpAction>(ui?.follow_up_actions).slice(0, 8).map((action) => ({
+                  actions: llmFollowUpActions.map((action) => ({
                     label: action.label,
                     intent: action.intent,
                     ...(action.target ? { target: action.target } : {}),
@@ -739,6 +756,6 @@ export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): Po
           },
         }
       : {}),
-    ...(parserNotes ? { parser_notes: parserNotes } : {}),
+    ...(llmParserNotes ? { parser_notes: llmParserNotes } : {}),
   }
 }

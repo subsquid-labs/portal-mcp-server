@@ -1,4 +1,0 @@
-interface:
-  display_name: "Portal MCP Builder"
-  short_description: "Build and extend SQD Portal MCP tools"
-  default_prompt: "Use $portal-mcp-builder to add or refine a tool in the SQD Portal MCP server."

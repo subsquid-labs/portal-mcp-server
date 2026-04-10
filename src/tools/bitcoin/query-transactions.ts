@@ -11,7 +11,7 @@ import { formatResult } from '../../helpers/format.js'
 import { normalizeBitcoinInputResult, normalizeBitcoinOutputResult, normalizeBitcoinTransactionResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
 import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
+import { applyResponseFormat, resolveDefaultResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 
@@ -88,7 +88,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
       include_inputs: z.boolean().optional().default(false).describe('Attach transaction inputs inline'),
       include_outputs: z.boolean().optional().default(false).describe('Attach transaction outputs inline'),
-      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (stats only, ~90% smaller), 'compact' (hash+size+weight only, ~50% smaller), 'full' (all fields)"),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().describe("Response format: defaults to 'compact' for chat-friendly output. Compact mode keeps inline inputs and outputs in a smaller shape when requested."),
       limit: z.number().optional().default(50).describe('Max transactions to return (default: 50)'),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
@@ -123,6 +123,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
         include_outputs = paginationCursor.request.include_outputs
         response_format = paginationCursor.request.response_format
       }
+      const effectiveResponseFormat = resolveDefaultResponseFormat(response_format)
 
       const resolvedBlocks = paginationCursor
         ? {
@@ -214,7 +215,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
               finalized_only,
               include_inputs,
               include_outputs,
-              response_format: response_format as ResponseFormat,
+              response_format: effectiveResponseFormat,
             },
             window_from_block: resolvedFromBlock,
             window_to_block: endBlock,
@@ -327,7 +328,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
         })
       }
 
-      const formattedData = applyResponseFormat(pageItems, response_format as ResponseFormat, 'bitcoin_transactions')
+      const formattedData = applyResponseFormat(pageItems, effectiveResponseFormat, 'bitcoin_transactions')
       const notices = getTimestampWindowNotices(resolvedBlocks)
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
@@ -345,7 +346,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
         hasMore: page.hasMore,
       })
 
-      const message = response_format === 'summary'
+      const message = effectiveResponseFormat === 'summary'
         ? `Summary of ${pageItems.length} Bitcoin transactions${page.hasMore ? ' (latest preview page)' : ''}`
         : `Retrieved ${pageItems.length} Bitcoin transactions${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
@@ -360,7 +361,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
         freshness,
         coverage,
         execution: buildExecutionMetadata({
-          response_format,
+          response_format: effectiveResponseFormat,
           finalized_only,
           limit,
           from_block: resolvedFromBlock,

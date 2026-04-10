@@ -22,6 +22,43 @@ Ranks naive user prompts against the live `listTools()` catalog to catch naming 
 - adds extra "dumb user" prompts for common confusion cases
 - fails when the expected tool does not rank highly enough
 
+### `npm run test:conversations`
+Runs multi-step user journeys that behave more like an AI chat session than isolated tool calls. It:
+
+- simulates confused-user flows such as discovery -> summary -> chart
+- checks that `answer`, `display`, and `next_steps` stay useful across the conversation
+- catches places where a tool works technically but still feels awkward in chat
+
+### `npm run test:negative`
+Runs focused negative-path checks for invalid inputs and unsupported flows. It:
+
+- verifies errors stay actionable and free of stack traces
+- checks that common mistakes fail with clear recovery guidance
+- protects the “stupid-proof” experience for LLMs and end users
+
+### `npm run test:quality`
+Runs an automated response-quality audit over the full manifest. It:
+
+- checks chat-first fields like `answer`, `display`, and `next_steps`
+- enforces hard response-size and latency budgets so regressions fail CI
+- flags truncation, legacy wording, default raw-query bloat, and non-humanized labels
+- warns when a tool is drifting toward the hard budgets before it actually fails
+
+### `npm run test:all`
+Runs the full live matrix:
+
+- build
+- smoke
+- tools
+- routing
+- substrate
+- conversations
+- negative paths
+- quality audit
+
+### `npm run test:ci`
+Alias for the full CI verification entrypoint. Today it runs the same matrix as `test:all`, including the quality-and-budget gate.
+
 ### `npm run test:substrate`
 Runs a focused live QA pass for Substrate readiness. It:
 
@@ -33,7 +70,7 @@ Runs a focused live QA pass for Substrate readiness. It:
 Runs the same manifest with user-style prompts in the output so it is easier to scan as a realistic end-to-end QA pass.
 
 ### `npx tsx scripts/data-quality-test.ts`
-Prints truncated real responses for every manifest entry so you can review readability, verbosity, and UX.
+Prints truncated real responses for every manifest entry so you can review readability, verbosity, and UX manually.
 
 ## Updating the suite
 
@@ -42,7 +79,10 @@ When tool names or recommended arguments change:
 1. Update `scripts/tool-manifest.ts`
 2. Re-run `npm run test:tools`
 3. Re-run `npm run test:routing`
-4. Re-run `npx tsx scripts/data-quality-test.ts` for a quick qualitative review
+4. Re-run `npm run test:conversations`
+5. Re-run `npm run test:negative`
+6. Re-run `npm run test:quality`
+7. Re-run `npx tsx scripts/data-quality-test.ts` for a quick qualitative review
 
 ## Why the manifest exists
 

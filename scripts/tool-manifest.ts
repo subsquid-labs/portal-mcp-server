@@ -1,5 +1,6 @@
 import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { EVENT_SIGNATURES } from '../src/constants/index.js'
+import { assert, callToolWithRetry, extractJson, getText, sleep } from './test-helpers.ts'
 
 const POLKADOT_SAMPLE_FROM_BLOCK = 30_736_840
 const POLKADOT_SAMPLE_TO_BLOCK = 30_736_842
@@ -11,10 +12,6 @@ const SELECTORS = {
   allPools: '0x41d1de97',
 } as const
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 export interface ToolTestContext {
   nowTimestamp: number
   baseHead: number
@@ -23,6 +20,7 @@ export interface ToolTestContext {
   hlFillsHead: number
   hlReplicaHead: number
   usdcBase: string
+  baseUniswapV2Pool: string
   baseUniswapV3Pool: string
   baseUniswapV4PoolId: string
   aerodromeSlipstreamPool: string
@@ -40,25 +38,6 @@ export interface ToolSpec {
   validate: (text: string, context: ToolTestContext) => void
   validateError?: (text: string, context: ToolTestContext) => void
   validateFollowUp?: (text: string, client: Client, context: ToolTestContext) => Promise<void>
-}
-
-export function assert(condition: boolean, message: string) {
-  if (!condition) {
-    throw new Error(`Assertion failed: ${message}`)
-  }
-}
-
-export function getText(result: any): string {
-  return result?.content?.[0]?.text || ''
-}
-
-export function extractJson(text: string): any {
-  const jsonStart = text.search(/[\[{]/)
-  if (jsonStart === -1) {
-    throw new Error(`No JSON found in response: ${text.slice(0, 200)}`)
-  }
-
-  return JSON.parse(text.slice(jsonStart))
 }
 
 function getItems(data: any): any[] {
@@ -97,6 +76,10 @@ function expectOrdering(data: any, label: string) {
   assert(data?._ordering !== undefined, `${label} should include _ordering`)
 }
 
+function expectCompactDefault(data: any, label: string) {
+  assert(data?._execution?.response_format === 'compact', `${label} should default to compact response_format`)
+}
+
 function expectGapDiagnostics(data: any, label: string) {
   assert(data?.gap_diagnostics !== undefined, `${label} should include gap_diagnostics`)
 }
@@ -113,12 +96,8 @@ function expectPresentation(data: any, label: string, options?: { chartDataKey?:
 }
 
 async function getHeadNumber(client: Client, network: string): Promise<number> {
-  const result = await client.callTool({
-    name: 'portal_get_head',
-    arguments: { network },
-  })
-
-  return extractJson(getText(result)).number
+  const result = await callToolWithRetry(client, 'portal_get_head', { network })
+  return result.data.number
 }
 
 function encodeAddress(value: string) {
@@ -187,21 +166,24 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
     getHeadNumber(client, 'hyperliquid-replica-cmds'),
   ])
 
-  const [recentSwapResult, recentV4SwapResult, evmTxResult, solTxResult, btcTxResult, hlFillResult] = await Promise.all([
-    client.callTool({
-      name: 'portal_evm_query_logs',
-      arguments: {
+  const [recentV2SwapResult, recentSwapResult, recentV4SwapResult, evmTxResult, solTxResult, btcTxResult, hlFillResult] = await Promise.all([
+    callToolWithRetry(client, 'portal_evm_query_logs', {
+        network: 'base-mainnet',
+        from_timestamp: '6h ago',
+        to_timestamp: 'now',
+        topic0: [EVENT_SIGNATURES.UNISWAP_V2_SWAP],
+        limit: 1,
+        field_preset: 'minimal',
+    }),
+    callToolWithRetry(client, 'portal_evm_query_logs', {
         network: 'base-mainnet',
         from_timestamp: '6h ago',
         to_timestamp: 'now',
         topic0: [EVENT_SIGNATURES.UNISWAP_V3_SWAP],
         limit: 1,
         field_preset: 'minimal',
-      },
     }),
-    client.callTool({
-      name: 'portal_evm_query_logs',
-      arguments: {
+    callToolWithRetry(client, 'portal_evm_query_logs', {
         network: 'base-mainnet',
         from_block: baseHead - 2_000,
         to_block: baseHead,
@@ -209,51 +191,43 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
         topic0: [EVENT_SIGNATURES.UNISWAP_V4_SWAP],
         limit: 50,
         field_preset: 'standard',
-      },
     }),
-    client.callTool({
-      name: 'portal_evm_query_transactions',
-      arguments: {
+    callToolWithRetry(client, 'portal_evm_query_transactions', {
         network: 'base-mainnet',
         from_block: baseHead - 200,
         to_block: baseHead,
         limit: 1,
         field_preset: 'minimal',
-      },
     }),
-    client.callTool({
-      name: 'portal_solana_query_transactions',
-      arguments: {
+    callToolWithRetry(client, 'portal_solana_query_transactions', {
         network: 'solana-mainnet',
         from_block: solHead - 20,
         to_block: solHead,
         limit: 1,
-      },
     }),
-    client.callTool({
-      name: 'portal_bitcoin_query_transactions',
-      arguments: {
+    callToolWithRetry(client, 'portal_bitcoin_query_transactions', {
         network: 'bitcoin-mainnet',
         timeframe: '1h',
         limit: 3,
         include_outputs: true,
-      },
     }),
-    client.callTool({
-      name: 'portal_hyperliquid_query_fills',
-      arguments: {
+    callToolWithRetry(client, 'portal_hyperliquid_query_fills', {
         network: 'hyperliquid-fills',
         timeframe: '5m',
         limit: 1,
-      },
     }),
   ])
 
-  const recentSwapItems = getItems(extractJson(getText(recentSwapResult)))
+  const recentV2SwapItems = getItems(recentV2SwapResult.data)
+  assert(recentV2SwapItems.length > 0, 'Expected at least one active Base Uniswap v2-style pool')
+  const baseUniswapV2Pool = String(recentV2SwapItems[0].address || '').toLowerCase()
+  assert(baseUniswapV2Pool.startsWith('0x'), 'Expected an active Base Uniswap v2-style pool address')
+
+  const recentSwapItems = getItems(recentSwapResult.data)
   assert(recentSwapItems.length > 0, 'Expected at least one active Base Uniswap V3 pool')
   const baseUniswapV3Pool = String(recentSwapItems[0].address || '').toLowerCase()
 
-  const recentV4SwapItems = getItems(extractJson(getText(recentV4SwapResult)))
+  const recentV4SwapItems = getItems(recentV4SwapResult.data)
   assert(recentV4SwapItems.length > 0, 'Expected at least one active Base Uniswap v4 pool id')
   const baseUniswapV4PoolId =
     [...recentV4SwapItems.reduce((counts, item: any) => {
@@ -266,21 +240,23 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
   const aerodromeSlipstreamPool = (await getFactoryPoolAtIndex(AERODROME_SLIPSTREAM_FACTORY, 0)).toLowerCase()
   assert(!isZeroAddress(aerodromeSlipstreamPool), 'Expected the Aerodrome Slipstream factory to expose an initial pool on Base')
 
-  const evmWallet = String(extractJson(getText(evmTxResult)).items?.[0]?.from || '')
+  const evmWallet = String(evmTxResult.data.items?.[0]?.from || '')
   assert(evmWallet.startsWith('0x'), 'Expected an active Base wallet')
 
-  const solItem = extractJson(getText(solTxResult)).items?.[0]
+  const solItem = solTxResult.data.items?.[0]
   const solWallet = String(solItem?.feePayer || solItem?.sender || '')
   assert(solWallet.length > 20, 'Expected an active Solana fee payer')
 
-  const btcItems = extractJson(getText(btcTxResult)).items || []
+  const btcItems = btcTxResult.data.items || []
   const btcAddress = String(
-    btcItems.flatMap((item: any) => item.outputs || []).find((output: any) => typeof output?.scriptPubKeyAddress === 'string')
-      ?.scriptPubKeyAddress || '',
+    btcItems.flatMap((item: any) => item.outputs || []).find((output: any) => typeof output?.scriptPubKeyAddress === 'string' || typeof output?.address === 'string')
+      ?.scriptPubKeyAddress
+      || btcItems.flatMap((item: any) => item.outputs || []).find((output: any) => typeof output?.address === 'string')?.address
+      || '',
   )
   assert(btcAddress.length > 10, 'Expected a recent Bitcoin output address')
 
-  const hlUser = String(extractJson(getText(hlFillResult)).items?.[0]?.user || '')
+  const hlUser = String(hlFillResult.data.items?.[0]?.user || '')
   assert(hlUser.startsWith('0x'), 'Expected an active Hyperliquid user')
 
   return {
@@ -291,6 +267,7 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
     hlFillsHead,
     hlReplicaHead,
     usdcBase: BASE_USDC,
+    baseUniswapV2Pool,
     baseUniswapV3Pool,
     baseUniswapV4PoolId,
     aerodromeSlipstreamPool,
@@ -391,31 +368,22 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
     validateFollowUp: async (_text, client, context) => {
       const [solanaResult, bitcoinResult, hyperliquidResult] = await Promise.all([
-        client.callTool({
-          name: 'portal_get_wallet_summary',
-          arguments: { network: 'solana-mainnet', address: context.solWallet, timeframe: '1h' },
-        }),
-        client.callTool({
-          name: 'portal_get_wallet_summary',
-          arguments: { network: 'bitcoin-mainnet', address: context.btcAddress, timeframe: '24h' },
-        }),
-        client.callTool({
-          name: 'portal_get_wallet_summary',
-          arguments: { network: 'hyperliquid-fills', address: context.hlUser, timeframe: '5m' },
-        }),
+        callToolWithRetry(client, 'portal_get_wallet_summary', { network: 'solana-mainnet', address: context.solWallet, timeframe: '1h' }),
+        callToolWithRetry(client, 'portal_get_wallet_summary', { network: 'bitcoin-mainnet', address: context.btcAddress, timeframe: '24h' }),
+        callToolWithRetry(client, 'portal_get_wallet_summary', { network: 'hyperliquid-fills', address: context.hlUser, timeframe: '5m' }),
       ])
 
-      const solanaData = extractJson(getText(solanaResult))
+      const solanaData = solanaResult.data
       assert(solanaData.overview?.vm === 'solana', 'Expected Solana wallet overview')
       assert(solanaData.solana?.fee_summary !== undefined, 'Expected Solana-specific fee summary')
       expectWindowMetadata(solanaData, 'portal_get_wallet_summary solana')
 
-      const bitcoinData = extractJson(getText(bitcoinResult))
+      const bitcoinData = bitcoinResult.data
       assert(bitcoinData.overview?.vm === 'bitcoin', 'Expected Bitcoin wallet overview')
       assert(bitcoinData.bitcoin?.outputs_count !== undefined, 'Expected Bitcoin-specific counts')
       expectWindowMetadata(bitcoinData, 'portal_get_wallet_summary bitcoin')
 
-      const hyperliquidData = extractJson(getText(hyperliquidResult))
+      const hyperliquidData = hyperliquidResult.data
       assert(hyperliquidData.overview?.vm === 'hyperliquid', 'Expected Hyperliquid wallet overview')
       assert(hyperliquidData.hyperliquid?.fee_summary !== undefined, 'Expected Hyperliquid fee summary')
       expectWindowMetadata(hyperliquidData, 'portal_get_wallet_summary hyperliquid')
@@ -435,29 +403,14 @@ export const TOOL_SPECS: ToolSpec[] = [
     },
     validateFollowUp: async (_text, client) => {
       const [compareResult, groupedResult, solanaResult, bitcoinResult, hyperliquidResult] = await Promise.all([
-        client.callTool({
-          name: 'portal_get_time_series',
-          arguments: { network: 'base', metric: 'transaction_count', interval: '5m', duration: '1h', compare_previous: true },
-        }),
-        client.callTool({
-          name: 'portal_get_time_series',
-          arguments: { network: 'base', metric: 'transaction_count', interval: '5m', duration: '1h', group_by: 'contract', group_limit: 3 },
-        }),
-        client.callTool({
-          name: 'portal_get_time_series',
-          arguments: { network: 'solana-mainnet', metric: 'tps', interval: '5m', duration: '1h' },
-        }),
-        client.callTool({
-          name: 'portal_get_time_series',
-          arguments: { network: 'bitcoin-mainnet', metric: 'block_size_bytes', interval: '1h', duration: '24h' },
-        }),
-        client.callTool({
-          name: 'portal_get_time_series',
-          arguments: { network: 'hyperliquid-fills', metric: 'volume', interval: '5m', duration: '1h' },
-        }),
+        callToolWithRetry(client, 'portal_get_time_series', { network: 'base', metric: 'transaction_count', interval: '5m', duration: '1h', compare_previous: true }),
+        callToolWithRetry(client, 'portal_get_time_series', { network: 'base', metric: 'transaction_count', interval: '5m', duration: '1h', group_by: 'contract', group_limit: 3 }),
+        callToolWithRetry(client, 'portal_get_time_series', { network: 'solana-mainnet', metric: 'tps', interval: '5m', duration: '1h' }),
+        callToolWithRetry(client, 'portal_get_time_series', { network: 'bitcoin-mainnet', metric: 'block_size_bytes', interval: '1h', duration: '24h' }),
+        callToolWithRetry(client, 'portal_get_time_series', { network: 'hyperliquid-fills', metric: 'volume', interval: '5m', duration: '1h' }),
       ])
 
-      const compareData = extractJson(getText(compareResult))
+      const compareData = compareResult.data
       assert(Array.isArray(compareData.current_series), 'Expected current_series')
       assert(Array.isArray(compareData.previous_series), 'Expected previous_series')
       assert(Array.isArray(compareData.comparison_series), 'Expected comparison_series')
@@ -465,27 +418,27 @@ export const TOOL_SPECS: ToolSpec[] = [
       expectWindowMetadata(compareData, 'portal_get_time_series compare_previous')
       expectPresentation(compareData, 'portal_get_time_series compare_previous', { chartDataKey: 'comparison_series', tableId: 'comparison_series' })
 
-      const groupedData = extractJson(getText(groupedResult))
+      const groupedData = groupedResult.data
       assert(Array.isArray(groupedData.top_contracts) && groupedData.top_contracts.length > 0, 'Expected top_contracts')
       assert(groupedData.chart?.grouped_value_field === 'contract_address', 'Expected grouped contract chart metadata')
       expectWindowMetadata(groupedData, 'portal_get_time_series grouped')
       expectGapDiagnostics(groupedData, 'portal_get_time_series grouped')
       expectPresentation(groupedData, 'portal_get_time_series grouped', { chartDataKey: 'time_series', tableId: 'contract_series' })
 
-      const solanaData = extractJson(getText(solanaResult))
-      expectItems(getText(solanaResult), 'portal_get_time_series solana', 12)
+      const solanaData = solanaResult.data
+      assert(getItems(solanaData).length >= 12, 'portal_get_time_series solana should return at least 12 item(s)')
       assert(solanaData.summary?.metric === 'tps', 'Expected Solana TPS summary')
       expectWindowMetadata(solanaData, 'portal_get_time_series solana')
       expectPresentation(solanaData, 'portal_get_time_series solana', { chartDataKey: 'time_series', tableId: 'main' })
 
-      const bitcoinData = extractJson(getText(bitcoinResult))
-      expectItems(getText(bitcoinResult), 'portal_get_time_series bitcoin', 12)
+      const bitcoinData = bitcoinResult.data
+      assert(getItems(bitcoinData).length >= 12, 'portal_get_time_series bitcoin should return at least 12 item(s)')
       assert(bitcoinData.summary?.metric === 'block_size_bytes', 'Expected Bitcoin metric summary')
       expectWindowMetadata(bitcoinData, 'portal_get_time_series bitcoin')
       expectPresentation(bitcoinData, 'portal_get_time_series bitcoin', { chartDataKey: 'time_series', tableId: 'main' })
 
-      const hyperliquidData = extractJson(getText(hyperliquidResult))
-      expectItems(getText(hyperliquidResult), 'portal_get_time_series hyperliquid', 12)
+      const hyperliquidData = hyperliquidResult.data
+      assert(getItems(hyperliquidData).length >= 12, 'portal_get_time_series hyperliquid should return at least 12 item(s)')
       assert(hyperliquidData.summary?.metric === 'volume', 'Expected Hyperliquid metric summary')
       expectWindowMetadata(hyperliquidData, 'portal_get_time_series hyperliquid')
       expectPresentation(hyperliquidData, 'portal_get_time_series hyperliquid', { chartDataKey: 'time_series', tableId: 'main' })
@@ -499,6 +452,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       const data = extractJson(text)
       const items = getItems(data)
       assert(items.length === 3, 'Expected 3 EVM transactions')
+      expectCompactDefault(data, 'portal_evm_query_transactions')
       expectWindowMetadata(data, 'portal_evm_query_transactions')
       expectOrdering(data, 'portal_evm_query_transactions')
     },
@@ -511,24 +465,23 @@ export const TOOL_SPECS: ToolSpec[] = [
       const data = extractJson(text)
       const items = getItems(data)
       assert(items[0].address?.toLowerCase() === context.usdcBase, 'Expected USDC log results')
+      expectCompactDefault(data, 'portal_evm_query_logs')
       expectWindowMetadata(data, 'portal_evm_query_logs')
       expectOrdering(data, 'portal_evm_query_logs')
     },
     validateFollowUp: async (_text, client, context) => {
-      const decodeResult = await client.callTool({
-        name: 'portal_evm_query_logs',
-        arguments: {
-          network: 'base',
-          from_block: context.baseHead - 200,
-          to_block: context.baseHead,
-          addresses: [context.usdcBase],
-          limit: 1,
-          decode: true,
-        },
+      const decodeResult = await callToolWithRetry(client, 'portal_evm_query_logs', {
+        network: 'base',
+        from_block: context.baseHead - 200,
+        to_block: context.baseHead,
+        addresses: [context.usdcBase],
+        limit: 1,
+        decode: true,
       })
-      const data = extractJson(getText(decodeResult))
+      const data = decodeResult.data
       const items = getItems(data)
       assert(items[0].decoded_log !== undefined, 'Expected decoded_log on EVM log results')
+      expectCompactDefault(data, 'portal_evm_query_logs decode')
       expectWindowMetadata(data, 'portal_evm_query_logs decode')
     },
   },
@@ -569,59 +522,109 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'portal_evm_get_ohlc',
     prompt: 'make me price candles for this Base pool',
-    args: (context) => ({ network: 'base', pool_address: context.baseUniswapV3Pool, source: 'uniswap_v3_swap', duration: '1h', interval: 'auto' }),
+    args: (context) => ({
+      network: 'base',
+      pool_address: context.baseUniswapV3Pool,
+      source: 'uniswap_v3_swap',
+      duration: '1h',
+      interval: 'auto',
+      mode: 'deep',
+      price_in: 'auto',
+      include_recent_trades: true,
+      recent_trades_limit: 5,
+    }),
     validate: (text) => {
       const data = extractJson(text)
       const candles = Array.isArray(data.ohlc) ? data.ohlc : getItems(data)
       assert(candles.length > 0, 'Expected EVM candles')
+      assert(data.summary?.mode === 'deep', 'Expected explicit OHLC mode in summary')
+      assert(data.summary?.price_in_resolved !== undefined, 'Expected resolved OHLC price orientation')
+      assert(data.market_context?.pair !== undefined, 'Expected structured market_context pair section')
+      assert(data.guidance?.recommended_mode !== undefined, 'Expected guidance section for OHLC')
+      assert(Array.isArray(data.recent_trades), 'Expected recent_trades array')
+      assert(Array.isArray(data.tables) && data.tables.some((table: any) => table?.id === 'recent_trades'), 'Expected recent_trades table descriptor')
       expectWindowMetadata(data, 'portal_evm_get_ohlc')
       expectGapDiagnostics(data, 'portal_evm_get_ohlc')
       expectOrdering(data, 'portal_evm_get_ohlc')
       expectPresentation(data, 'portal_evm_get_ohlc', { chartDataKey: 'ohlc', tableId: 'ohlc' })
     },
     validateFollowUp: async (_text, client, context) => {
-      const [aerodromeSlipstreamResult, uniswapV4Result] = await Promise.all([
-        client.callTool({
-          name: 'portal_evm_get_ohlc',
-          arguments: {
-            network: 'base-mainnet',
-            pool_address: context.aerodromeSlipstreamPool,
-            source: 'aerodrome_slipstream_swap',
-            duration: '1h',
-            interval: '5m',
-          },
+      const [uniswapV2Result, aerodromeSlipstreamResult, uniswapV4Result] = await Promise.all([
+        callToolWithRetry(client, 'portal_evm_get_ohlc', {
+          network: 'base-mainnet',
+          pool_address: context.baseUniswapV2Pool,
+          source: 'uniswap_v2_swap',
+          duration: '1h',
+          interval: '5m',
+          mode: 'fast',
+          price_in: 'auto',
+          include_recent_trades: true,
+          recent_trades_limit: 3,
         }),
-        client.callTool({
-          name: 'portal_evm_get_ohlc',
-          arguments: {
-            network: 'base-mainnet',
-            source: 'uniswap_v4_swap',
-            pool_id: context.baseUniswapV4PoolId,
-            duration: '1h',
-            interval: '5m',
-          },
+        callToolWithRetry(client, 'portal_evm_get_ohlc', {
+          network: 'base-mainnet',
+          pool_address: context.aerodromeSlipstreamPool,
+          source: 'aerodrome_slipstream_swap',
+          duration: '1h',
+          interval: '5m',
+          mode: 'fast',
+          price_in: 'auto',
+          include_recent_trades: true,
+          recent_trades_limit: 3,
+        }),
+        callToolWithRetry(client, 'portal_evm_get_ohlc', {
+          network: 'base-mainnet',
+          source: 'uniswap_v4_swap',
+          pool_id: context.baseUniswapV4PoolId,
+          duration: '1h',
+          interval: '5m',
+          mode: 'deep',
+          price_in: 'auto',
+          include_recent_trades: true,
+          recent_trades_limit: 3,
         }),
       ])
 
-      const aerodromeSlipstreamData = extractJson(getText(aerodromeSlipstreamResult))
+      const uniswapV2Data = uniswapV2Result.data
+      const uniswapV2Candles = Array.isArray(uniswapV2Data.ohlc) ? uniswapV2Data.ohlc : []
+      assert(uniswapV2Data.summary?.source === 'uniswap_v2_swap', 'Expected Uniswap v2-style OHLC source')
+      assert(uniswapV2Data.summary?.source_family === 'uniswap_v2_style_swap', 'Expected Uniswap v2-style source family')
+      assert(uniswapV2Data.summary?.price_method === 'execution_ratio', 'Expected execution_ratio price method for Uniswap v2-style swaps')
+      assert(uniswapV2Data.summary?.mode === 'fast', 'Expected fast mode for Uniswap v2-style OHLC')
+      assert(uniswapV2Data.summary?.volume_available === true, 'Expected volume_available=true for Uniswap v2-style swaps')
+      assert(uniswapV2Candles.length > 0, 'Expected Uniswap v2-style candles')
+      assert(Array.isArray(uniswapV2Data.recent_trades) && uniswapV2Data.recent_trades.length > 0, 'Expected recent_trades for Uniswap v2-style OHLC')
+      expectWindowMetadata(uniswapV2Data, 'portal_evm_get_ohlc uniswap v2-style swap')
+      expectGapDiagnostics(uniswapV2Data, 'portal_evm_get_ohlc uniswap v2-style swap')
+      expectPresentation(uniswapV2Data, 'portal_evm_get_ohlc uniswap v2-style swap', { chartDataKey: 'ohlc', tableId: 'ohlc' })
+
+      const aerodromeSlipstreamData = aerodromeSlipstreamResult.data
       const aerodromeSlipstreamCandles = Array.isArray(aerodromeSlipstreamData.ohlc) ? aerodromeSlipstreamData.ohlc : []
       assert(aerodromeSlipstreamData.summary?.source === 'aerodrome_slipstream_swap', 'Expected Aerodrome Slipstream OHLC source')
       assert(aerodromeSlipstreamData.summary?.source_family === 'aerodrome_slipstream', 'Expected Aerodrome Slipstream source family')
       assert(aerodromeSlipstreamData.summary?.price_method === 'sqrt_price_x96', 'Expected sqrt_price_x96 price method for Slipstream')
+      assert(aerodromeSlipstreamData.summary?.mode === 'fast', 'Expected fast mode for Slipstream OHLC')
       assert(aerodromeSlipstreamData.summary?.volume_available === true, 'Expected volume_available=true for Slipstream swaps')
       assert(aerodromeSlipstreamCandles.length > 0, 'Expected Aerodrome Slipstream candles')
+      assert(Array.isArray(aerodromeSlipstreamData.recent_trades), 'Expected recent_trades for Slipstream OHLC')
       expectWindowMetadata(aerodromeSlipstreamData, 'portal_evm_get_ohlc aerodrome slipstream')
       expectGapDiagnostics(aerodromeSlipstreamData, 'portal_evm_get_ohlc aerodrome slipstream')
       expectPresentation(aerodromeSlipstreamData, 'portal_evm_get_ohlc aerodrome slipstream', { chartDataKey: 'ohlc', tableId: 'ohlc' })
 
-      const uniswapV4Data = extractJson(getText(uniswapV4Result))
+      const uniswapV4Data = uniswapV4Result.data
       const uniswapV4Candles = Array.isArray(uniswapV4Data.ohlc) ? uniswapV4Data.ohlc : []
       assert(uniswapV4Data.summary?.source === 'uniswap_v4_swap', 'Expected Uniswap v4 OHLC source')
       assert(uniswapV4Data.summary?.source_family === 'uniswap_v4', 'Expected Uniswap v4 source family')
       assert(uniswapV4Data.summary?.price_method === 'sqrt_price_x96', 'Expected sqrt_price_x96 price method for Uniswap v4')
+      assert(uniswapV4Data.summary?.mode === 'deep', 'Expected deep mode for Uniswap v4 OHLC')
       assert(uniswapV4Data.summary?.volume_available === true, 'Expected volume_available=true for Uniswap v4 swaps')
       assert(uniswapV4Data.summary?.pool_id === context.baseUniswapV4PoolId, 'Expected the requested Uniswap v4 pool id in summary')
       assert(uniswapV4Data.summary?.pool_manager_address === BASE_UNISWAP_V4_POOL_MANAGER, 'Expected the official Base PoolManager address')
+      assert(uniswapV4Data.summary?.currency0_address !== undefined, 'Expected resolved Uniswap v4 currency0 metadata')
+      assert(uniswapV4Data.summary?.currency1_address !== undefined, 'Expected resolved Uniswap v4 currency1 metadata')
+      assert(uniswapV4Data.summary?.price_in_resolved !== undefined, 'Expected resolved Uniswap v4 price orientation')
+      assert(Array.isArray(uniswapV4Data.recent_trades), 'Expected recent_trades for Uniswap v4 OHLC')
+      assert(uniswapV4Data.market_context?.pool?.metadata_resolved_from_initialize === true, 'Expected Initialize-derived v4 metadata resolution')
       assert(uniswapV4Candles.length > 0, 'Expected Uniswap v4 candles')
       expectWindowMetadata(uniswapV4Data, 'portal_evm_get_ohlc uniswap v4')
       expectGapDiagnostics(uniswapV4Data, 'portal_evm_get_ohlc uniswap v4')
@@ -635,6 +638,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     validate: (text) => {
       const data = extractJson(text)
       expectItems(text, 'portal_solana_query_transactions', 1)
+      expectCompactDefault(data, 'portal_solana_query_transactions')
       expectWindowMetadata(data, 'portal_solana_query_transactions')
       expectOrdering(data, 'portal_solana_query_transactions')
     },
@@ -667,16 +671,21 @@ export const TOOL_SPECS: ToolSpec[] = [
     validate: (text) => {
       const data = extractJson(text)
       expectItems(text, 'portal_bitcoin_query_transactions', 1)
+      expectCompactDefault(data, 'portal_bitcoin_query_transactions')
       expectWindowMetadata(data, 'portal_bitcoin_query_transactions')
       expectOrdering(data, 'portal_bitcoin_query_transactions')
     },
     validateFollowUp: async (_text, client) => {
-      const ioResult = await client.callTool({
-        name: 'portal_bitcoin_query_transactions',
-        arguments: { network: 'bitcoin-mainnet', timeframe: '1h', limit: 1, include_inputs: true, include_outputs: true },
+      const ioResult = await callToolWithRetry(client, 'portal_bitcoin_query_transactions', {
+        network: 'bitcoin-mainnet',
+        timeframe: '1h',
+        limit: 1,
+        include_inputs: true,
+        include_outputs: true,
       })
-      const data = extractJson(getText(ioResult))
+      const data = ioResult.data
       const items = getItems(data)
+      expectCompactDefault(data, 'portal_bitcoin_query_transactions io')
       assert(items[0].inputs !== undefined, 'Expected inline inputs')
       assert(items[0].outputs !== undefined, 'Expected inline outputs')
       expectWindowMetadata(data, 'portal_bitcoin_query_transactions io')
@@ -709,6 +718,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       const items = getItems(data)
       assert(items.length > 0, 'Expected Substrate event rows')
       assert(items[0].event_name === 'ParaInclusion.CandidateIncluded' || items[0].name === 'ParaInclusion.CandidateIncluded', 'Expected CandidateIncluded events')
+      expectCompactDefault(data, 'portal_substrate_query_events')
       assert(items[0].extrinsic !== undefined, 'Expected inline extrinsic context on Substrate events')
       assert(items[0].call !== undefined, 'Expected inline call context on Substrate events')
       expectWindowMetadata(data, 'portal_substrate_query_events')
@@ -732,6 +742,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       const items = getItems(data)
       assert(items.length > 0, 'Expected Substrate call rows')
       assert(items[0].call_name === 'ParaInherent.enter' || items[0].name === 'ParaInherent.enter', 'Expected ParaInherent.enter calls')
+      expectCompactDefault(data, 'portal_substrate_query_calls')
       assert(items[0].extrinsic !== undefined, 'Expected inline extrinsic context on Substrate calls')
       assert(Array.isArray(items[0].events) && items[0].events.length > 0, 'Expected emitted events on Substrate calls')
       expectWindowMetadata(data, 'portal_substrate_query_calls')
@@ -763,6 +774,7 @@ export const TOOL_SPECS: ToolSpec[] = [
     validate: (text) => {
       const data = extractJson(text)
       expectItems(text, 'portal_hyperliquid_query_fills', 1)
+      expectCompactDefault(data, 'portal_hyperliquid_query_fills')
       expectWindowMetadata(data, 'portal_hyperliquid_query_fills')
       expectOrdering(data, 'portal_hyperliquid_query_fills')
     },

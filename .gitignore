@@ -61,10 +61,10 @@ examples/
 cache/
 data/
 
-# Markdown files (except README)
+# Markdown files (except selected public docs)
 *.md
 !README.md
-!V0_7_7_SCOPE.md
+!CHANGELOG.md
 !LICENSE.md
 !CONTRIBUTING.md
 
@@ -75,6 +75,7 @@ data/
 
 # Claude project files (local configuration)
 .claude/
+.agents/
 
 # Package manager lock files (keep package-lock.json, ignore others)
 yarn.lock
@@ -91,4 +92,6 @@ coverage/
 
 # Local dev files
 .mcp.json
+mcp-config.json
 charts-demo.html
+V*_SCOPE.md

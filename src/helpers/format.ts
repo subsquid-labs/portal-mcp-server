@@ -37,6 +37,267 @@ export interface ResponseMetadata {
   has_more?: boolean
 }
 
+type RecordLike = Record<string, unknown>
+
+const DISPLAY_NAME_OVERRIDES: Record<string, string> = {
+  'base-mainnet': 'Base',
+  'ethereum-mainnet': 'Ethereum',
+  'optimism-mainnet': 'Optimism',
+  'arbitrum-one': 'Arbitrum',
+  'solana-mainnet': 'Solana',
+  'bitcoin-mainnet': 'Bitcoin',
+  'hyperliquid-fills': 'Hyperliquid',
+  'hyperliquid-replica-cmds': 'Hyperliquid Replica Commands',
+  portal_list_networks: 'Find Networks',
+  portal_get_network_info: 'Network Info',
+  portal_get_head: 'Network Head',
+  portal_get_recent_activity: 'Recent Activity',
+  portal_get_wallet_summary: 'Wallet Summary',
+  portal_get_time_series: 'Time Series',
+  portal_evm_query_transactions: 'EVM Transactions',
+  portal_evm_query_logs: 'EVM Logs',
+  portal_evm_query_token_transfers: 'Token Transfers',
+  portal_evm_get_contract_activity: 'Contract Activity',
+  portal_evm_get_analytics: 'EVM Analytics',
+  portal_evm_get_ohlc: 'EVM OHLC',
+  portal_solana_query_transactions: 'Solana Transactions',
+  portal_solana_query_instructions: 'Solana Instructions',
+  portal_solana_get_analytics: 'Solana Analytics',
+  portal_bitcoin_query_transactions: 'Bitcoin Transactions',
+  portal_bitcoin_get_analytics: 'Bitcoin Analytics',
+  portal_substrate_query_events: 'Substrate Events',
+  portal_substrate_query_calls: 'Substrate Calls',
+  portal_substrate_get_analytics: 'Substrate Analytics',
+  portal_hyperliquid_query_fills: 'Hyperliquid Fills',
+  portal_hyperliquid_get_analytics: 'Hyperliquid Analytics',
+  portal_hyperliquid_get_ohlc: 'Hyperliquid OHLC',
+  uniswap_v2_swap: 'Uniswap v2 swap',
+  uniswap_v3_swap: 'Uniswap v3 swap',
+  uniswap_v4_swap: 'Uniswap v4 swap',
+  aerodrome_slipstream_swap: 'Aerodrome Slipstream swap',
+  uniswap_v2_sync: 'Uniswap v2 Sync',
+  transaction_count: 'Transaction count',
+  unique_addresses: 'Unique addresses',
+  avg_gas_price: 'Average gas price',
+  gas_used: 'Gas used',
+  block_utilization: 'Block utilization',
+  transactions_per_block: 'Transactions per block',
+  block_size_bytes: 'Block size',
+  fees_btc: 'Fees',
+  fill_count: 'Fill count',
+  token0: 'Token 0',
+  token1: 'Token 1',
+  evm: 'EVM',
+  ohlc: 'OHLC',
+  btc: 'BTC',
+  eth: 'ETH',
+  usd: 'USD',
+}
+
+function isRecord(value: unknown): value is RecordLike {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : []
+}
+
+function getByPath(value: unknown, path?: string): unknown {
+  if (!path) return value
+
+  const tokens = path
+    .replace(/\[(\d+)\]/g, '.$1')
+    .split('.')
+    .map((token) => token.trim())
+    .filter(Boolean)
+
+  let current: unknown = value
+  for (const token of tokens) {
+    if (!isRecord(current) && !Array.isArray(current)) {
+      return undefined
+    }
+    current = (current as Record<string, unknown>)[token]
+  }
+
+  return current
+}
+
+function capitalizeWord(word: string): string {
+  const lower = word.toLowerCase()
+  if (DISPLAY_NAME_OVERRIDES[lower]) return DISPLAY_NAME_OVERRIDES[lower]
+  if (['api', 'btc', 'dex', 'eth', 'evm', 'ohlc', 'rpc', 'sol', 'sql', 'ui', 'usd', 'usdc', 'usdt', 'vm'].includes(lower)) {
+    return lower.toUpperCase()
+  }
+  if (/^[0-9]+[mhdw]$/.test(lower)) return lower
+  return lower.charAt(0).toUpperCase() + lower.slice(1)
+}
+
+function humanizeLabel(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  const lower = trimmed.toLowerCase()
+  if (DISPLAY_NAME_OVERRIDES[lower]) return DISPLAY_NAME_OVERRIDES[lower]
+  if (/^0x[0-9a-f]{40,64}$/i.test(trimmed)) return trimmed
+
+  const normalized = trimmed
+    .replace(/[-_]+/g, ' ')
+    .replace(/\bmainnet\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) return trimmed
+  return normalized.split(' ').map((word) => capitalizeWord(word)).join(' ')
+}
+
+function buildChatAnswer(payload: RecordLike): string | undefined {
+  if (typeof payload._summary === 'string' && payload._summary.trim()) {
+    return payload._summary.trim()
+  }
+
+  const headline = isRecord(payload._ui) && isRecord(payload._ui.headline) ? payload._ui.headline : undefined
+  const title = typeof headline?.title === 'string' ? headline.title : undefined
+  const subtitle = typeof headline?.subtitle === 'string' ? headline.subtitle : undefined
+  if (title && subtitle) return `${title}: ${subtitle}`
+  if (title) return title
+  if (subtitle) return subtitle
+
+  if (typeof payload.number === 'number') {
+    return `Current value: ${payload.number.toLocaleString('en-US')}.`
+  }
+
+  if (typeof payload.value === 'number' || typeof payload.value === 'string') {
+    return `Current value: ${String(payload.value)}.`
+  }
+
+  if (isRecord(payload.head) && typeof payload.head.number === 'number') {
+    return `Current head is ${payload.head.number.toLocaleString('en-US')}.`
+  }
+
+  if (Array.isArray(payload.items)) {
+    return `Returned ${payload.items.length.toLocaleString('en-US')} result${payload.items.length === 1 ? '' : 's'}.`
+  }
+
+  const meta = isRecord(payload._meta) ? payload._meta : undefined
+  const summary = isRecord(payload.summary) ? payload.summary : undefined
+  const toolContract = isRecord(payload._tool_contract) ? payload._tool_contract : undefined
+  const network = humanizeLabel(
+    meta?.network
+    ?? meta?.dataset
+    ?? summary?.network
+    ?? payload.network
+    ?? payload.display_name,
+  )
+  const toolName = typeof toolContract?.name === 'string' ? toolContract.name : undefined
+  const toolLabel = humanizeLabel(toolName?.replace(/^portal_/, ''))
+  if (toolLabel && network) {
+    return `${toolLabel} for ${network}.`
+  }
+  if (toolLabel) {
+    return toolLabel
+  }
+
+  return undefined
+}
+
+function buildDisplay(payload: RecordLike): RecordLike | undefined {
+  const headline = isRecord(payload._ui) && isRecord(payload._ui.headline) ? payload._ui.headline : undefined
+  const summary = isRecord(payload.summary) ? payload.summary : undefined
+  const meta = isRecord(payload._meta) ? payload._meta : undefined
+  const toolContract = isRecord(payload._tool_contract) ? payload._tool_contract : undefined
+
+  const title =
+    (typeof headline?.title === 'string' && headline.title)
+    || humanizeLabel(summary?.pair_label)
+    || humanizeLabel(summary?.venue_label)
+    || humanizeLabel(summary?.metric)
+    || humanizeLabel(toolContract?.name)
+  const resolvedNetwork =
+    humanizeLabel(meta?.network)
+    || humanizeLabel(meta?.dataset)
+    || humanizeLabel(summary?.network)
+    || humanizeLabel(payload.network)
+    || humanizeLabel(payload.display_name)
+
+  const subtitle =
+    (typeof headline?.subtitle === 'string' && headline.subtitle)
+    || [
+      resolvedNetwork,
+      humanizeLabel(summary?.venue_label),
+      typeof summary?.interval === 'string' ? summary.interval : undefined,
+      typeof summary?.duration === 'string' ? summary.duration : undefined,
+    ].filter((value): value is string => Boolean(value)).join(' • ')
+
+  const display: RecordLike = {}
+  if (title) display.title = title
+  if (subtitle) display.subtitle = subtitle
+
+  if (resolvedNetwork) display.network = resolvedNetwork
+
+  const vmValues = asArray<string>(toolContract?.vm).filter((value) => value !== 'cross-chain')
+  if (vmValues.length === 1) {
+    const vm = humanizeLabel(vmValues[0])
+    if (vm) display.vm = vm
+  }
+
+  const focus =
+    humanizeLabel(summary?.pair_label)
+    || humanizeLabel(summary?.metric)
+    || humanizeLabel(summary?.base_token)
+    || (typeof payload.address === 'string' ? payload.address : undefined)
+  if (focus) display.focus = focus
+
+  const source =
+    humanizeLabel(summary?.venue_label)
+    || humanizeLabel(summary?.source)
+  if (source) display.source = source
+
+  return Object.keys(display).length > 0 ? display : undefined
+}
+
+function buildNextSteps(payload: RecordLike): RecordLike | undefined {
+  const ui = isRecord(payload._ui) ? payload._ui : undefined
+  const actions = asArray<RecordLike>(ui?.follow_up_actions)
+    .slice(0, 6)
+    .map((action) => ({
+      label: typeof action.label === 'string' ? action.label : 'Continue',
+      ...(typeof action.intent === 'string' ? { intent: action.intent } : {}),
+      ...(typeof action.target === 'string' ? { target: action.target } : {}),
+    }))
+
+  const pagination = isRecord(payload._pagination) ? payload._pagination : undefined
+  if (actions.length === 0 && typeof pagination?.next_cursor !== 'string') {
+    return undefined
+  }
+
+  return {
+    ...(actions.length > 0 ? { actions } : {}),
+    ...(typeof pagination?.next_cursor === 'string'
+      ? {
+          continuation: {
+            available: true,
+            cursor_path: '_pagination.next_cursor',
+            note: 'Use the next cursor to continue with older or additional results.',
+          },
+        }
+      : {}),
+  }
+}
+
+function buildTechnicalDetails(payload: RecordLike): RecordLike | undefined {
+  const technicalDetails: RecordLike = {}
+
+  if (payload._meta !== undefined) technicalDetails.meta = payload._meta
+  if (payload._freshness !== undefined) technicalDetails.freshness = payload._freshness
+  if (payload._coverage !== undefined) technicalDetails.coverage = payload._coverage
+  if (payload._execution !== undefined) technicalDetails.execution = payload._execution
+  if (payload._pagination !== undefined) technicalDetails.pagination = payload._pagination
+  if (payload._ordering !== undefined) technicalDetails.ordering = payload._ordering
+  if (payload._tool_contract !== undefined) technicalDetails.tool_contract = payload._tool_contract
+
+  return Object.keys(technicalDetails).length > 0 ? technicalDetails : undefined
+}
+
 const TRUNCATABLE_ARRAY_KEYS = new Set([
   'items',
   'time_series',
@@ -318,13 +579,49 @@ export function formatResult(
     if (options?.ui !== undefined) {
       payloadRecord._ui = options.ui
     }
+
+    const answer = buildChatAnswer(payloadRecord)
+    const display = buildDisplay(payloadRecord)
+    const nextSteps = buildNextSteps(payloadRecord)
+    if (answer) payloadRecord.answer = answer
+    if (display) payloadRecord.display = display
+    if (nextSteps) payloadRecord.next_steps = nextSteps
+
     payloadRecord._llm = buildLlmHints(payloadRecord, options?.llm)
     if (notices.length === 1) {
       payloadRecord._notice = notices[0]
     } else if (notices.length > 1) {
       payloadRecord._notices = notices
     }
-    responsePayload = payloadRecord
+
+    const technicalDetails = buildTechnicalDetails(payloadRecord)
+    const orderedPayload: Record<string, unknown> = {}
+
+    if (answer) {
+      orderedPayload.answer = answer
+    }
+    if (display) {
+      orderedPayload.display = display
+    }
+    if (nextSteps) {
+      orderedPayload.next_steps = nextSteps
+    }
+
+    for (const [key, value] of Object.entries(payloadRecord)) {
+      if (key.startsWith('_')) continue
+      orderedPayload[key] = value
+    }
+
+    if (technicalDetails) {
+      orderedPayload.technical_details = technicalDetails
+    }
+
+    for (const [key, value] of Object.entries(payloadRecord)) {
+      if (!key.startsWith('_')) continue
+      orderedPayload[key] = value
+    }
+
+    responsePayload = orderedPayload
   }
 
   try {

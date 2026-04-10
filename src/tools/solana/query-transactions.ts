@@ -20,7 +20,7 @@ import {
   buildSolanaTransactionFields,
 } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
-import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
+import { applyResponseFormat, resolveDefaultResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getValidationNotices, validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -130,7 +130,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         .default(false)
         .describe('Include block rewards (validator staking rewards). Filter by pubkey using mentions_account.'),
       limit: z.number().optional().default(50).describe('Max transactions'),
-      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (aggregated stats, ~90% smaller), 'compact' (signature+fee+error only, ~70% smaller), 'full' (all fields)"),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().describe("Response format: defaults to 'compact' for chat-friendly output, or stays 'full' when inline instruction, balance, log, or reward context is requested. Use 'summary' for aggregate stats."),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
     async ({
@@ -190,6 +190,14 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         include_rewards = paginationCursor.request.include_rewards
         response_format = paginationCursor.request.response_format
       }
+      const effectiveResponseFormat = resolveDefaultResponseFormat(response_format, {
+        preserveFullIf:
+          include_instructions
+          || include_balances
+          || include_token_balances
+          || include_logs
+          || include_rewards,
+      })
 
       const resolvedBlocks = paginationCursor
         ? {
@@ -321,7 +329,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
               include_token_balances,
               include_logs,
               include_rewards,
-              response_format: response_format as ResponseFormat,
+              response_format: effectiveResponseFormat,
             },
             window_from_block: resolvedFromBlock,
             window_to_block: endBlock,
@@ -330,7 +338,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
           })
         : undefined
 
-      const formattedData = applyResponseFormat(page.pageItems, response_format as ResponseFormat, 'solana_transactions')
+      const formattedData = applyResponseFormat(page.pageItems, effectiveResponseFormat, 'solana_transactions')
       const notices = [...getTimestampWindowNotices(resolvedBlocks), ...getValidationNotices(validation)]
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
@@ -362,7 +370,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
           freshness,
           coverage,
           execution: buildExecutionMetadata({
-            response_format,
+            response_format: effectiveResponseFormat,
             finalized_only,
             limit,
             from_block: resolvedFromBlock,

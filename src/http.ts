@@ -1,7 +1,10 @@
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
+import { randomUUID } from 'node:crypto'
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
+import { clientRequestsTotal } from './metrics.js'
+import { getObservabilityStatus } from './observability.js'
 import { register } from './metrics.js'
 import { createPortalServer } from './server.js'
 import { npmVersion } from './version.js'
@@ -12,8 +15,26 @@ import { npmVersion } from './version.js'
 
 const PORT = Number(process.env.PORT) || 3000
 
+function readHeader(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name]
+  if (typeof value === 'string') return value
+  return Array.isArray(value) ? value[0] : undefined
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
+  const requestId = readHeader(req, 'x-request-id') || randomUUID()
+  res.setHeader('x-request-id', requestId)
+
+  const userAgent = readHeader(req, 'user-agent')
+  const clientName =
+    readHeader(req, 'x-mcp-client-name')
+    || readHeader(req, 'x-client-name')
+    || 'unknown'
+  const clientVersion =
+    readHeader(req, 'x-mcp-client-version')
+    || readHeader(req, 'x-client-version')
+    || 'unknown'
 
   // Health check endpoint
   // NOTE: Do not expose PORTAL_URL here — it may contain a sensitive token
@@ -23,6 +44,7 @@ const server = createServer(async (req, res) => {
       JSON.stringify({
         status: 'ok',
         version: npmVersion,
+        observability: getObservabilityStatus(),
       }),
     )
     return
@@ -39,7 +61,22 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/') {
     if (req.method === 'POST') {
       try {
-        const mcpServer = createPortalServer()
+        clientRequestsTotal.inc({
+          transport: 'http',
+          client_name: clientName,
+          client_version: clientVersion,
+        })
+
+        const mcpServer = createPortalServer({
+          transport: 'http',
+          requestId,
+          clientName,
+          clientVersion,
+          sessionId: readHeader(req, 'x-mcp-session-id') || readHeader(req, 'x-session-id'),
+          userQuery: readHeader(req, 'x-mcp-user-query'),
+          userAgent,
+          forwardedFor: readHeader(req, 'x-forwarded-for'),
+        })
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
         })

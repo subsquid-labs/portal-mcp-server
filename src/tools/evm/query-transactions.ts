@@ -18,7 +18,7 @@ import {
 import { formatResult } from '../../helpers/format.js'
 import { formatTimestamp, formatTransactionFields } from '../../helpers/formatting.js'
 import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { type ResponseFormat, applyResponseFormat } from '../../helpers/response-modes.js'
+import { type ResponseFormat, applyResponseFormat, resolveDefaultResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import {
@@ -191,9 +191,8 @@ export function registerQueryTransactionsTool(server: McpServer) {
       response_format: z
         .enum(['full', 'compact', 'summary'])
         .optional()
-        .default('full')
         .describe(
-          "Response format: 'summary' (~90% smaller, aggregated stats), 'compact' (~60% smaller, strips input/nonce), 'full' (complete data). Use 'summary' for counting/profiling.",
+          "Response format: defaults to 'compact' for chat-friendly output, or stays 'full' when inline logs, traces, or state diffs are requested. Use 'summary' for counting or profiling.",
         ),
       include_logs: z.boolean().optional().default(false).describe('Include logs emitted by transactions'),
       include_traces: z.boolean().optional().default(false).describe('Include traces for transactions'),
@@ -266,6 +265,9 @@ export function registerQueryTransactionsTool(server: McpServer) {
         include_state_diffs = paginationCursor.request.include_state_diffs
         include_l2_fields = paginationCursor.request.include_l2_fields
       }
+      const effectiveResponseFormat = resolveDefaultResponseFormat(response_format, {
+        preserveFullIf: include_logs || include_traces || include_state_diffs,
+      })
 
       // Resolve timeframe or use explicit blocks
       const resolvedBlocks = paginationCursor
@@ -373,10 +375,19 @@ export function registerQueryTransactionsTool(server: McpServer) {
 
       const cursorSkip = paginationCursor?.skip_inclusive_block ?? 0
       const fetchLimit = limit + cursorSkip + 1
+      const adaptiveChunkSize = hasFilters
+        ? 500
+        : Math.max(
+            10,
+            Math.min(
+              40,
+              fetchLimit * (effectiveResponseFormat === 'summary' ? 4 : field_preset === 'minimal' ? 5 : 3),
+            ),
+          )
       const results = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
         itemKeys: ['transactions'],
         limit: fetchLimit,
-        chunkSize: hasFilters ? 500 : 100,
+        chunkSize: adaptiveChunkSize,
       })
 
       const allTxs = sortTransactions(flattenTransactionsWithBlockContext(results) as EvmTransactionItem[])
@@ -407,7 +418,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
               ...(first_nonce !== undefined ? { first_nonce } : {}),
               ...(last_nonce !== undefined ? { last_nonce } : {}),
               field_preset,
-              response_format: response_format as ResponseFormat,
+              response_format: effectiveResponseFormat,
               include_logs,
               include_traces,
               include_state_diffs,
@@ -421,7 +432,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
         : undefined
 
       // Apply response format (summary/compact/full)
-      const formattedData = applyResponseFormat(page.pageItems, response_format || 'full', 'transactions')
+      const formattedData = applyResponseFormat(page.pageItems, effectiveResponseFormat, 'transactions')
       const notices = [...getTimestampWindowNotices(resolvedBlocks), ...getValidationNotices(validation)]
       if (nextCursor) {
         notices.push('Older results are available via _pagination.next_cursor.')
@@ -442,7 +453,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       })
 
       const message =
-        response_format === 'summary'
+        effectiveResponseFormat === 'summary'
           ? `Transaction summary for ${page.pageItems.length} transactions${page.hasMore ? ' (latest preview page)' : ''}`
           : `Retrieved ${page.pageItems.length} transactions${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
@@ -457,7 +468,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
         freshness,
         coverage,
         execution: buildExecutionMetadata({
-          response_format,
+          response_format: effectiveResponseFormat,
           finalized_only,
           limit,
           from_block: resolvedFromBlock,
@@ -468,7 +479,10 @@ export function registerQueryTransactionsTool(server: McpServer) {
             include_logs || include_traces || include_state_diffs
               ? 'Expanded transaction context was requested with include flags.'
               : `Using ${field_preset} field preset.`,
-          ],
+            !hasFilters && adaptiveChunkSize < 100
+              ? `Used smaller ${adaptiveChunkSize}-block recent chunks to keep unfiltered live previews responsive.`
+              : undefined,
+          ].filter((note): note is string => Boolean(note)),
           normalized_output: true,
         }),
         metadata: {

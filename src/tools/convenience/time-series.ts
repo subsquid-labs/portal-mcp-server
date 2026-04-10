@@ -89,6 +89,13 @@ const SOLANA_GENERIC_TIME_SERIES_CHUNK_SIZE: Partial<Record<TimeSeriesMetric, nu
   unique_addresses: 1000,
 }
 
+const EVM_GENERIC_TIME_SERIES_CHUNK_SIZE: Partial<Record<TimeSeriesMetric, number>> = {
+  transaction_count: 250,
+  transactions_per_block: 250,
+  unique_addresses: 150,
+}
+
+const MIN_EVM_GENERIC_CHUNK_SIZE = 50
 const MIN_SOLANA_GENERIC_CHUNK_SIZE = 250
 const SOLANA_GENERIC_MAX_BYTES = 150 * 1024 * 1024
 
@@ -1417,14 +1424,16 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       }
 
       // Chunk large ranges to avoid Portal API size limits
-      const totalBlocks = toBlock - fromBlock
       const hasTxData = metric === 'transaction_count' || metric === 'transactions_per_block' || metric === 'unique_addresses'
       const initialChunkSize =
         chainType === 'solana' && hasTxData
           ? (SOLANA_GENERIC_TIME_SERIES_CHUNK_SIZE[metric] ?? 1000)
+          : chainType === 'evm' && hasTxData
+            ? (address ? 750 : (EVM_GENERIC_TIME_SERIES_CHUNK_SIZE[metric] ?? 250))
           : hasTxData
             ? 5000
             : 10000
+      let adaptiveChunkReduced = false
       const sortResults = (items: TimeSeriesBlock[]) =>
         items.sort((left, right) => (getBlockNumber(left) || 0) - (getBlockNumber(right) || 0))
 
@@ -1436,6 +1445,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         const results: TimeSeriesBlock[] = []
         let currentFrom = rangeFrom
         let chunkSize = initialChunkSize
+        let chunkSizeReduced = false
 
         while (currentFrom <= rangeTo) {
           const plannedTo = Math.min(currentFrom + chunkSize - 1, rangeTo)
@@ -1459,14 +1469,33 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             ) as TimeSeriesBlock[]
           } catch (err) {
             const message = err instanceof Error ? err.message : String(err)
+            const shouldReduceChunkSize =
+              hasTxData
+              && (
+                message.includes('Response too large')
+                || message.toLowerCase().includes('timed out')
+                || message.toLowerCase().includes('timeout')
+              )
 
             if (
               chainType === 'solana' &&
-              hasTxData &&
-              message.includes('Response too large') &&
+              shouldReduceChunkSize &&
               chunkSize > MIN_SOLANA_GENERIC_CHUNK_SIZE
             ) {
               chunkSize = Math.max(MIN_SOLANA_GENERIC_CHUNK_SIZE, Math.floor(chunkSize / 2))
+              chunkSizeReduced = true
+              adaptiveChunkReduced = true
+              continue
+            }
+
+            if (
+              chainType === 'evm' &&
+              shouldReduceChunkSize &&
+              chunkSize > MIN_EVM_GENERIC_CHUNK_SIZE
+            ) {
+              chunkSize = Math.max(MIN_EVM_GENERIC_CHUNK_SIZE, Math.floor(chunkSize / 2))
+              chunkSizeReduced = true
+              adaptiveChunkReduced = true
               continue
             }
 
@@ -1555,6 +1584,10 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         results = [...extraResults, ...results]
         sortResults(results)
         backfillAttempts++
+      }
+
+      if (adaptiveChunkReduced) {
+        notices.push(`Reduced ${chainType.toUpperCase()} chunk size while building ${metric} buckets to keep the response within live Portal limits.`)
       }
 
       const firstBlock = results[0] as TimeSeriesBlock

@@ -8,7 +8,7 @@ import { createPortalServer } from './server.js'
 // SQD Portal MCP Server - Node.js Entry Point
 // ============================================================================
 
-const server = createPortalServer()
+const server = createPortalServer({ transport: 'stdio' })
 
 const transport = new StdioServerTransport()
 await server.connect(transport)

@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 import { toolCallDuration, toolCallsActive, toolCallsTotal } from './metrics.js'
+import { createInvocationId, recordToolOutcome, type RuntimeRequestContext } from './observability.js'
 import { registerSchemaResource } from './resources/schema.js'
 import { registerAllTools } from './tools/index.js'
 import { npmVersion } from './version.js'
@@ -9,7 +10,7 @@ import { npmVersion } from './version.js'
 // Server Factory
 // ============================================================================
 
-export function createPortalServer(): McpServer {
+export function createPortalServer(runtimeContext: RuntimeRequestContext = { transport: 'stdio' }): McpServer {
   const server = new McpServer({
     name: 'sqd-portal-mcp-server',
     version: npmVersion,
@@ -24,18 +25,37 @@ export function createPortalServer(): McpServer {
     const toolName = args[0] as string
 
     args[args.length - 1] = async (...handlerArgs: any[]) => {
-      const end = toolCallDuration.startTimer({ tool: toolName })
-      toolCallsActive.inc({ tool: toolName })
+      const invocationId = createInvocationId()
+      const startedAt = Date.now()
+      const end = toolCallDuration.startTimer({ tool: toolName, transport: runtimeContext.transport })
+      toolCallsActive.inc({ tool: toolName, transport: runtimeContext.transport })
+      const toolArgs = (handlerArgs[0] && typeof handlerArgs[0] === 'object' ? handlerArgs[0] : {}) as Record<string, unknown>
       try {
         const result = await handler(...handlerArgs)
-        toolCallsTotal.inc({ tool: toolName, status: 'success' })
+        toolCallsTotal.inc({ tool: toolName, status: 'success', transport: runtimeContext.transport, server_version: npmVersion })
+        recordToolOutcome({
+          toolName,
+          args: toolArgs,
+          result,
+          durationMs: Date.now() - startedAt,
+          runtime: runtimeContext,
+          invocationId,
+        })
         return result
       } catch (error) {
-        toolCallsTotal.inc({ tool: toolName, status: 'error' })
+        toolCallsTotal.inc({ tool: toolName, status: 'error', transport: runtimeContext.transport, server_version: npmVersion })
+        recordToolOutcome({
+          toolName,
+          args: toolArgs,
+          error,
+          durationMs: Date.now() - startedAt,
+          runtime: runtimeContext,
+          invocationId,
+        })
         throw error
       } finally {
         end()
-        toolCallsActive.dec({ tool: toolName })
+        toolCallsActive.dec({ tool: toolName, transport: runtimeContext.transport })
       }
     }
 

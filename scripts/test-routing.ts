@@ -4,8 +4,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 import { getToolContract } from '../src/helpers/tool-ux.ts'
-import { LEGACY_TOOL_NAMES, assert } from './tool-manifest.ts'
+import { LEGACY_TOOL_NAMES } from './tool-manifest.ts'
 import { ROUTING_EVAL_CASES } from './routing-manifest.ts'
+import { assert } from './test-helpers.ts'
 
 type ListedTool = {
   name: string
@@ -337,6 +338,7 @@ function scoreTool(
   phraseIdf: Map<string, number>,
 ): number {
   let score = 0
+  const promptLower = prompt.toLowerCase()
 
   for (const token of promptTokens) {
     const weight = profile.tokenWeights.get(token)
@@ -362,6 +364,14 @@ function scoreTool(
   const blockPrompt = promptTokens.some((token) => ['block', 'blocks', 'height', 'slot', 'slots'].includes(token))
   const timestampResolvePrompt =
     promptTokens.includes('timestamp') && promptTokens.some((token) => ['block', 'height', 'match', 'matches'].includes(token))
+  const simpleHeadPrompt =
+    !debugPrompt
+    && !timestampResolvePrompt
+    && (
+      /\bwhat(?:'s| is)? (?:the )?(?:current |latest )?(?:head|block|slot|height)\b/.test(promptLower)
+      || (/\bright now\b/.test(promptLower) && blockPrompt)
+      || (/\bcurrent\b/.test(promptLower) && blockPrompt)
+    )
   const traderPrompt = promptTokens.some((token) => ['most', 'top', 'trader', 'traders', 'volume'].includes(token))
   const namingPrompt = promptTokens.some((token) => ['alias', 'call', 'chain', 'name', 'network'].includes(token))
   const hyperliquidPrompt = promptTokens.includes('hyperliquid')
@@ -400,6 +410,12 @@ function scoreTool(
 
   if (latestHeadPrompt && blockPrompt) {
     score += profile.name === 'portal_get_head' ? 7 : 0
+  }
+
+  if (simpleHeadPrompt) {
+    score += profile.name === 'portal_get_head' ? 18 : 0
+    score += profile.name === 'portal_debug_query_blocks' ? -16 : 0
+    score += profile.name === 'portal_debug_resolve_time_to_block' ? -8 : 0
   }
 
   if (timestampResolvePrompt) {

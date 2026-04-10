@@ -29,6 +29,7 @@ const TOP_COINS = ['BTC', 'ETH', 'SOL', 'HYPE']
 const MAX_VOLUME_COINS = 12
 const MAX_TOP_TRADERS = 8
 const MAX_TOP_PNL = 5
+const DEFAULT_ANALYTICS_SECTION_LIMIT = 6
 const MAX_ANALYTICS_BLOCKS = 500000
 const FAST_MODE_MAX_ANALYTICS_BLOCKS = 100000
 const HYPERLIQUID_ANALYTICS_FAST_INITIAL_CHUNK_SIZE = 20_000
@@ -127,37 +128,89 @@ function paginateSection<T>(items: T[], offset: number, limit: number) {
 }
 
 function formatHyperliquidAnalyticsResponse(response: Record<string, any>, responseFormat: ResponseFormat) {
+  const internalFields = {
+    ...(response._cache ? { _cache: response._cache } : {}),
+    ...(response._chunks_fetched !== undefined ? { _chunks_fetched: response._chunks_fetched } : {}),
+    ...(response._chunk_size_reduced !== undefined ? { _chunk_size_reduced: response._chunk_size_reduced } : {}),
+  }
+
+  const compactOverview = response.overview
+    ? {
+        mode: response.overview.mode,
+        total_fills: response.overview.total_fills,
+        unique_traders: response.overview.unique_traders,
+        unique_coins: response.overview.unique_coins,
+        total_volume_usd: response.overview.total_volume_usd,
+        total_fees_usd: response.overview.total_fees_usd,
+        total_realized_pnl: response.overview.total_realized_pnl,
+        long_short_ratio: response.overview.long_short_ratio,
+        long_short_label: response.overview.long_short_label,
+      }
+    : undefined
+
+  const compactLiquidations = response.liquidations
+    ? {
+        count: response.liquidations.count,
+        volume_usd: response.liquidations.volume_usd,
+        percentage_of_fills: response.liquidations.percentage_of_fills,
+      }
+    : undefined
+
+  const compactVolumeRows = Array.isArray(response.volume_by_coin)
+    ? response.volume_by_coin.map((item: Record<string, any>) => ({
+        rank: item.rank,
+        coin: item.coin,
+        volume_usd: item.volume_usd,
+        fill_count: item.fill_count,
+        unique_traders: item.unique_traders,
+        realized_pnl: item.realized_pnl,
+      }))
+    : undefined
+
+  const compactTraderRows = Array.isArray(response.top_traders_by_volume)
+    ? response.top_traders_by_volume.map((item: Record<string, any>) => ({
+        rank: item.rank,
+        user: item.user,
+        user_short: item.user_short,
+        volume_usd: item.volume_usd,
+        fill_count: item.fill_count,
+        realized_pnl: item.realized_pnl,
+      }))
+    : undefined
+
+  const compactPnlRows = (rows: unknown) =>
+    Array.isArray(rows)
+      ? rows.map((item: Record<string, any>) => ({
+          rank: item.rank,
+          user: item.user,
+          user_short: item.user_short,
+          realized_pnl: item.realized_pnl,
+          volume_usd: item.volume_usd,
+        }))
+      : undefined
+
   if (responseFormat === 'full') {
     return response
   }
 
   if (responseFormat === 'summary') {
     return {
-      overview: {
-        mode: response.overview?.mode,
-        total_fills: response.overview?.total_fills,
-        unique_traders: response.overview?.unique_traders,
-        unique_coins: response.overview?.unique_coins,
-        total_volume_usd: response.overview?.total_volume_usd,
-        total_fees_usd: response.overview?.total_fees_usd,
-        total_realized_pnl: response.overview?.total_realized_pnl,
-        long_short_ratio: response.overview?.long_short_ratio,
-      },
-      liquidations: response.liquidations,
-      percentiles: response.percentiles,
-      ...(response.volume_by_coin?.[0] ? { top_coin: response.volume_by_coin[0] } : {}),
-      ...(response.top_traders_by_volume?.[0] ? { top_trader: response.top_traders_by_volume[0] } : {}),
+      ...internalFields,
+      ...(compactOverview ? { overview: compactOverview } : {}),
+      ...(compactLiquidations ? { liquidations: compactLiquidations } : {}),
+      ...(compactVolumeRows?.[0] ? { top_coin: compactVolumeRows[0] } : {}),
+      ...(compactTraderRows?.[0] ? { top_trader: compactTraderRows[0] } : {}),
     }
   }
 
   return {
-    overview: response.overview,
-    liquidations: response.liquidations,
-    percentiles: response.percentiles,
-    volume_by_coin: response.volume_by_coin,
-    top_traders_by_volume: response.top_traders_by_volume,
-    top_pnl_winners: response.top_pnl_winners,
-    top_pnl_losers: response.top_pnl_losers,
+    ...internalFields,
+    ...(compactOverview ? { overview: compactOverview } : {}),
+    ...(compactLiquidations ? { liquidations: compactLiquidations } : {}),
+    ...(compactVolumeRows ? { volume_by_coin: compactVolumeRows } : {}),
+    ...(compactTraderRows ? { top_traders_by_volume: compactTraderRows } : {}),
+    ...(compactPnlRows(response.top_pnl_winners) ? { top_pnl_winners: compactPnlRows(response.top_pnl_winners) } : {}),
+    ...(compactPnlRows(response.top_pnl_losers) ? { top_pnl_losers: compactPnlRows(response.top_pnl_losers) } : {}),
   }
 }
 
@@ -342,12 +395,13 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
       response_format: z
         .enum(['full', 'compact', 'summary'])
         .optional()
-        .default('full')
-        .describe("Response format: 'summary' (high-level metrics), 'compact' (core sections), 'full' (complete analytics)."),
+        .default('compact')
+        .describe("Response format: 'summary' (smallest snapshot), 'compact' (chat-sized ranked sections, default), 'full' (complete analytics)."),
       section_limit: z
         .number()
         .optional()
-        .describe('Optional per-section page size override for ranked sections'),
+        .default(DEFAULT_ANALYTICS_SECTION_LIMIT)
+        .describe(`Per-section page size for ranked sections. Default: ${DEFAULT_ANALYTICS_SECTION_LIMIT}`),
       cursor: z.string().optional().describe('Continuation cursor for ranked analytics sections'),
     },
     async ({ network, timeframe, mode, from_timestamp, to_timestamp, coin, response_format, section_limit, cursor }) => {
@@ -369,7 +423,7 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
         mode = paginationCursor.request.mode
         coin = paginationCursor.request.coin
         response_format = paginationCursor.request.response_format
-        section_limit = paginationCursor.request.section_limit
+        section_limit = paginationCursor.request.section_limit ?? section_limit
         from_timestamp = paginationCursor.request.from_timestamp
         to_timestamp = paginationCursor.request.to_timestamp
       }

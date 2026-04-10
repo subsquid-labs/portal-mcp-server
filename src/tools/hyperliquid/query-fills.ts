@@ -7,7 +7,7 @@ import { formatResult } from '../../helpers/format.js'
 import { normalizeHyperliquidFillResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
 import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
+import { applyResponseFormat, resolveDefaultResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { buildMetricCard, buildPortalUi, buildTablePanel, buildTimelinePanel } from '../../helpers/ui-metadata.js'
@@ -186,7 +186,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
       limit: z.number().optional().default(50).describe('Max fills to return'),
       include_pnl: z.boolean().optional().default(true).describe('Include closedPnl and startPosition fields'),
       include_builder_info: z.boolean().optional().default(false).describe('Include builder and builderFee fields'),
-      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (aggregated stats, ~90% smaller), 'compact' (essential trade fields only, ~60% smaller), 'full' (all fields)"),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().describe("Response format: defaults to 'compact' for chat-friendly output. Use 'summary' for aggregate stats or 'full' when you truly need every fill field."),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
     async ({
@@ -231,6 +231,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
         include_builder_info = paginationCursor.request.include_builder_info
         response_format = paginationCursor.request.response_format
       }
+      const effectiveResponseFormat = resolveDefaultResponseFormat(response_format)
 
       // Resolve timeframe or use explicit blocks
       const resolvedBlocks = paginationCursor
@@ -362,7 +363,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
               ...(cloid ? { cloid } : {}),
               include_pnl,
               include_builder_info,
-              response_format: response_format as ResponseFormat,
+              response_format: effectiveResponseFormat,
             },
             window_from_block: resolvedFromBlock,
             window_to_block: endBlock,
@@ -371,7 +372,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
           })
         : undefined
 
-      const formattedData = applyResponseFormat(page.pageItems, response_format as ResponseFormat, 'hyperliquid_fills')
+      const formattedData = applyResponseFormat(page.pageItems, effectiveResponseFormat, 'hyperliquid_fills')
       const notices = getTimestampWindowNotices(resolvedBlocks)
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
@@ -421,7 +422,7 @@ export function registerQueryHyperliquidFillsTool(server: McpServer) {
           freshness,
           coverage,
           execution: buildExecutionMetadata({
-            response_format,
+            response_format: effectiveResponseFormat,
             finalized_only,
             limit,
             from_block: resolvedFromBlock,

@@ -11,7 +11,7 @@ import { formatResult } from '../../helpers/format.js'
 import { normalizeSubstrateCallResult } from '../../helpers/normalized-results.js'
 import { buildPaginationInfo, decodeRecentPageCursor, encodeRecentPageCursor, paginateAscendingItems } from '../../helpers/pagination.js'
 import { buildChronologicalPageOrdering, buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { applyResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
+import { applyResponseFormat, resolveDefaultResponseFormat, type ResponseFormat } from '../../helpers/response-modes.js'
 import { getTimestampWindowNotices, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { getValidationNotices, validateSubstrateQuerySize } from '../../helpers/validation.js'
@@ -81,7 +81,7 @@ export function registerSubstrateQueryCallsTool(server: McpServer) {
       include_extrinsic: z.boolean().optional().default(false).describe('Attach the parent extrinsic inline for each matching call'),
       include_stack: z.boolean().optional().default(false).describe('Attach the parent call stack for each matching call'),
       include_events: z.boolean().optional().default(false).describe('Attach events emitted directly by each matching call'),
-      response_format: z.enum(['full', 'compact', 'summary']).optional().default('full').describe("Response format: 'summary' (aggregated stats), 'compact' (core fields), 'full' (all selected fields)"),
+      response_format: z.enum(['full', 'compact', 'summary']).optional().describe("Response format: defaults to 'compact' for chat-friendly output. Compact mode keeps requested subcalls, events, and extrinsic context in a smaller inline shape."),
       limit: z.number().optional().default(50).describe('Max calls to return'),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
@@ -124,6 +124,7 @@ export function registerSubstrateQueryCallsTool(server: McpServer) {
         include_events = paginationCursor.request.include_events
         response_format = paginationCursor.request.response_format
       }
+      const effectiveResponseFormat = resolveDefaultResponseFormat(response_format)
 
       const resolvedBlocks = paginationCursor
         ? {
@@ -231,7 +232,7 @@ export function registerSubstrateQueryCallsTool(server: McpServer) {
               include_extrinsic,
               include_stack,
               include_events,
-              response_format: response_format as ResponseFormat,
+              response_format: effectiveResponseFormat,
             },
             window_from_block: resolvedFromBlock,
             window_to_block: endBlock,
@@ -240,7 +241,7 @@ export function registerSubstrateQueryCallsTool(server: McpServer) {
           })
         : undefined
 
-      const formattedData = applyResponseFormat(page.pageItems, response_format as ResponseFormat, 'substrate_calls')
+      const formattedData = applyResponseFormat(page.pageItems, effectiveResponseFormat, 'substrate_calls')
       const notices = [SUBSTRATE_INDEXING_NOTICE, ...getTimestampWindowNotices(resolvedBlocks), ...getValidationNotices(validation)]
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
@@ -266,7 +267,7 @@ export function registerSubstrateQueryCallsTool(server: McpServer) {
         to_block: endBlock,
         resolvedWindow: resolvedBlocks,
       })
-      const message = response_format === 'summary'
+      const message = effectiveResponseFormat === 'summary'
         ? `Substrate call summary for ${page.pageItems.length} rows across ${windowLabel}${page.hasMore ? ' (latest preview page)' : ''}`
         : `Retrieved ${page.pageItems.length} Substrate calls${page.hasMore ? ` from the most recent matching blocks (preview page limited to ${limit})` : ''}`
 
@@ -281,7 +282,7 @@ export function registerSubstrateQueryCallsTool(server: McpServer) {
         freshness,
         coverage,
         execution: buildExecutionMetadata({
-          response_format,
+          response_format: effectiveResponseFormat,
           finalized_only,
           limit,
           from_block: resolvedFromBlock,

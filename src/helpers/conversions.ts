@@ -146,22 +146,41 @@ export function addValueConversions<T extends Record<string, unknown>>(
 /**
  * Detect common ERC20 tokens and return their decimals
  */
-export function getKnownTokenDecimals(tokenAddress: string): number | undefined {
-  const knownTokens: Record<string, number> = {
-    // USDC
-    '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 6, // Ethereum
-    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 6, // Base
-    '0xaf88d065e77c8cc2239327c5edb3a432268e5831': 6, // Arbitrum
-    // USDT
-    '0xdac17f958d2ee523a2206206994597c13d831ec7': 6, // Ethereum
-    '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': 6, // Arbitrum
-    // DAI (18 decimals)
-    '0x6b175474e89094c44da98b954eedeac495271d0f': 18, // Ethereum
-    // WETH (18 decimals)
-    '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 18, // Ethereum
-    '0x4200000000000000000000000000000000000006': 18, // Base
-    '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': 18, // Arbitrum
-  }
+type KnownTokenMetadata = {
+  symbol: string
+  decimals: number
+}
 
-  return knownTokens[tokenAddress.toLowerCase()]
+const KNOWN_TOKEN_METADATA: Record<string, KnownTokenMetadata> = {
+  // USDC
+  '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': { symbol: 'USDC', decimals: 6 }, // Ethereum
+  '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': { symbol: 'USDC', decimals: 6 }, // Base
+  '0xaf88d065e77c8cc2239327c5edb3a432268e5831': { symbol: 'USDC', decimals: 6 }, // Arbitrum
+  // USDT
+  '0xdac17f958d2ee523a2206206994597c13d831ec7': { symbol: 'USDT', decimals: 6 }, // Ethereum
+  '0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9': { symbol: 'USDT', decimals: 6 }, // Arbitrum
+  // DAI
+  '0x6b175474e89094c44da98b954eedeac495271d0f': { symbol: 'DAI', decimals: 18 }, // Ethereum
+  // WETH
+  '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': { symbol: 'WETH', decimals: 18 }, // Ethereum
+  '0x4200000000000000000000000000000000000006': { symbol: 'WETH', decimals: 18 }, // Base / OP-style
+  '0x82af49447d8a07e3bd95bd0d56f35241523fbab1': { symbol: 'WETH', decimals: 18 }, // Arbitrum
+  // WBTC
+  '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': { symbol: 'WBTC', decimals: 8 }, // Ethereum
+  // Liquid staking majors
+  '0xae7ab96520de3a18e5e111b5eaab095312d7fe84': { symbol: 'stETH', decimals: 18 }, // Ethereum
+  '0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0': { symbol: 'wstETH', decimals: 18 }, // Ethereum
+  '0xae78736cd615f374d3085123a210448e74fc6393': { symbol: 'rETH', decimals: 18 }, // Ethereum
+}
+
+export function getKnownTokenMetadata(tokenAddress: string): KnownTokenMetadata | undefined {
+  return KNOWN_TOKEN_METADATA[tokenAddress.toLowerCase()]
+}
+
+export function getKnownTokenDecimals(tokenAddress: string): number | undefined {
+  return getKnownTokenMetadata(tokenAddress)?.decimals
+}
+
+export function getKnownTokenSymbol(tokenAddress: string): string | undefined {
+  return getKnownTokenMetadata(tokenAddress)?.symbol
 }

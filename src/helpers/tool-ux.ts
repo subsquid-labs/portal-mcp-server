@@ -140,13 +140,14 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['cross-chain'],
     result_kind: 'list',
     normalized_output: true,
-    first_choice_for: ['recent activity on any supported network without manual block math'],
-    summary: 'Get normalized recent activity across EVM, Solana, Bitcoin, or Hyperliquid with chronological paging.',
+    first_choice_for: ['recent activity on any supported network without manual block math', 'questions like "what has been happening on Base lately?"'],
+    summary: 'Get a simple recent-activity feed across EVM, Solana, Bitcoin, or Hyperliquid with chronological paging.',
     when_to_use: [
       'You want a quick recent-activity feed for a network.',
+      'You want to ask what has been happening lately on a network and see the newest activity first.',
       'You want the simplest starting point before reaching for raw VM-specific query tools.',
     ],
-    avoid_when: ['You need raw logs, instructions, or chain-specific fields that only raw query tools return.'],
+    avoid_when: ['You need raw logs, instructions, or chain-specific fields that only raw query tools return.', 'You want a chart over time rather than a recent feed.'],
     examples: [
       { label: 'Recent activity on Base', input: { network: 'base-mainnet', timeframe: '1h', limit: 10 } },
       { label: 'Recent Hyperliquid fills', input: { network: 'hyperliquid-fills', timeframe: '1h', limit: 10 } },
@@ -189,13 +190,14 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['cross-chain'],
     result_kind: 'chart',
     normalized_output: false,
-    first_choice_for: ['activity over time, compare-current-vs-previous, and grouped trends'],
-    summary: 'Build time-series charts across supported VMs, including compare-previous windows and grouped EVM contract trends.',
+    first_choice_for: ['activity over time, compare-current-vs-previous, grouped trends, and simple activity charts'],
+    summary: 'Build simple activity charts and other time-series views across supported VMs, including compare-previous windows and grouped EVM contract trends.',
     when_to_use: [
       'You want chart-ready metric buckets over time.',
+      'You want a simple activity chart for a network over the last hour, day, or week.',
       'You want to compare the current period to the previous period.',
     ],
-    avoid_when: ['You need raw record lists instead of aggregated buckets.'],
+    avoid_when: ['You need raw record lists instead of aggregated buckets.', 'You need DEX pool candles or OHLC output.'],
     examples: [
       { label: 'Base transactions per 5m bucket', input: { network: 'base-mainnet', metric: 'transaction_count', duration: '1h', interval: '5m' } },
       { label: 'Compare two periods', input: { network: 'solana-mainnet', metric: 'transaction_count', duration: '1h', interval: '5m', compare_previous: true } },
@@ -378,7 +380,7 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
       'You want a contract-centric activity summary instead of raw records.',
       'You need top callers and interaction volume for one contract.',
     ],
-    avoid_when: ['You need the underlying raw logs or transactions.'],
+    avoid_when: ['You need the underlying raw logs or transactions.', 'You want general recent network activity without naming one contract.'],
     examples: [
       { label: 'Fast contract snapshot', input: { network: 'base-mainnet', contract_address: '0xabc...', timeframe: '24h' } },
     ],
@@ -419,21 +421,25 @@ const TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     vm: ['evm'],
     result_kind: 'chart',
     normalized_output: false,
-    summary: 'Build chart-ready EVM OHLC candles from supported event-derived DEX sources, including real Uniswap v4 PoolManager swaps filtered by pool_id.',
+    summary: 'Build chart-ready EVM OHLC candles plus a recent trade tape from supported DEX event sources, including Uniswap v2-style swaps, Uniswap v3/v4, and Aerodrome Slipstream.',
     when_to_use: [
       'You need OHLC candles for supported EVM event-derived price sources.',
-      'You want a candle chart instead of scalar time-series buckets.',
+      'You want a candle chart and recent trades instead of scalar time-series buckets.',
+      'You want a Dexscreener-style pool chart with hover-ready candle metadata and a trade tape.',
     ],
     avoid_when: [
       'You only need counts or scalar metrics over time.',
+      'You want a simple activity chart for a network rather than pool candles.',
     ],
     examples: [
-      { label: 'Base Uniswap candles', input: { network: 'base-mainnet', source: 'uniswap_v3_swap', duration: '1h', interval: '5m' } },
-      { label: 'Base Uniswap v4 candles', input: { network: 'base-mainnet', source: 'uniswap_v4_swap', pool_id: '0x<pool-id>', duration: '1h', interval: '5m' } },
-      { label: 'Base Aerodrome Slipstream candles', input: { network: 'base-mainnet', source: 'aerodrome_slipstream_swap', duration: '1h', interval: '5m' } },
+      { label: 'Base Uniswap v2-style swap candles', input: { network: 'base-mainnet', source: 'uniswap_v2_swap', pool_address: '0x<pool-address>', duration: '1h', interval: '5m', mode: 'fast', price_in: 'auto', include_recent_trades: true } },
+      { label: 'Base Uniswap candles', input: { network: 'base-mainnet', source: 'uniswap_v3_swap', pool_address: '0x<pool-address>', duration: '1h', interval: '5m', mode: 'deep', price_in: 'auto' } },
+      { label: 'Base Uniswap v4 candles', input: { network: 'base-mainnet', source: 'uniswap_v4_swap', pool_id: '0x<pool-id>', duration: '1h', interval: '5m', mode: 'deep', price_in: 'auto', include_recent_trades: true } },
+      { label: 'Base Aerodrome Slipstream candles', input: { network: 'base-mainnet', source: 'aerodrome_slipstream_swap', pool_address: '0x<pool-address>', duration: '1h', interval: '5m', mode: 'fast', price_in: 'token1' } },
     ],
     supports: {
       pagination: true,
+      modes: ['fast', 'deep'],
       time_inputs: ['timeframe'],
     },
   },
@@ -705,6 +711,9 @@ export function buildToolDescription(toolName: string): string {
   }
 
   const lines = [definition.summary]
+
+  lines.push('', 'COMMON USER ASKS:')
+  definition.examples.slice(0, 3).forEach((example) => lines.push(`- ${example.label}`))
 
   if (definition.first_choice_for?.length) {
     lines.push('', 'FIRST CHOICE FOR:')

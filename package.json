@@ -18,6 +18,11 @@
     "test:tools": "tsx scripts/test-tools.ts",
     "test:routing": "tsx scripts/test-routing.ts",
     "test:substrate": "tsx scripts/test-substrate.ts",
+    "test:conversations": "tsx scripts/test-conversations.ts",
+    "test:negative": "tsx scripts/test-negative.ts",
+    "test:quality": "tsx scripts/test-quality.ts",
+    "test:all": "npm run build && npm test && npm run test:tools && npm run test:routing && npm run test:substrate && npm run test:conversations && npm run test:negative && npm run test:quality",
+    "test:ci": "npm run test:all",
     "release:patch": "./scripts/release.sh patch",
     "release:minor": "./scripts/release.sh minor",
     "release:major": "./scripts/release.sh major"

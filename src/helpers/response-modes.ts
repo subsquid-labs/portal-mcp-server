@@ -3,6 +3,16 @@
 
 export type ResponseFormat = 'full' | 'compact' | 'summary'
 
+export function resolveDefaultResponseFormat(
+  requested: ResponseFormat | undefined,
+  options?: {
+    preserveFullIf?: boolean
+  },
+): ResponseFormat {
+  if (requested) return requested
+  return options?.preserveFullIf ? 'full' : 'compact'
+}
+
 function getBlockNumber(item: any): number | undefined {
   return item.block_number ?? item.blockNumber ?? item.slot_number ?? item.block?.number
 }
@@ -173,6 +183,12 @@ export function compactLogs(logs: any[]): any[] {
     topics: log.topics,
     blockNumber: getBlockNumber(log),
     timestamp: getTimestamp(log),
+    ...(log.decoded_log !== undefined ? { decoded_log: log.decoded_log } : {}),
+    ...(log.transaction && typeof log.transaction === 'object' && !Array.isArray(log.transaction)
+      ? {
+          transaction: compactTransactions([log.transaction])[0],
+        }
+      : {}),
   }))
 }
 
@@ -189,6 +205,21 @@ export function compactTransactions(txs: any[]): any[] {
     value: tx.value,
     blockNumber: getBlockNumber(tx),
     timestamp: getTimestamp(tx),
+    ...(Array.isArray(tx.logs) && tx.logs.length > 0
+      ? {
+          logs: compactLogs(tx.logs),
+        }
+      : {}),
+    ...(Array.isArray(tx.traces) && tx.traces.length > 0
+      ? {
+          trace_count: tx.traces.length,
+        }
+      : {}),
+    ...(Array.isArray(tx.state_diffs) && tx.state_diffs.length > 0
+      ? {
+          state_diff_count: tx.state_diffs.length,
+        }
+      : {}),
   }))
 }
 
@@ -302,7 +333,69 @@ export function compactSolanaTransactions(txs: any[]): any[] {
     fee: tx.fee,
     computeUnits: tx.computeUnitsConsumed,
     error: tx.err || null,
+    ...(Array.isArray(tx.instructions) && tx.instructions.length > 0
+      ? {
+          instruction_count: tx.instructions.length,
+        }
+      : {}),
+    ...(Array.isArray(tx.logs) && tx.logs.length > 0
+      ? {
+          log_count: tx.logs.length,
+        }
+      : {}),
+    ...(Array.isArray(tx.rewards) && tx.rewards.length > 0
+      ? {
+          reward_count: tx.rewards.length,
+        }
+      : {}),
   }))
+}
+
+function compactSubstrateExtrinsic(extrinsic: any): Record<string, unknown> | undefined {
+  if (!extrinsic || typeof extrinsic !== 'object' || Array.isArray(extrinsic)) return undefined
+
+  const compact = {
+    index: extrinsic.index,
+    hash: extrinsic.hash,
+    version: extrinsic.version,
+    success: extrinsic.success,
+    fee: extrinsic.fee,
+    signer: extrinsic.signer,
+    call_name: extrinsic.call_name || extrinsic.name,
+  }
+
+  return Object.values(compact).some((value) => value !== undefined) ? compact : undefined
+}
+
+function compactSubstrateEventContext(event: any): Record<string, unknown> | undefined {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return undefined
+
+  const compact = {
+    primary_id: event.primary_id,
+    event_name: event.event_name || event.name,
+    call_address: event.call_address,
+    extrinsic_index: event.extrinsicIndex ?? event.extrinsic_index,
+    block_number: getBlockNumber(event),
+    timestamp: getTimestamp(event),
+  }
+
+  return Object.values(compact).some((value) => value !== undefined) ? compact : undefined
+}
+
+function compactSubstrateCallContext(call: any): Record<string, unknown> | undefined {
+  if (!call || typeof call !== 'object' || Array.isArray(call)) return undefined
+
+  const compact = {
+    primary_id: call.primary_id,
+    call_name: call.call_name || call.name,
+    call_address: call.call_address || (Array.isArray(call.address) ? call.address.join('.') : call.address),
+    success: call.success,
+    extrinsic_index: call.extrinsicIndex ?? call.extrinsic_index,
+    block_number: getBlockNumber(call),
+    timestamp: getTimestamp(call),
+  }
+
+  return Object.values(compact).some((value) => value !== undefined) ? compact : undefined
 }
 
 export function summarizeSubstrateEvents(events: any[]): any {
@@ -336,6 +429,15 @@ export function compactSubstrateEvents(events: any[]): any[] {
     call_address: event.call_address || (Array.isArray(event.callAddress) ? event.callAddress.join('.') : event.callAddress),
     blockNumber: getBlockNumber(event),
     timestamp: getTimestamp(event),
+    ...(compactSubstrateExtrinsic(event.extrinsic) ? { extrinsic: compactSubstrateExtrinsic(event.extrinsic) } : {}),
+    ...(compactSubstrateCallContext(event.call) ? { call: compactSubstrateCallContext(event.call) } : {}),
+    ...(Array.isArray(event.call_stack) && event.call_stack.length > 0
+      ? {
+          call_stack: event.call_stack
+            .map((entry: any) => compactSubstrateCallContext(entry))
+            .filter((entry: Record<string, unknown> | undefined): entry is Record<string, unknown> => Boolean(entry)),
+        }
+      : {}),
   }))
 }
 
@@ -373,6 +475,28 @@ export function compactSubstrateCalls(calls: any[]): any[] {
     call_address: call.call_address || (Array.isArray(call.address) ? call.address.join('.') : call.address),
     blockNumber: getBlockNumber(call),
     timestamp: getTimestamp(call),
+    ...(compactSubstrateExtrinsic(call.extrinsic) ? { extrinsic: compactSubstrateExtrinsic(call.extrinsic) } : {}),
+    ...(Array.isArray(call.call_stack) && call.call_stack.length > 0
+      ? {
+          call_stack: call.call_stack
+            .map((entry: any) => compactSubstrateCallContext(entry))
+            .filter((entry: Record<string, unknown> | undefined): entry is Record<string, unknown> => Boolean(entry)),
+        }
+      : {}),
+    ...(Array.isArray(call.subcalls) && call.subcalls.length > 0
+      ? {
+          subcalls: call.subcalls
+            .map((entry: any) => compactSubstrateCallContext(entry))
+            .filter((entry: Record<string, unknown> | undefined): entry is Record<string, unknown> => Boolean(entry)),
+        }
+      : {}),
+    ...(Array.isArray(call.events) && call.events.length > 0
+      ? {
+          events: call.events
+            .map((entry: any) => compactSubstrateEventContext(entry))
+            .filter((entry: Record<string, unknown> | undefined): entry is Record<string, unknown> => Boolean(entry)),
+        }
+      : {}),
   }))
 }
 
@@ -419,6 +543,16 @@ export function compactBitcoinTransactions(txs: any[]): any[] {
     size: tx.size,
     vsize: tx.vsize,
     weight: tx.weight,
+    ...(Array.isArray(tx.inputs) && tx.inputs.length > 0
+      ? {
+          inputs: compactBitcoinInputs(tx.inputs),
+        }
+      : {}),
+    ...(Array.isArray(tx.outputs) && tx.outputs.length > 0
+      ? {
+          outputs: compactBitcoinOutputs(tx.outputs),
+        }
+      : {}),
   }))
 }
 
