@@ -48,6 +48,7 @@ export interface PortalFetchRecentRecordsOptions extends PortalFetchStreamRangeO
   itemKeys: string[]
   limit: number
   chunkSize: number
+  maxChunks?: number
 }
 
 function normalizePortalFetchStreamOptions(
@@ -778,8 +779,13 @@ export async function portalFetchRecentRecords(
   const recentRecords: unknown[] = []
   let matchedItems = 0
   let currentTo = requestedTo
+  let chunksVisited = 0
 
   while (currentTo >= requestedFrom && matchedItems < options.limit) {
+    if (options.maxChunks !== undefined && chunksVisited >= options.maxChunks) {
+      break
+    }
+
     const chunkFrom = Math.max(requestedFrom, currentTo - chunkSize + 1)
     const chunk = await portalFetchStreamRange(
       url,
@@ -794,6 +800,7 @@ export async function portalFetchRecentRecords(
         maxBlocks: 0,
       },
     )
+    chunksVisited += 1
 
     if (chunk.length > 0) {
       recentRecords.unshift(...chunk)

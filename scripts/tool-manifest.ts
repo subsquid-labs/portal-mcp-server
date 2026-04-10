@@ -8,6 +8,14 @@ const BASE_RPC_URL = 'https://mainnet.base.org'
 const BASE_USDC = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
 const BASE_UNISWAP_V4_POOL_MANAGER = '0x498581ff718922c3f8e6a244956af099b2652b2b'
 const AERODROME_SLIPSTREAM_FACTORY = '0xf8f2eb4940cfe7d13603dddd87f123820fc061ef'
+const BASE_UNISWAP_V3_TEST_POOL_CANDIDATES = [
+  '0xf0125d06b76cebc2ab3831a938e07ab6988b00c9',
+  '0x3c4384f3664b37a3cb5a5cb3452b4b4a3aa1256f',
+  '0xd0b53d9277642d899df5c87a3966a349a798f224',
+  '0xe69def85897c95e9ef8439128ee015603b360a71',
+  '0xedc625b74537ee3a10874f53d170e9c17a906b9c',
+  '0xbc3231036ee1eca03e5f67fecedc640d21610823',
+] as const
 const SELECTORS = {
   allPools: '0x41d1de97',
 } as const
@@ -146,6 +154,26 @@ function isZeroAddress(value: string) {
   return /^0x0{40}$/.test(value)
 }
 
+async function pickRecentPoolFromCandidates(client: Client, candidates: readonly string[]): Promise<string> {
+  const result = await callToolWithRetry(client, 'portal_evm_query_logs', {
+    network: 'base-mainnet',
+    from_timestamp: '24h ago',
+    to_timestamp: 'now',
+    addresses: [...candidates],
+    topic0: [EVENT_SIGNATURES.UNISWAP_V3_SWAP],
+    limit: 20,
+    field_preset: 'minimal',
+  })
+
+  const items = getItems(result.data)
+  const selected = items
+    .map((item: any) => String(item?.address || item?.contract_address || '').toLowerCase())
+    .find((address) => candidates.includes(address as typeof candidates[number]))
+
+  assert(Boolean(selected), 'Expected at least one responsive Base Uniswap v3 test pool candidate')
+  return selected!
+}
+
 async function baseEthCall(to: string, data: string) {
   const result = await baseRpcCall('eth_call', [{ to, data }, 'latest'])
   assert(typeof result === 'string', 'Expected eth_call to return a hex string')
@@ -225,7 +253,7 @@ export async function loadToolTestContext(client: Client): Promise<ToolTestConte
 
   const recentSwapItems = getItems(recentSwapResult.data)
   assert(recentSwapItems.length > 0, 'Expected at least one active Base Uniswap V3 pool')
-  const baseUniswapV3Pool = String(recentSwapItems[0].address || '').toLowerCase()
+  const baseUniswapV3Pool = await pickRecentPoolFromCandidates(client, BASE_UNISWAP_V3_TEST_POOL_CANDIDATES)
 
   const recentV4SwapItems = getItems(recentV4SwapResult.data)
   assert(recentV4SwapItems.length > 0, 'Expected at least one active Base Uniswap v4 pool id')
@@ -620,11 +648,13 @@ export const TOOL_SPECS: ToolSpec[] = [
       assert(uniswapV4Data.summary?.volume_available === true, 'Expected volume_available=true for Uniswap v4 swaps')
       assert(uniswapV4Data.summary?.pool_id === context.baseUniswapV4PoolId, 'Expected the requested Uniswap v4 pool id in summary')
       assert(uniswapV4Data.summary?.pool_manager_address === BASE_UNISWAP_V4_POOL_MANAGER, 'Expected the official Base PoolManager address')
-      assert(uniswapV4Data.summary?.currency0_address !== undefined, 'Expected resolved Uniswap v4 currency0 metadata')
-      assert(uniswapV4Data.summary?.currency1_address !== undefined, 'Expected resolved Uniswap v4 currency1 metadata')
       assert(uniswapV4Data.summary?.price_in_resolved !== undefined, 'Expected resolved Uniswap v4 price orientation')
       assert(Array.isArray(uniswapV4Data.recent_trades), 'Expected recent_trades for Uniswap v4 OHLC')
-      assert(uniswapV4Data.market_context?.pool?.metadata_resolved_from_initialize === true, 'Expected Initialize-derived v4 metadata resolution')
+      assert(uniswapV4Data.market_context?.pool?.metadata_resolution_status !== undefined, 'Expected explicit Uniswap v4 metadata resolution status')
+      if (uniswapV4Data.market_context?.pool?.metadata_resolved_from_initialize === true) {
+        assert(uniswapV4Data.summary?.currency0_address !== undefined, 'Expected resolved Uniswap v4 currency0 metadata when Initialize lookup succeeds')
+        assert(uniswapV4Data.summary?.currency1_address !== undefined, 'Expected resolved Uniswap v4 currency1 metadata when Initialize lookup succeeds')
+      }
       assert(uniswapV4Candles.length > 0, 'Expected Uniswap v4 candles')
       expectWindowMetadata(uniswapV4Data, 'portal_evm_get_ohlc uniswap v4')
       expectGapDiagnostics(uniswapV4Data, 'portal_evm_get_ohlc uniswap v4')

@@ -174,6 +174,12 @@ const UNISWAP_V4_POOL_MANAGER_BY_DATASET: Record<string, string> = {
   'arbitrum-one': '0x360e68faccca8ca495c1b759fd9eee466db9fb32',
 }
 const UNISWAP_V4_METADATA_LOOKBACK_STEPS = [250_000, 1_000_000, 2_000_000]
+const UNISWAP_V4_METADATA_TIMEOUT_MS = 4_000
+const UNISWAP_V4_METADATA_CHUNK_SIZE = 50_000
+const UNISWAP_V4_METADATA_MAX_CHUNKS_BY_MODE: Record<OhlcMode, number> = {
+  fast: 1,
+  deep: 3,
+}
 const EVM_OHLC_METADATA_CACHE_TTL_MS = 15 * 60_000
 const EVM_OHLC_RESPONSE_CACHE_TTL_MS = 20_000
 const evmOhlcMetadataCache = createCache<UniswapV4PoolMetadata | null>(EVM_OHLC_METADATA_CACHE_TTL_MS, 128)
@@ -620,6 +626,7 @@ async function resolveUniswapV4PoolMetadata(params: {
   poolManagerAddress: string
   poolId: string
   toBlock: number
+  mode: OhlcMode
   lookbackSteps?: number[]
 }): Promise<UniswapV4PoolMetadata | undefined> {
   const lookbackSteps = params.lookbackSteps ?? UNISWAP_V4_METADATA_LOOKBACK_STEPS
@@ -647,7 +654,10 @@ async function resolveUniswapV4PoolMetadata(params: {
       {
         itemKeys: ['logs'],
         limit: 1,
-        chunkSize: 50_000,
+        chunkSize: UNISWAP_V4_METADATA_CHUNK_SIZE,
+        maxChunks: UNISWAP_V4_METADATA_MAX_CHUNKS_BY_MODE[params.mode],
+        timeout: UNISWAP_V4_METADATA_TIMEOUT_MS,
+        retries: 0,
       },
     )
 
@@ -765,6 +775,7 @@ async function getCachedOrResolveUniswapV4PoolMetadata(params: {
     poolManagerAddress: params.poolManagerAddress,
     poolId: params.poolId,
     toBlock: params.toBlock,
+    mode: params.mode,
     lookbackSteps:
       params.mode === 'fast'
         ? UNISWAP_V4_METADATA_LOOKBACK_STEPS.slice(0, 1)
@@ -815,6 +826,10 @@ async function visitAdaptiveEvmLogRange(
 
     throw error
   }
+}
+
+function isTimeoutLikeMessage(message: string) {
+  return /\btimeout\b|\btimed out\b|\brequest timeout\b/i.test(message)
 }
 
 export function registerEvmOhlcTool(server: McpServer) {
@@ -1051,6 +1066,7 @@ export function registerEvmOhlcTool(server: McpServer) {
       }
 
       let resolvedV4Metadata: UniswapV4PoolMetadata | undefined
+      let v4MetadataResolutionStatus: 'not_requested' | 'resolved' | 'not_found' | 'timeout' | 'failed' = 'not_requested'
       if (
         isUniswapV4SwapSource(source as EvmOhlcSource)
         && normalizedPoolId
@@ -1062,22 +1078,28 @@ export function registerEvmOhlcTool(server: McpServer) {
           || !hooksAddressProvided
         )
       ) {
-        resolvedV4Metadata = await getCachedOrResolveUniswapV4PoolMetadata({
-          dataset,
-          poolManagerAddress: normalizedPoolManagerAddress!,
-          poolId: normalizedPoolId,
-          toBlock: endBlock,
-          mode: mode as OhlcMode,
-        })
+        try {
+          resolvedV4Metadata = await getCachedOrResolveUniswapV4PoolMetadata({
+            dataset,
+            poolManagerAddress: normalizedPoolManagerAddress!,
+            poolId: normalizedPoolId,
+            toBlock: endBlock,
+            mode: mode as OhlcMode,
+          })
+          v4MetadataResolutionStatus = resolvedV4Metadata ? 'resolved' : 'not_found'
 
-        if (resolvedV4Metadata) {
-          normalizedCurrency0Address = normalizedCurrency0Address ?? resolvedV4Metadata.currency0_address
-          normalizedCurrency1Address = normalizedCurrency1Address ?? resolvedV4Metadata.currency1_address
-          fee = fee ?? resolvedV4Metadata.fee
-          tick_spacing = tick_spacing ?? resolvedV4Metadata.tick_spacing
-          if (!hooksAddressProvided) {
-            normalizedHooksAddress = resolvedV4Metadata.hooks_address
+          if (resolvedV4Metadata) {
+            normalizedCurrency0Address = normalizedCurrency0Address ?? resolvedV4Metadata.currency0_address
+            normalizedCurrency1Address = normalizedCurrency1Address ?? resolvedV4Metadata.currency1_address
+            fee = fee ?? resolvedV4Metadata.fee
+            tick_spacing = tick_spacing ?? resolvedV4Metadata.tick_spacing
+            if (!hooksAddressProvided) {
+              normalizedHooksAddress = resolvedV4Metadata.hooks_address
+            }
           }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          v4MetadataResolutionStatus = isTimeoutLikeMessage(message) ? 'timeout' : 'failed'
         }
       }
 
@@ -1441,6 +1463,13 @@ export function registerEvmOhlcTool(server: McpServer) {
         if (!normalizedCurrency0Address || !normalizedCurrency1Address) {
           notices.push('pool_id is a one-way hash. Pass currency0_address/currency1_address or token symbols if you want clearer token labeling.')
         }
+        if (v4MetadataResolutionStatus === 'timeout') {
+          notices.push('Skipped the optional Initialize-event metadata lookup after a short timeout. Candles still come from factual Swap events, but labels may stay generic unless you pass the pool key or token metadata.')
+        } else if (v4MetadataResolutionStatus === 'failed') {
+          notices.push('Skipped the optional Initialize-event metadata enrichment after an upstream lookup error. Candles still come from factual Swap events.')
+        } else if (v4MetadataResolutionStatus === 'not_found') {
+          notices.push('Did not resolve Initialize-event metadata within the bounded recent lookup budget. Pass the pool key or token metadata if you want richer labels.')
+        }
         if (derivedPoolIdFromKey) {
           notices.push('pool_id was derived from the provided Uniswap v4 pool key.')
         }
@@ -1646,6 +1675,7 @@ export function registerEvmOhlcTool(server: McpServer) {
           ...(fee !== undefined ? { fee } : {}),
           ...(tick_spacing !== undefined ? { tick_spacing } : {}),
           ...(normalizedHooksAddress !== ZERO_ADDRESS ? { hooks_address: normalizedHooksAddress } : {}),
+          metadata_resolution_status: v4MetadataResolutionStatus,
           metadata_resolved_from_initialize: Boolean(resolvedV4Metadata),
           ...(resolvedV4Metadata?.initialized_block !== undefined ? { initialized_block: resolvedV4Metadata.initialized_block } : {}),
           ...(resolvedV4Metadata?.initialized_timestamp !== undefined ? { initialized_timestamp: resolvedV4Metadata.initialized_timestamp } : {}),
