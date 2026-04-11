@@ -22,7 +22,7 @@ const CASES: NegativeCase[] = [
     tool: 'portal_get_head',
     args: { network: 'definitely-not-a-real-network-xyz' },
     expect: (text) => {
-      assert(/Unknown dataset/i.test(text), 'Unknown network should mention unknown dataset')
+      assert(/Unknown network/i.test(text), 'Unknown network should mention unknown network')
       assert(/portal_list_networks/i.test(text), 'Unknown network should suggest portal_list_networks')
     },
   },
@@ -31,7 +31,7 @@ const CASES: NegativeCase[] = [
     tool: 'portal_get_recent_activity',
     args: { network: 'polkadot', timeframe: '1h', limit: 5 },
     expect: (text) => {
-      assert(/does not support dataset 'polkadot'/i.test(text), 'Unsupported flow should mention polkadot clearly')
+      assert(/does not support network 'polkadot'/i.test(text), 'Unsupported flow should mention polkadot clearly')
       assert(/supported chain types/i.test(text), 'Unsupported flow should explain supported chain types')
     },
   },

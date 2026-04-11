@@ -392,6 +392,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       expectKey(text, 'overview', 'portal_get_wallet_summary evm')
       assert(data.overview?.vm === 'evm', 'Expected EVM wallet overview')
       assert(Array.isArray(data.activity?.items), 'Expected activity items on EVM wallet summary')
+      assert(data.pipes_handoff?.version === 'pipes_recipe_v1', 'Expected wallet summary Pipes handoff')
       expectWindowMetadata(data, 'portal_get_wallet_summary evm')
     },
     validateFollowUp: async (_text, client, context) => {
@@ -427,6 +428,7 @@ export const TOOL_SPECS: ToolSpec[] = [
       expectWindowMetadata(data, 'portal_get_time_series base')
       expectGapDiagnostics(data, 'portal_get_time_series base')
       assert(data.chart?.kind === 'time_series', 'Expected time-series chart metadata')
+      assert(data.pipes_handoff?.version === 'pipes_recipe_v1', 'Expected time-series Pipes handoff')
       expectPresentation(data, 'portal_get_time_series base', { chartDataKey: 'time_series', tableId: 'main' })
     },
     validateFollowUp: async (_text, client) => {
@@ -676,7 +678,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   {
     name: 'portal_solana_query_instructions',
     prompt: 'show me recent Solana token program instructions',
-    args: (context) => ({ network: 'solana-mainnet', from_block: context.solHead - 50, to_block: context.solHead, program_id: [context.tokenProgram], limit: 3 }),
+    args: (context) => ({ network: 'solana-mainnet', from_block: context.solHead - 50, to_block: context.solHead, program_id: context.tokenProgram, limit: 3 }),
     validate: (text) => {
       const data = extractJson(text)
       expectItems(text, 'portal_solana_query_instructions', 1)

@@ -2,13 +2,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
+import { createQueryCache, stableCacheKey } from '../../cache/query-cache.js'
 
 import { PORTAL_URL } from '../../constants/index.js'
 import { buildTableDescriptor } from '../../helpers/chart-metadata.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { getRecordBlockNumber, portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
-import { formatResult } from '../../helpers/format.js'
+import { formatResult, humanizeLabel } from '../../helpers/format.js'
 import { buildAnalysisCoverage, buildQueryFreshness, buildRankedOrdering } from '../../helpers/result-metadata.js'
 import { buildPaginationInfo, decodeOffsetPageCursor, encodeOffsetPageCursor, paginateOffsetItems } from '../../helpers/pagination.js'
 import { getTimestampWindowNotices, type ResolvedBlockWindow, type TimestampInput, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
@@ -22,6 +23,7 @@ type TopContractsCursorRequest = {
   to_timestamp?: TimestampInput
   limit: number
   include_details: boolean
+  mode: 'fast' | 'deep'
   window_from_block: number
   window_to_block: number
   range_label: string
@@ -29,6 +31,27 @@ type TopContractsCursorRequest = {
 
 const INITIAL_EVM_ANALYTICS_CHUNK_SIZE = 500
 const MIN_EVM_ANALYTICS_CHUNK_SIZE = 50
+const FAST_EVM_ANALYTICS_BLOCK_CAP = 1500
+const EVM_ANALYTICS_CACHE_TTL_MS = 30_000
+const EVM_ANALYTICS_CACHE_MAX_ENTRIES = 12
+
+const evmAnalyticsCache = createQueryCache<{
+  sortedContracts: Array<{
+    rank: number
+    address: string
+    transaction_count: number
+    percentage: string
+    sample_transactions?: string[]
+  }>
+  totalTxs: number
+  uniqueContracts: number
+  autoChunked: boolean
+  analyzedFromBlock: number
+  analyzedToBlock: number
+}>({
+  ttl: EVM_ANALYTICS_CACHE_TTL_MS,
+  maxEntries: EVM_ANALYTICS_CACHE_MAX_ENTRIES,
+})
 
 // ============================================================================
 // Tool: Get Top Contracts
@@ -70,9 +93,14 @@ export function registerGetTopContractsTool(server: McpServer) {
         .optional()
         .default(false)
         .describe('Include sample transaction hashes for each contract'),
+      mode: z
+        .enum(['fast', 'deep'])
+        .optional()
+        .default('fast')
+        .describe('fast = cap very large windows for responsiveness, deep = scan the full requested window'),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
-    async ({ network, num_blocks, timeframe, from_timestamp, to_timestamp, limit, include_details, cursor }) => {
+    async ({ network, num_blocks, timeframe, from_timestamp, to_timestamp, limit, include_details, mode, cursor }) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor ? decodeOffsetPageCursor<TopContractsCursorRequest>(cursor, 'portal_evm_get_analytics') : undefined
       const requestedDataset = network ? await resolveDataset(network) : undefined
@@ -84,6 +112,7 @@ export function registerGetTopContractsTool(server: McpServer) {
         ])
       }
       const chainType = detectChainType(dataset)
+      const networkLabel = humanizeLabel(dataset) ?? dataset
 
       if (chainType !== 'evm') {
         throw createUnsupportedChainError({
@@ -145,12 +174,14 @@ export function registerGetTopContractsTool(server: McpServer) {
         ...(to_timestamp !== undefined ? { to_timestamp } : {}),
         limit,
         include_details,
+        mode,
         window_from_block: resolvedWindow.from_block,
         window_to_block: resolvedWindow.to_block,
         range_label: rangeLabel,
       }
 
-      const fromBlock = request.window_from_block
+      const effectiveMode = request.mode ?? mode
+      const requestedFromBlock = request.window_from_block
       const latestBlock = request.window_to_block
       const pageSize = request.limit
       const currentOffset = paginationCursor?.offset ?? 0
@@ -158,9 +189,15 @@ export function registerGetTopContractsTool(server: McpServer) {
         ? request.range_label
         : `last ${request.range_label}`
 
+      let analyzedFromBlock = requestedFromBlock
+      const requestedWindowSize = latestBlock - requestedFromBlock + 1
+      if (effectiveMode === 'fast' && requestedWindowSize > FAST_EVM_ANALYTICS_BLOCK_CAP) {
+        analyzedFromBlock = Math.max(0, latestBlock - FAST_EVM_ANALYTICS_BLOCK_CAP + 1)
+      }
+
       const query = {
         type: 'evm',
-        fromBlock,
+        fromBlock: analyzedFromBlock,
         toBlock: latestBlock,
         fields: {
           block: { number: true },
@@ -174,98 +211,115 @@ export function registerGetTopContractsTool(server: McpServer) {
 
       // Count transactions per contract. Large EVM windows can exceed Portal's response-size cap,
       // so we automatically scan them in smaller block chunks instead of failing the whole request.
-      const contractCounts: Map<string, { count: number; samples: string[] }> = new Map()
-      let totalTxs = 0
-      let currentFrom = fromBlock
-      let chunkSize = Math.min(INITIAL_EVM_ANALYTICS_CHUNK_SIZE, Math.max(1, latestBlock - fromBlock + 1))
-      let autoChunked = false
+      const cacheKey = stableCacheKey('evm-analytics', {
+        dataset,
+        from_block: analyzedFromBlock,
+        to_block: latestBlock,
+        include_details,
+      })
+      const { value: cachedScan } = await evmAnalyticsCache.getOrLoad(cacheKey, async () => {
+        const contractCounts: Map<string, { count: number; samples: string[] }> = new Map()
+        let totalTxs = 0
+        let currentFrom = analyzedFromBlock
+        let chunkSize = Math.min(INITIAL_EVM_ANALYTICS_CHUNK_SIZE, Math.max(1, latestBlock - analyzedFromBlock + 1))
+        let autoChunked = false
 
-      while (currentFrom <= latestBlock) {
-        const plannedTo = Math.min(currentFrom + chunkSize - 1, latestBlock)
-        let lastProcessedBlock: number | undefined
-        const chunkCounts: Map<string, { count: number; samples: string[] }> = new Map()
-        let chunkTotalTxs = 0
+        while (currentFrom <= latestBlock) {
+          const plannedTo = Math.min(currentFrom + chunkSize - 1, latestBlock)
+          let lastProcessedBlock: number | undefined
+          const chunkCounts: Map<string, { count: number; samples: string[] }> = new Map()
+          let chunkTotalTxs = 0
 
-        try {
-          const processed = await portalFetchStreamRangeVisit(`${PORTAL_URL}/datasets/${dataset}/stream`, {
-            ...query,
-            fromBlock: currentFrom,
-            toBlock: plannedTo,
-          }, {
-            onRecord: (record) => {
-              const transactions = (record as {
-                transactions?: Array<{ to?: string; hash?: string }>
-              }).transactions || []
+          try {
+            const processed = await portalFetchStreamRangeVisit(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+              ...query,
+              fromBlock: currentFrom,
+              toBlock: plannedTo,
+            }, {
+              onRecord: (record) => {
+                const transactions = (record as {
+                  transactions?: Array<{ to?: string; hash?: string }>
+                }).transactions || []
 
-              lastProcessedBlock = getRecordBlockNumber(record) ?? lastProcessedBlock
+                lastProcessedBlock = getRecordBlockNumber(record) ?? lastProcessedBlock
 
-              transactions.forEach((tx) => {
-                if (!tx.to) {
-                  return
-                }
+                transactions.forEach((tx) => {
+                  if (!tx.to) {
+                    return
+                  }
 
-                const address = tx.to.toLowerCase()
-                chunkTotalTxs++
+                  const address = tx.to.toLowerCase()
+                  chunkTotalTxs++
 
-                if (!chunkCounts.has(address)) {
-                  chunkCounts.set(address, { count: 0, samples: [] })
-                }
+                  if (!chunkCounts.has(address)) {
+                    chunkCounts.set(address, { count: 0, samples: [] })
+                  }
 
-                const entry = chunkCounts.get(address)!
-                entry.count++
+                  const entry = chunkCounts.get(address)!
+                  entry.count++
 
-                if (include_details && tx.hash && entry.samples.length < 5) {
-                  entry.samples.push(tx.hash)
-                }
-              })
-            },
-          })
+                  if (include_details && tx.hash && entry.samples.length < 5) {
+                    entry.samples.push(tx.hash)
+                  }
+                })
+              },
+            })
 
-          if (processed === 0 || lastProcessedBlock === undefined || lastProcessedBlock < currentFrom) {
-            break
-          }
-
-          totalTxs += chunkTotalTxs
-          chunkCounts.forEach((chunkEntry, address) => {
-            const merged = contractCounts.get(address) ?? { count: 0, samples: [] }
-            merged.count += chunkEntry.count
-
-            if (include_details && chunkEntry.samples.length > 0 && merged.samples.length < 5) {
-              merged.samples.push(...chunkEntry.samples.slice(0, 5 - merged.samples.length))
+            if (processed === 0 || lastProcessedBlock === undefined || lastProcessedBlock < currentFrom) {
+              break
             }
 
-            contractCounts.set(address, merged)
-          })
+            totalTxs += chunkTotalTxs
+            chunkCounts.forEach((chunkEntry, address) => {
+              const merged = contractCounts.get(address) ?? { count: 0, samples: [] }
+              merged.count += chunkEntry.count
 
-          currentFrom = lastProcessedBlock + 1
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          if (message.includes('Response too large') && chunkSize > MIN_EVM_ANALYTICS_CHUNK_SIZE) {
-            chunkSize = Math.max(MIN_EVM_ANALYTICS_CHUNK_SIZE, Math.floor(chunkSize / 2))
-            autoChunked = true
-            continue
+              if (include_details && chunkEntry.samples.length > 0 && merged.samples.length < 5) {
+                merged.samples.push(...chunkEntry.samples.slice(0, 5 - merged.samples.length))
+              }
+
+              contractCounts.set(address, merged)
+            })
+
+            currentFrom = lastProcessedBlock + 1
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            if (message.includes('Response too large') && chunkSize > MIN_EVM_ANALYTICS_CHUNK_SIZE) {
+              chunkSize = Math.max(MIN_EVM_ANALYTICS_CHUNK_SIZE, Math.floor(chunkSize / 2))
+              autoChunked = true
+              continue
+            }
+
+            throw error
           }
-
-          throw error
         }
-      }
 
-      // Convert to array and sort by transaction count
-      const sortedContracts = Array.from(contractCounts.entries())
-        .map(([address, data]) => {
-          return {
-            address,
-            transaction_count: data.count,
-            percentage: ((data.count / totalTxs) * 100).toFixed(2),
-            sample_transactions: include_details ? data.samples : undefined,
-          }
-        })
-        .sort((a, b) => b.transaction_count - a.transaction_count)
-        .map((contract, index) => ({
-          rank: index + 1,
-          ...contract,
-        }))
+        const sortedContracts = Array.from(contractCounts.entries())
+          .map(([address, data]) => {
+            return {
+              address,
+              transaction_count: data.count,
+              percentage: ((data.count / totalTxs) * 100).toFixed(2),
+              sample_transactions: include_details ? data.samples : undefined,
+            }
+          })
+          .sort((a, b) => b.transaction_count - a.transaction_count)
+          .map((contract, index) => ({
+            rank: index + 1,
+            ...contract,
+          }))
 
+        return {
+          sortedContracts,
+          totalTxs,
+          uniqueContracts: contractCounts.size,
+          autoChunked,
+          analyzedFromBlock,
+          analyzedToBlock: latestBlock,
+        }
+      })
+
+      const sortedContracts = cachedScan.sortedContracts
       const { pageItems, hasMore, nextOffset } = paginateOffsetItems(sortedContracts, pageSize, currentOffset)
       const nextCursor = hasMore
         ? encodeOffsetPageCursor<TopContractsCursorRequest>({
@@ -278,36 +332,45 @@ export function registerGetTopContractsTool(server: McpServer) {
 
       const summary = {
         network: dataset,
-        total_transactions: totalTxs,
-        unique_contracts: contractCounts.size,
-        blocks_analyzed: latestBlock - fromBlock + 1,
-        from_block: fromBlock,
+        total_transactions: cachedScan.totalTxs,
+        unique_contracts: cachedScan.uniqueContracts,
+        blocks_analyzed: cachedScan.analyzedToBlock - cachedScan.analyzedFromBlock + 1,
+        from_block: cachedScan.analyzedFromBlock,
         to_block: latestBlock,
         window: windowDescription,
         page_offset: currentOffset,
         page_returned: pageItems.length,
         top_contract: sortedContracts[0]?.address,
         top_contract_txs: sortedContracts[0]?.transaction_count,
+        ...(cachedScan.analyzedFromBlock !== requestedFromBlock
+          ? { requested_from_block: requestedFromBlock }
+          : {}),
       }
 
       const notices = getTimestampWindowNotices(resolvedWindow)
-      if (autoChunked) {
+      if (cachedScan.autoChunked) {
         notices.push('Large activity windows were automatically scanned in smaller block chunks to stay within Portal response limits.')
       }
+      if (cachedScan.analyzedFromBlock !== requestedFromBlock) {
+        notices.push(`Fast mode analyzed the most recent ${FAST_EVM_ANALYTICS_BLOCK_CAP.toLocaleString()} blocks in the requested window.`)
+      }
       if (hasMore) {
-        notices.push(`Showing ranked contracts ${currentOffset + 1}-${currentOffset + pageItems.length}. Use _pagination.next_cursor to continue.`)
+        notices.push(`Showing ranked contracts ${currentOffset + 1}-${currentOffset + pageItems.length}. Call the same tool again with _pagination.next_cursor to load more.`)
       }
 
       return formatResult(
         {
           overview: {
             network: dataset,
-            total_transactions: totalTxs,
-            unique_contracts: contractCounts.size,
-            blocks_analyzed: latestBlock - fromBlock + 1,
-            from_block: fromBlock,
+            total_transactions: cachedScan.totalTxs,
+            unique_contracts: cachedScan.uniqueContracts,
+            blocks_analyzed: cachedScan.analyzedToBlock - cachedScan.analyzedFromBlock + 1,
+            from_block: cachedScan.analyzedFromBlock,
             to_block: latestBlock,
             window: windowDescription,
+            ...(cachedScan.analyzedFromBlock !== requestedFromBlock
+              ? { requested_from_block: requestedFromBlock }
+              : {}),
           },
           summary,
           tables: [
@@ -330,7 +393,7 @@ export function registerGetTopContractsTool(server: McpServer) {
           ],
           top_contracts: pageItems,
         },
-        `Analyzed ${totalTxs.toLocaleString()} EVM transactions across ${windowDescription}. Top contract: ${sortedContracts[0]?.address} (${sortedContracts[0]?.transaction_count} txs, ${sortedContracts[0]?.percentage}%)`,
+        `Analyzed ${cachedScan.totalTxs.toLocaleString()} EVM transactions on ${networkLabel} across ${windowDescription}. Top contract: ${sortedContracts[0]?.address} (${sortedContracts[0]?.transaction_count} txs, ${sortedContracts[0]?.percentage}%)`,
         {
           toolName: 'portal_evm_get_analytics',
           ...(notices.length > 0 ? { notices } : {}),
@@ -347,15 +410,15 @@ export function registerGetTopContractsTool(server: McpServer) {
             resolvedWindow,
           }),
           coverage: buildAnalysisCoverage({
-            windowFromBlock: fromBlock,
+            windowFromBlock: requestedFromBlock,
             windowToBlock: latestBlock,
-            analyzedFromBlock: fromBlock,
-            analyzedToBlock: latestBlock,
+            analyzedFromBlock: cachedScan.analyzedFromBlock,
+            analyzedToBlock: cachedScan.analyzedToBlock,
             hasMore,
           }),
           execution: buildExecutionMetadata({
             limit: pageSize,
-            from_block: fromBlock,
+            from_block: cachedScan.analyzedFromBlock,
             to_block: latestBlock,
             range_kind: resolvedWindow.range_kind,
             notes: [include_details ? 'Sample transaction hashes were included for ranked contracts.' : 'Compact ranked-contract view.'],
@@ -366,7 +429,7 @@ export function registerGetTopContractsTool(server: McpServer) {
             density: 'compact',
             design_intent: 'analytics_dashboard',
             headline: {
-              title: `Top contracts on ${dataset}`,
+              title: `Top contracts on ${networkLabel}`,
               subtitle: windowDescription,
             },
             metric_cards: [
@@ -410,7 +473,7 @@ export function registerGetTopContractsTool(server: McpServer) {
           metadata: {
             network: dataset,
             dataset,
-            from_block: fromBlock,
+            from_block: cachedScan.analyzedFromBlock,
             to_block: latestBlock,
             query_start_time: queryStartTime,
           },

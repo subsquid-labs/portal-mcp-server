@@ -1,7 +1,10 @@
+import { registerAppTool } from '@modelcontextprotocol/ext-apps/server'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { getBlockHead, resolveDataset } from '../../cache/datasets.js'
+import { createQueryCache, stableCacheKey } from '../../cache/query-cache.js'
+import { PORTAL_APP_RESOURCE_URI } from '../../constants/apps.js'
 import { EVENT_SIGNATURES, PORTAL_URL } from '../../constants/index.js'
 import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { buildTableDescriptor } from '../../helpers/chart-metadata.js'
@@ -9,10 +12,11 @@ import { ActionableError, createUnsupportedChainError } from '../../helpers/erro
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import { getKnownTokenDecimals } from '../../helpers/conversions.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
-import { formatResult } from '../../helpers/format.js'
+import { formatResult, humanizeLabel } from '../../helpers/format.js'
 import { formatTimestamp, formatTokenAmount, formatTransactionFields, hexToBigInt } from '../../helpers/formatting.js'
 import { normalizeEvmTransactionResult } from '../../helpers/normalized-results.js'
 import { encodeCursor, decodeCursor, paginateAscendingItems } from '../../helpers/pagination.js'
+import { buildWalletPipesRecipe } from '../../helpers/pipes-recipe.js'
 import { buildQueryFreshness, buildSectionCoverage } from '../../helpers/result-metadata.js'
 import { resolveTimeframeOrBlocks, type TimestampInput } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
@@ -55,6 +59,22 @@ type WalletSummaryCursor = {
   }
 }
 
+type WalletSectionName = 'transactions' | 'token_transfers' | 'nft_transfers'
+
+type WalletSectionPage<T> = {
+  pageItems: T[]
+  hasMore: boolean
+  nextBoundary: WalletBoundaryCursor | null
+}
+
+const WALLET_SECTION_CACHE_TTL_MS = 30_000
+const WALLET_SECTION_CACHE_MAX_ENTRIES = 48
+
+const walletSectionQueryCache = createQueryCache<unknown[]>({
+  ttl: WALLET_SECTION_CACHE_TTL_MS,
+  maxEntries: WALLET_SECTION_CACHE_MAX_ENTRIES,
+})
+
 type WalletTransactionItem = Record<string, unknown> & {
   block_number?: number
   transactionIndex?: number
@@ -64,6 +84,14 @@ type WalletTransactionItem = Record<string, unknown> & {
 type WalletLogItem = Record<string, unknown> & {
   block_number?: number
   log_index?: number
+}
+
+type WalletCounterpartyRow = {
+  address: string
+  activity_count: number
+  sent_count: number
+  received_count: number
+  record_types: string[]
 }
 
 function getBlockNumber(item: { block_number?: number }) {
@@ -153,6 +181,33 @@ function buildSectionPagination(returned: number, hasMore: boolean) {
   }
 }
 
+async function fetchCachedWalletSection(params: {
+  dataset: string
+  section: WalletSectionName
+  query: Record<string, unknown>
+  itemKeys: string[]
+  limit: number
+  chunkSize: number
+}) {
+  const { dataset, section, query, itemKeys, limit, chunkSize } = params
+  const cacheKey = stableCacheKey('wallet-section', {
+    dataset,
+    section,
+    query,
+    itemKeys,
+    limit,
+    chunkSize,
+  })
+  const { value } = await walletSectionQueryCache.getOrLoad(cacheKey, async () =>
+    portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
+      itemKeys,
+      limit,
+      chunkSize,
+    }),
+  )
+  return value
+}
+
 function compactWalletTransactionItem(tx: WalletTransactionItem) {
   const txHash = typeof tx['hash'] === 'string' ? String(tx['hash']) : typeof tx['tx_hash'] === 'string' ? String(tx['tx_hash']) : undefined
   const timestamp = typeof tx['timestamp'] === 'number' ? Number(tx['timestamp']) : undefined
@@ -231,6 +286,88 @@ function buildWalletActivityTable(title: string, rowCount: number) {
   })
 }
 
+function buildWalletCounterpartiesTable(title: string, rowCount: number) {
+  return buildTableDescriptor({
+    id: 'counterparties',
+    dataKey: 'relationships.top_counterparties',
+    rowCount,
+    title,
+    subtitle: 'Most frequent counterparties observed in the selected wallet window',
+    keyField: 'address',
+    defaultSort: { key: 'activity_count', direction: 'desc' },
+    dense: true,
+    columns: [
+      { key: 'address', label: 'Counterparty', kind: 'dimension', format: 'address' },
+      { key: 'activity_count', label: 'Interactions', kind: 'metric', format: 'integer', align: 'right' },
+      { key: 'sent_count', label: 'Sent', kind: 'metric', format: 'integer', align: 'right' },
+      { key: 'received_count', label: 'Received', kind: 'metric', format: 'integer', align: 'right' },
+    ],
+  })
+}
+
+function buildTopCounterparties(items: Array<Record<string, unknown>>, walletAddress: string, limit: number = 5): WalletCounterpartyRow[] {
+  const normalizedWallet = walletAddress.toLowerCase()
+  const counterparties = new Map<string, { activityCount: number; sentCount: number; receivedCount: number; recordTypes: Set<string> }>()
+
+  for (const item of items) {
+    const sender = typeof item.sender === 'string' ? item.sender.toLowerCase() : undefined
+    const recipient = typeof item.recipient === 'string' ? item.recipient.toLowerCase() : undefined
+    const recordType = typeof item.record_type === 'string' ? item.record_type : undefined
+
+    const seenInItem = new Set<string>()
+    if (sender && sender !== normalizedWallet) {
+      seenInItem.add(sender)
+    }
+    if (recipient && recipient !== normalizedWallet) {
+      seenInItem.add(recipient)
+    }
+
+    for (const counterparty of seenInItem) {
+      const existing = counterparties.get(counterparty) ?? {
+        activityCount: 0,
+        sentCount: 0,
+        receivedCount: 0,
+        recordTypes: new Set<string>(),
+      }
+
+      existing.activityCount += 1
+      if (sender === normalizedWallet && recipient === counterparty) {
+        existing.sentCount += 1
+      }
+      if (recipient === normalizedWallet && sender === counterparty) {
+        existing.receivedCount += 1
+      }
+      if (recordType) {
+        existing.recordTypes.add(recordType)
+      }
+
+      counterparties.set(counterparty, existing)
+    }
+  }
+
+  return Array.from(counterparties.entries())
+    .map(([address, value]) => ({
+      address,
+      activity_count: value.activityCount,
+      sent_count: value.sentCount,
+      received_count: value.receivedCount,
+      record_types: Array.from(value.recordTypes).sort(),
+    }))
+    .sort((left, right) => {
+      if (right.activity_count !== left.activity_count) {
+        return right.activity_count - left.activity_count
+      }
+      if (right.sent_count !== left.sent_count) {
+        return right.sent_count - left.sent_count
+      }
+      if (right.received_count !== left.received_count) {
+        return right.received_count - left.received_count
+      }
+      return left.address.localeCompare(right.address)
+    })
+    .slice(0, limit)
+}
+
 function buildWalletUi(params: {
   title: string
   subtitle: string
@@ -300,7 +437,7 @@ function buildWalletUi(params: {
 
 function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid') {
   const answerSequenceByVm: Record<typeof vm, string[]> = {
-    evm: ['overview', 'activity.count', 'evm.transactions.count', 'assets.token_transfers', 'assets.nft_transfers', 'activity.items'],
+    evm: ['overview', 'activity.count', 'evm.transactions.count', 'relationships.top_counterparties', 'assets.token_transfers', 'assets.nft_transfers', 'activity.items'],
     solana: ['overview', 'activity.count', 'solana.fee_summary.total_fees_lamports', 'solana.fee_summary.avg_fee_lamports', 'activity.items'],
     bitcoin: ['overview', 'activity.count', 'assets.total_btc_received_sats', 'assets.total_btc_spent_sats', 'bitcoin.outputs_count', 'bitcoin.inputs_count', 'activity.items'],
     hyperliquid: ['overview', 'activity.count', 'hyperliquid.fee_summary.total_fees', 'assets.volume_by_coin', 'activity.items'],
@@ -308,8 +445,8 @@ function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid
 
   const parserNotesByVm: Record<typeof vm, string[]> = {
     evm: [
-      'Start with overview and activity.count, then mention EVM transactions plus token or NFT transfer counts.',
-      'activity.items is the normalized cross-chain wallet feed; evm contains the EVM-specific count breakdown.',
+      'Start with overview and activity.count, then mention EVM transactions, top counterparties, and token or NFT transfer counts.',
+      'activity.items is the normalized cross-chain wallet feed; relationships.top_counterparties and evm contain the most useful EVM-specific drill-downs.',
     ],
     solana: [
       'Start with overview and activity.count, then mention the fee summary before drilling into activity.items.',
@@ -337,34 +474,43 @@ function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid
 export function registerGetWalletSummaryTool(server: McpServer) {
   const FAST_MODE_BLOCK_CAP = 3000
 
-  server.tool(
+  registerAppTool(
+    server,
     'portal_get_wallet_summary',
-    buildToolDescription('portal_get_wallet_summary'),
     {
-      network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
-      address: z.string().optional().describe('Wallet address to analyze. Optional when continuing with cursor.'),
-      timeframe: z
-        .string()
-        .optional()
-        .default('1000')
-        .describe("Look-back period as timeframe or block count. Examples: '1h', '24h', '7d', '3d', '1000'."),
-      from_timestamp: z
-        .union([z.string(), z.number()])
-        .optional()
-        .describe('Natural start time like "1h ago", ISO datetime, or Unix timestamp'),
-      to_timestamp: z
-        .union([z.string(), z.number()])
-        .optional()
-        .describe('Natural end time like "now", ISO datetime, or Unix timestamp'),
-      include_tokens: z.boolean().optional().default(true).describe('Include ERC20 token transfers'),
-      include_nfts: z.boolean().optional().default(false).describe('Include NFT transfers (ERC721/1155)'),
-      limit_per_type: z.number().optional().default(10).describe('Max items per category (txs, tokens, nfts)'),
-      mode: z
-        .enum(['fast', 'deep'])
-        .optional()
-        .default('fast')
-        .describe('fast = cap the scanned window for responsiveness, deep = use the full requested wallet window'),
-      cursor: z.string().optional().describe('Continuation cursor from a previous response'),
+      title: 'Portal Wallet Summary',
+      description: buildToolDescription('portal_get_wallet_summary'),
+      inputSchema: {
+        network: z.string().optional().describe('Network name or alias. Optional when continuing with cursor.'),
+        address: z.string().optional().describe('Wallet address to analyze. Optional when continuing with cursor.'),
+        timeframe: z
+          .string()
+          .optional()
+          .default('1000')
+          .describe("Look-back period as timeframe or block count. Examples: '1h', '24h', '7d', '3d', '1000'."),
+        from_timestamp: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe('Natural start time like "1h ago", ISO datetime, or Unix timestamp'),
+        to_timestamp: z
+          .union([z.string(), z.number()])
+          .optional()
+          .describe('Natural end time like "now", ISO datetime, or Unix timestamp'),
+        include_tokens: z.boolean().optional().default(true).describe('Include ERC20 token transfers'),
+        include_nfts: z.boolean().optional().default(false).describe('Include NFT transfers (ERC721/1155)'),
+        limit_per_type: z.number().optional().default(10).describe('Max items per category (txs, tokens, nfts)'),
+        mode: z
+          .enum(['fast', 'deep'])
+          .optional()
+          .default('fast')
+          .describe('fast = cap the scanned window for responsiveness, deep = use the full requested wallet window'),
+        cursor: z.string().optional().describe('Continuation cursor from a previous response'),
+      },
+      _meta: {
+        ui: {
+          resourceUri: PORTAL_APP_RESOURCE_URI,
+        },
+      },
     },
     async ({ network, address, timeframe, from_timestamp, to_timestamp, include_tokens, include_nfts, limit_per_type, mode, cursor }) => {
       const queryStartTime = Date.now()
@@ -378,6 +524,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         ])
       }
       const chainType = detectChainType(dataset)
+      const networkLabel = humanizeLabel(dataset) ?? dataset
 
       if (chainType === 'substrate') {
         throw createUnsupportedChainError({
@@ -416,8 +563,8 @@ export function registerGetWalletSummaryTool(server: McpServer) {
       }
 
       if (paginationCursor && requestedDataset && paginationCursor.dataset !== requestedDataset) {
-        throw new ActionableError('This cursor belongs to a different dataset.', [
-          'Reuse the cursor with the same dataset and wallet address.',
+        throw new ActionableError('This cursor belongs to a different network.', [
+          'Reuse the cursor with the same network and wallet address.',
           'Omit cursor to start a fresh wallet summary.',
         ], {
           cursor_dataset: paginationCursor.dataset,
@@ -441,6 +588,15 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         include_nfts = paginationCursor.include_nfts
         limit_per_type = paginationCursor.limit_per_type
       }
+
+      const pipesRecipe = buildWalletPipesRecipe({
+        network: dataset,
+        address: normalizedAddress,
+        timeframe,
+        mode,
+        include_tokens,
+        include_nfts,
+      })
 
       // Resolve block range — numeric values are exact block counts,
       // time-based values use Portal's /timestamps/ API
@@ -528,11 +684,17 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         txFields.l1GasUsed = true
       }
 
-      let transactions: WalletTransactionItem[] = []
-      let txHasMore = false
-      let txNextBoundary: WalletBoundaryCursor | null = null
+      const paddedAddress = '0x' + normalizedAddress.slice(2).padStart(64, '0')
 
-      if (sectionCursors.transactions !== null) {
+      const fetchTransactionsSection = async (): Promise<WalletSectionPage<WalletTransactionItem>> => {
+        if (sectionCursors.transactions === null) {
+          return {
+            pageItems: [],
+            hasMore: false,
+            nextBoundary: null,
+          }
+        }
+
         const txCursor = sectionCursors.transactions ?? undefined
         const txQuery = {
           type: 'evm',
@@ -546,7 +708,10 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         }
 
         const txFetchLimit = limit_per_type + (txCursor?.skip_inclusive_block ?? 0) + 1
-        const txResults = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, txQuery, {
+        const txResults = await fetchCachedWalletSection({
+          dataset,
+          section: 'transactions',
+          query: txQuery,
           itemKeys: ['transactions'],
           limit: txFetchLimit,
           chunkSize: 250,
@@ -585,19 +750,23 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           txCursor,
         )
 
-        transactions = pagedTransactions.pageItems
-        txHasMore = pagedTransactions.hasMore
-        txNextBoundary = pagedTransactions.hasMore ? pagedTransactions.nextBoundary ?? null : null
+        return {
+          pageItems: pagedTransactions.pageItems,
+          hasMore: pagedTransactions.hasMore,
+          nextBoundary: pagedTransactions.hasMore ? pagedTransactions.nextBoundary ?? null : null,
+        }
       }
 
-      // Query 2: Token Transfers (if requested)
-      let tokenTransfers: WalletLogItem[] = []
-      let tokenHasMore = false
-      let tokenNextBoundary: WalletBoundaryCursor | null = null
+      const fetchTokenTransfersSection = async (): Promise<WalletSectionPage<WalletLogItem>> => {
+        if (!include_tokens || sectionCursors.token_transfers === null) {
+          return {
+            pageItems: [],
+            hasMore: false,
+            nextBoundary: null,
+          }
+        }
 
-      if (include_tokens && sectionCursors.token_transfers !== null) {
         const tokenCursor = sectionCursors.token_transfers ?? undefined
-        const paddedAddress = '0x' + normalizedAddress.slice(2).padStart(64, '0')
         const tokenQuery = {
           type: 'evm',
           fromBlock,
@@ -619,7 +788,10 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         }
 
         const tokenFetchLimit = limit_per_type + (tokenCursor?.skip_inclusive_block ?? 0) + 1
-        const tokenResults = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, tokenQuery, {
+        const tokenResults = await fetchCachedWalletSection({
+          dataset,
+          section: 'token_transfers',
+          query: tokenQuery,
           itemKeys: ['logs'],
           limit: tokenFetchLimit,
           chunkSize: 250,
@@ -669,19 +841,23 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           tokenCursor,
         )
 
-        tokenTransfers = pagedTokens.pageItems
-        tokenHasMore = pagedTokens.hasMore
-        tokenNextBoundary = pagedTokens.hasMore ? pagedTokens.nextBoundary ?? null : null
+        return {
+          pageItems: pagedTokens.pageItems,
+          hasMore: pagedTokens.hasMore,
+          nextBoundary: pagedTokens.hasMore ? pagedTokens.nextBoundary ?? null : null,
+        }
       }
 
-      // Query 3: NFT Transfers (if requested)
-      let nftTransfers: WalletLogItem[] = []
-      let nftHasMore = false
-      let nftNextBoundary: WalletBoundaryCursor | null = null
+      const fetchNftTransfersSection = async (): Promise<WalletSectionPage<WalletLogItem>> => {
+        if (!include_nfts || sectionCursors.nft_transfers === null) {
+          return {
+            pageItems: [],
+            hasMore: false,
+            nextBoundary: null,
+          }
+        }
 
-      if (include_nfts && sectionCursors.nft_transfers !== null) {
         const nftCursor = sectionCursors.nft_transfers ?? undefined
-        const paddedAddress = '0x' + normalizedAddress.slice(2).padStart(64, '0')
         const nftQuery = {
           type: 'evm',
           fromBlock,
@@ -715,7 +891,10 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         }
 
         const nftFetchLimit = limit_per_type + (nftCursor?.skip_inclusive_block ?? 0) + 1
-        const nftResults = await portalFetchRecentRecords(`${PORTAL_URL}/datasets/${dataset}/stream`, nftQuery, {
+        const nftResults = await fetchCachedWalletSection({
+          dataset,
+          section: 'nft_transfers',
+          query: nftQuery,
           itemKeys: ['logs'],
           limit: nftFetchLimit,
           chunkSize: 250,
@@ -751,10 +930,30 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           nftCursor,
         )
 
-        nftTransfers = pagedNfts.pageItems
-        nftHasMore = pagedNfts.hasMore
-        nftNextBoundary = pagedNfts.hasMore ? pagedNfts.nextBoundary ?? null : null
+        return {
+          pageItems: pagedNfts.pageItems,
+          hasMore: pagedNfts.hasMore,
+          nextBoundary: pagedNfts.hasMore ? pagedNfts.nextBoundary ?? null : null,
+        }
       }
+
+      const [transactionSection, tokenSection, nftSection] = await Promise.all([
+        fetchTransactionsSection(),
+        fetchTokenTransfersSection(),
+        fetchNftTransfersSection(),
+      ])
+
+      const transactions = transactionSection.pageItems
+      const txHasMore = transactionSection.hasMore
+      const txNextBoundary = transactionSection.nextBoundary
+
+      const tokenTransfers = tokenSection.pageItems
+      const tokenHasMore = tokenSection.hasMore
+      const tokenNextBoundary = tokenSection.nextBoundary
+
+      const nftTransfers = nftSection.pageItems
+      const nftHasMore = nftSection.hasMore
+      const nftNextBoundary = nftSection.nextBoundary
 
       const hasMore = txHasMore || tokenHasMore || nftHasMore
       const nextCursor = hasMore
@@ -783,7 +982,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         if (tokenHasMore) limitedItems.push('token transfers')
         if (nftHasMore) limitedItems.push('NFT transfers')
         notices.push(
-          `Showing the latest ${limit_per_type} ${limitedItems.join(', ')} in this page. Use _pagination.next_cursor to continue.`,
+          `Showing the latest ${limit_per_type} ${limitedItems.join(', ')} in this page. Call the same tool again with _pagination.next_cursor to load older wallet activity.`,
         )
       }
       if (!paginationCursor && mode === 'fast' && fromBlock > requestedFromBlock) {
@@ -798,6 +997,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
       const combinedActivity = [...compactTransactions, ...compactTokenTransfers, ...compactNftTransfers].sort(
         (left, right) => Number(left.timestamp || 0) - Number(right.timestamp || 0),
       )
+      const topCounterparties = buildTopCounterparties(combinedActivity, normalizedAddress)
 
       const summary: Record<string, unknown> = {
         overview: {
@@ -813,6 +1013,9 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         activity: {
           count: combinedActivity.length,
           items: combinedActivity,
+        },
+        relationships: {
+          top_counterparties: topCounterparties,
         },
         assets: {
           token_transfers: include_tokens ? compactTokenTransfers.length : 0,
@@ -837,6 +1040,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         },
         tables: [
           buildWalletActivityTable('Wallet activity', combinedActivity.length),
+          buildWalletCounterpartiesTable('Top counterparties', topCounterparties.length),
         ],
       }
 
@@ -886,16 +1090,49 @@ export function registerGetWalletSummaryTool(server: McpServer) {
             include_nfts ? 'NFT section included.' : 'NFT section omitted.',
           ],
         }),
+        pipes: pipesRecipe,
         ui: buildWalletUi({
           title: `Wallet summary: ${normalizedAddress}`,
-          subtitle: `${describeWalletWindow(windowDescription)} on ${dataset}`,
+          subtitle: `${describeWalletWindow(windowDescription)} on ${networkLabel}`,
           activityCountPath: 'activity.count',
           primaryValuePath: 'evm.transactions.count',
           primaryLabel: 'Transactions',
           primaryFormat: 'integer',
           secondaryCards: [
+            buildMetricCard({ id: 'counterparties', label: 'Counterparties', value_path: 'relationships.top_counterparties.length', format: 'integer' }),
             buildMetricCard({ id: 'token-transfers', label: 'Token transfers', value_path: 'assets.token_transfers', format: 'integer' }),
             buildMetricCard({ id: 'nft-transfers', label: 'NFT transfers', value_path: 'assets.nft_transfers', format: 'integer' }),
+          ],
+          panels: [
+            buildTimelinePanel({
+              id: 'wallet-timeline',
+              kind: 'timeline_panel',
+              title: 'Activity timeline',
+              subtitle: 'Chronological wallet activity with timestamps and normalized labels.',
+              data_key: 'activity.items',
+              timestamp_key: 'timestamp_human',
+              title_key: 'primary_id',
+              subtitle_keys: ['record_type', 'sender', 'recipient'],
+              badge_key: 'record_type',
+              emphasis: 'primary',
+            }),
+            buildTablePanel({
+              id: 'wallet-table',
+              kind: 'table_panel',
+              title: 'Activity table',
+              subtitle: 'Exact normalized rows for the selected wallet window.',
+              table_id: 'activity',
+            }),
+            buildStatListPanel({
+              id: 'wallet-counterparties',
+              kind: 'stat_list_panel',
+              title: 'Top counterparties',
+              subtitle: 'Most frequent wallets or contracts interacting with this address in the current view.',
+              data_key: 'relationships.top_counterparties',
+              label_key: 'address',
+              value_key: 'activity_count',
+              value_format: 'integer',
+            }),
           ],
           followUpActions: [
             ...(nextCursor ? [{ label: 'Load older wallet activity', intent: 'continue' as const, target: '_pagination.next_cursor' }] : []),
@@ -927,6 +1164,13 @@ async function buildNonEvmWalletSummary(params: {
   queryStartTime: number
 }) {
   const { dataset, chainType, address, timeframe, from_timestamp, to_timestamp, mode, limit_per_type, queryStartTime } = params
+  const networkLabel = humanizeLabel(dataset) ?? dataset
+  const pipesRecipe = buildWalletPipesRecipe({
+    network: dataset,
+    address: address ?? 'unknown-wallet',
+    timeframe,
+    mode,
+  })
   if (!address) {
     throw new ActionableError('address is required for wallet summary.', [
       'Provide address for a fresh wallet summary.',
@@ -1038,7 +1282,7 @@ async function buildNonEvmWalletSummary(params: {
       tables: [
         buildWalletActivityTable('Wallet activity', items.length),
       ],
-    }, `Wallet summary for ${address} on ${dataset}: ${items.length} recent Solana transactions.`, {
+    }, `Wallet summary for ${address} on ${networkLabel}: ${items.length} recent Solana transactions.`, {
       toolName: 'portal_get_wallet_summary',
       notices,
       pagination: buildSectionPagination(items.length, false),
@@ -1055,9 +1299,10 @@ async function buildNonEvmWalletSummary(params: {
         range_kind: resolvedWindow.range_kind,
         normalized_output: true,
       }),
+      pipes: pipesRecipe,
       ui: buildWalletUi({
         title: `Wallet summary: ${address}`,
-        subtitle: `${describeWalletWindow(timeframe)} on ${dataset}`,
+        subtitle: `${describeWalletWindow(timeframe)} on ${networkLabel}`,
         activityCountPath: 'activity.count',
         primaryValuePath: 'solana.fee_summary.total_fees_lamports',
         primaryLabel: 'Total fees',
@@ -1174,7 +1419,7 @@ async function buildNonEvmWalletSummary(params: {
       tables: [
         buildWalletActivityTable('Wallet activity', outputs.length + inputs.length),
       ],
-    }, `Wallet summary for ${address} on ${dataset}: ${outputs.length} recent outputs and ${inputs.length} recent inputs.`, {
+    }, `Wallet summary for ${address} on ${networkLabel}: ${outputs.length} recent outputs and ${inputs.length} recent inputs.`, {
       toolName: 'portal_get_wallet_summary',
       notices,
       freshness: buildQueryFreshness({
@@ -1190,9 +1435,10 @@ async function buildNonEvmWalletSummary(params: {
         range_kind: resolvedWindow.range_kind,
         normalized_output: true,
       }),
+      pipes: pipesRecipe,
       ui: buildWalletUi({
         title: `Wallet summary: ${address}`,
-        subtitle: `${describeWalletWindow(timeframe)} on ${dataset}`,
+        subtitle: `${describeWalletWindow(timeframe)} on ${networkLabel}`,
         activityCountPath: 'activity.count',
         primaryValuePath: 'assets.total_btc_received_sats',
         primaryLabel: 'BTC received (sats)',
@@ -1307,7 +1553,7 @@ async function buildNonEvmWalletSummary(params: {
         ],
       }),
     ],
-  }, `Wallet summary for ${address} on ${dataset}: ${fills.length} recent fills.`, {
+  }, `Wallet summary for ${address} on ${networkLabel}: ${fills.length} recent fills.`, {
     toolName: 'portal_get_wallet_summary',
     notices,
     freshness: buildQueryFreshness({
@@ -1323,9 +1569,10 @@ async function buildNonEvmWalletSummary(params: {
       range_kind: resolvedWindow.range_kind,
       normalized_output: true,
     }),
+    pipes: pipesRecipe,
     ui: buildWalletUi({
       title: `Wallet summary: ${address}`,
-      subtitle: `${describeWalletWindow(timeframe)} on ${dataset}`,
+      subtitle: `${describeWalletWindow(timeframe)} on ${networkLabel}`,
       activityCountPath: 'activity.count',
       primaryValuePath: 'hyperliquid.fee_summary.total_fees',
       primaryLabel: 'Total fees',

@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { getBlockHead, getChainType, getDatasets, isL2Chain, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
-import { formatResult } from '../../helpers/format.js'
+import { formatResult, humanizeLabel } from '../../helpers/format.js'
 import { formatDuration, formatTimestamp } from '../../helpers/formatting.js'
 import { buildToolDescription } from '../../helpers/tool-ux.js'
 import type { BlockHead, DatasetMetadata } from '../../types/index.js'
@@ -98,6 +98,44 @@ function buildHeadLag(blockNumber: number | undefined, timestamp: number | undef
   return lag
 }
 
+function buildFreshnessSummary(params: {
+  networkLabel: string
+  realTime: boolean | undefined
+  indexedHead: ReturnType<typeof buildHeadLag>
+  finalizedLagBlocks: number | undefined
+  finalizedLagFormatted: string | undefined
+}) {
+  const { networkLabel, realTime, indexedHead, finalizedLagBlocks, finalizedLagFormatted } = params
+
+  if (!indexedHead || indexedHead.block_number === undefined) {
+    return `${networkLabel} is indexed, but Portal could not determine how fresh the current head is.`
+  }
+
+  const status = indexedHead.status === 'fresh'
+    ? 'looks caught up'
+    : indexedHead.status === 'delayed'
+      ? 'is a little behind'
+      : 'is noticeably behind'
+
+  const ageSummary =
+    typeof indexedHead.age_formatted === 'string'
+      ? `The indexed head is about ${indexedHead.age_formatted} old.`
+      : 'The indexed head age is currently unknown.'
+
+  const finalizedSummary =
+    finalizedLagBlocks === undefined
+      ? 'Finalized-head lag is not available for this network.'
+      : finalizedLagBlocks === 0
+        ? 'Finalized data is fully caught up.'
+        : `Finalized data trails by ${finalizedLagBlocks.toLocaleString('en-US')} block${finalizedLagBlocks === 1 ? '' : 's'}${finalizedLagFormatted ? ` (${finalizedLagFormatted})` : ''}.`
+
+  const realtimeSummary = realTime
+    ? 'This network has a real-time indexed tail.'
+    : 'This network is indexed, but it does not currently advertise a real-time tail.'
+
+  return `${networkLabel} ${status}. ${ageSummary} ${finalizedSummary} ${realtimeSummary}`
+}
+
 // ============================================================================
 // Tool: Get Dataset Info
 // ============================================================================
@@ -111,6 +149,7 @@ export function registerGetDatasetInfoTool(server: McpServer) {
     },
     async ({ network }) => {
       const dataset = await resolveDataset(network)
+      const networkLabel = humanizeLabel(dataset) ?? dataset
 
       const [datasets, metadata, head, finalizedHead] = await Promise.all([
         getDatasets(),
@@ -137,6 +176,9 @@ export function registerGetDatasetInfoTool(server: McpServer) {
         networkType = 'devnet'
       }
 
+      const indexedHead = buildHeadLag(head.number, headTimestamp)
+      const finalizedHeadLag = finalizedHead ? buildHeadLag(finalizedHead.number, finalizedHeadTimestamp) : undefined
+
       return formatResult({
         network: dataset,
         display_name: ds?.metadata?.display_name,
@@ -151,9 +193,20 @@ export function registerGetDatasetInfoTool(server: McpServer) {
         start_block: metadata.start_block,
         head,
         finalized_head: finalizedHead,
+        freshness_summary: buildFreshnessSummary({
+          networkLabel,
+          realTime: ds?.real_time,
+          indexedHead,
+          finalizedLagBlocks:
+            finalizedHead !== undefined ? Math.max(0, head.number - finalizedHead.number) : undefined,
+          finalizedLagFormatted:
+            finalizedHeadTimestamp !== undefined && headTimestamp !== undefined
+              ? formatDuration(Math.max(0, headTimestamp - finalizedHeadTimestamp))
+              : undefined,
+        }),
         indexing: {
-          indexed_head: buildHeadLag(head.number, headTimestamp),
-          finalized_head: finalizedHead ? buildHeadLag(finalizedHead.number, finalizedHeadTimestamp) : undefined,
+          indexed_head: indexedHead,
+          finalized_head: finalizedHeadLag,
           finalized_lag_blocks:
             finalizedHead !== undefined ? Math.max(0, head.number - finalizedHead.number) : undefined,
           finalized_lag_seconds:
@@ -167,7 +220,17 @@ export function registerGetDatasetInfoTool(server: McpServer) {
         },
         tables: ds?.schema?.tables ? Object.keys(ds.schema.tables) : undefined,
         aliases: ds?.aliases,
-      }, undefined, {
+      }, buildFreshnessSummary({
+        networkLabel,
+        realTime: ds?.real_time,
+        indexedHead,
+        finalizedLagBlocks:
+          finalizedHead !== undefined ? Math.max(0, head.number - finalizedHead.number) : undefined,
+        finalizedLagFormatted:
+          finalizedHeadTimestamp !== undefined && headTimestamp !== undefined
+            ? formatDuration(Math.max(0, headTimestamp - finalizedHeadTimestamp))
+            : undefined,
+      }), {
         toolName: 'portal_get_network_info',
       })
     },

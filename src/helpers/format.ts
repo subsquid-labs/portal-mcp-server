@@ -3,6 +3,7 @@
 // ============================================================================
 
 import { buildLlmHints, type LlmOverrides } from './llm-hints.js'
+import type { PipesRecipe } from './pipes-recipe.js'
 import { getToolContract } from './tool-ux.js'
 
 const MAX_RESPONSE_LENGTH = 50_000 // 50KB - keeps responses within MCP client context limits
@@ -19,6 +20,7 @@ export interface FormatOptions {
   execution?: Record<string, unknown>
   ui?: unknown
   llm?: LlmOverrides
+  pipes?: PipesRecipe
   metadata?: {
     network?: string
     dataset?: string
@@ -132,7 +134,7 @@ function capitalizeWord(word: string): string {
   return lower.charAt(0).toUpperCase() + lower.slice(1)
 }
 
-function humanizeLabel(value: unknown): string | undefined {
+export function humanizeLabel(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   if (!trimmed) return undefined
@@ -257,6 +259,7 @@ function buildDisplay(payload: RecordLike): RecordLike | undefined {
 
 function buildNextSteps(payload: RecordLike): RecordLike | undefined {
   const ui = isRecord(payload._ui) ? payload._ui : undefined
+  const pipesHandoff = isRecord(payload.pipes_handoff) ? payload.pipes_handoff : undefined
   const actions = asArray<RecordLike>(ui?.follow_up_actions)
     .slice(0, 6)
     .map((action) => ({
@@ -266,18 +269,42 @@ function buildNextSteps(payload: RecordLike): RecordLike | undefined {
     }))
 
   const pagination = isRecord(payload._pagination) ? payload._pagination : undefined
-  if (actions.length === 0 && typeof pagination?.next_cursor !== 'string') {
+  const hasContinuation = typeof pagination?.next_cursor === 'string'
+  const hasExplicitContinueAction = actions.some((action) => action.intent === 'continue')
+
+  if (hasContinuation && !hasExplicitContinueAction) {
+    actions.unshift({
+      label: 'Load older results',
+      intent: 'continue',
+      target: '_pagination.next_cursor',
+    })
+  }
+
+  if (actions.length === 0 && typeof pagination?.next_cursor !== 'string' && !pipesHandoff) {
     return undefined
   }
 
   return {
     ...(actions.length > 0 ? { actions } : {}),
-    ...(typeof pagination?.next_cursor === 'string'
+    ...(hasContinuation
       ? {
           continuation: {
             available: true,
-            cursor_path: '_pagination.next_cursor',
-            note: 'Use the next cursor to continue with older or additional results.',
+            label: 'Load older results',
+            how_to_continue: 'Call the same tool again with the next cursor from _pagination.next_cursor.',
+            note: 'This response is a preview page, so older matching results are still available.',
+          },
+        }
+      : {}),
+    ...(pipesHandoff
+      ? {
+          custom_data: {
+            available: true,
+            label: typeof pipesHandoff.title === 'string' ? pipesHandoff.title : 'Need more data?',
+            note:
+              typeof pipesHandoff.summary === 'string'
+                ? pipesHandoff.summary
+                : 'Use Pipes SDK plus SQD agent skills when you need custom indexing or protocol-specific depth.',
           },
         }
       : {}),
@@ -462,6 +489,7 @@ export function formatResult(
 
   let dataToFormat = data
   let truncated = false
+  let truncationKind: 'array' | 'nested' | undefined
   let originalCount = 0
   const notices = [...(options?.notices || [])]
 
@@ -470,6 +498,7 @@ export function formatResult(
     originalCount = data.length
     dataToFormat = data.slice(0, maxItems)
     truncated = true
+    truncationKind = 'array'
   }
 
   let jsonString: string
@@ -493,12 +522,14 @@ export function formatResult(
       dataToFormat = (dataToFormat as unknown[]).slice(0, Math.max(1, safeCount))
       jsonString = JSON.stringify(dataToFormat, null, 2)
       truncated = true
+      truncationKind = 'array'
     } else {
       const nestedTruncation = truncateNestedArraysToFit(dataToFormat, MAX_RESPONSE_LENGTH)
       if (nestedTruncation) {
         dataToFormat = nestedTruncation.data
         jsonString = nestedTruncation.jsonString ?? JSON.stringify(dataToFormat, null, 2)
         truncated = true
+        truncationKind = 'nested'
         const pathLabel = nestedTruncation.truncatedPaths.slice(0, 3).join(', ')
         const extraCount = Math.max(0, nestedTruncation.truncatedPaths.length - 3)
         notices.push(
@@ -515,9 +546,11 @@ export function formatResult(
   }
 
   if (truncated && (options?.warnOnTruncation ?? true)) {
-    notices.push(
-      `Results truncated: showing ${Array.isArray(dataToFormat) ? (dataToFormat as unknown[]).length : 0} of ${originalCount} items.`,
-    )
+    if (truncationKind === 'array' && Array.isArray(dataToFormat) && originalCount > dataToFormat.length) {
+      notices.push(`Results truncated: showing ${(dataToFormat as unknown[]).length} of ${originalCount} items.`)
+    } else if (truncationKind === 'nested') {
+      notices.push('Some nested sections were shortened to keep the response fast and readable in MCP clients.')
+    }
   }
 
   // Attach metadata
@@ -578,6 +611,9 @@ export function formatResult(
     }
     if (options?.ui !== undefined) {
       payloadRecord._ui = options.ui
+    }
+    if (options?.pipes !== undefined) {
+      payloadRecord.pipes_handoff = options.pipes
     }
 
     const answer = buildChatAnswer(payloadRecord)

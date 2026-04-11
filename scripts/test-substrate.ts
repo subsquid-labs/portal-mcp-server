@@ -68,7 +68,7 @@ async function fetchNdjson(url: string, body: Record<string, unknown>) {
 
 function assertClearUnsupported(text: string, toolName: string) {
   assert(text.includes(toolName), `${toolName} unsupported response should mention the tool name`)
-  assert(/does not support dataset 'polkadot'/i.test(text), `${toolName} unsupported response should mention polkadot clearly`)
+  assert(/does not support network 'polkadot'/i.test(text), `${toolName} unsupported response should mention polkadot clearly`)
   assert(!text.includes("table 'transactions' does not exist"), `${toolName} should not leak raw Portal transactions parse errors`)
   assert(!text.includes("table 'fills' does not exist"), `${toolName} should not leak raw Portal fills parse errors`)
 }

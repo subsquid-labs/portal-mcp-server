@@ -103,13 +103,13 @@ export function parsePortalError(
     } else if (context?.url && String(context.url).includes('/datasets/')) {
       const datasetMatch = String(context.url).match(/\/datasets\/([^/]+)/)
       if (datasetMatch) {
-        suggestions.push(`Dataset '${datasetMatch[1]}' not found or not available`)
-        suggestions.push('Use portal_list_networks to see available datasets')
-        suggestions.push("Use portal_list_networks with query: 'ethereum', 'base', etc. to find datasets by chain name")
+        suggestions.push(`Network '${datasetMatch[1]}' was not found or is not available here`)
+        suggestions.push('Use portal_list_networks to see available networks')
+        suggestions.push("Use portal_list_networks with query: 'ethereum', 'base', or another chain name to find the right network")
       }
     } else {
-      suggestions.push('Verify the dataset name is correct')
-      suggestions.push('Use portal_list_networks to see all available datasets')
+      suggestions.push('Verify the network name is correct')
+      suggestions.push('Use portal_list_networks to see all available networks')
     }
   }
 
@@ -221,15 +221,15 @@ export function createEmptyResultError(queryType: string, context: Record<string
  */
 export function createDatasetError(dataset: string, availableCount: number): ActionableError {
   const suggestions = [
-    `Dataset '${dataset}' not found`,
-    `Use portal_list_networks to see all ${availableCount} available datasets`,
+    `Network '${dataset}' was not found`,
+    `Use portal_list_networks to see all ${availableCount} available networks`,
     "Use portal_list_networks with query='ethereum' or query='base' to search by chain name",
     "Common aliases: 'ethereum', 'polygon', 'base', 'arbitrum', 'optimism'",
   ]
 
-  return new ActionableError(`Unknown dataset: '${dataset}'`, suggestions, {
+  return new ActionableError(`Unknown network: '${dataset}'`, suggestions, {
     dataset,
-    available_datasets: availableCount,
+    available_networks: availableCount,
   })
 }
 
@@ -290,7 +290,7 @@ export function createUnsupportedChainError(params: {
   const supported = supportedChains.map((chain) => describeChainType(chain)).join(', ')
 
   return new ActionableError(
-    `${toolName} does not support dataset '${dataset}' because it is a ${describeChainType(actualChainType)} dataset. Supported chain types: ${supported}.`,
+    `${toolName} does not support network '${dataset}' because it is a ${describeChainType(actualChainType)} network. Supported chain types: ${supported}.`,
     suggestions,
     {
       dataset,
@@ -311,7 +311,7 @@ export function createUnsupportedMetricError(params: {
 }): ActionableError {
   const { toolName, metric, dataset, supportedMetrics, reason, suggestions = [] } = params
   return new ActionableError(
-    `${toolName} does not support metric '${metric}' for dataset '${dataset}'.${reason ? ` ${reason}` : ''}`,
+    `${toolName} does not support metric '${metric}' for network '${dataset}'.${reason ? ` ${reason}` : ''}`,
     suggestions.length > 0
       ? suggestions
       : [`Use one of the supported metrics instead: ${supportedMetrics.join(', ')}.`],

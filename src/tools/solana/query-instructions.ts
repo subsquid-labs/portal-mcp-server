@@ -4,7 +4,7 @@ import { z } from 'zod'
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
-import { createUnsupportedChainError } from '../../helpers/errors.js'
+import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
 import {
   buildSolanaBalanceFields,
@@ -26,6 +26,16 @@ import { getValidationNotices, validateSolanaQuerySize } from '../../helpers/val
 // ============================================================================
 
 export function registerQuerySolanaInstructionsTool(server: McpServer) {
+  const stringListInput = (description: string) =>
+    z
+      .union([z.string(), z.array(z.string())])
+      .optional()
+      .transform((value) => {
+        if (value === undefined) return undefined
+        return Array.isArray(value) ? value : [value]
+      })
+      .describe(`${description} You can pass a single string or an array.`)
+
   type SolanaInstructionsRequest = {
     timeframe?: string
     from_timestamp?: TimestampInput
@@ -124,30 +134,30 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         .optional()
         .describe('Ending timestamp. Accepts Unix seconds, Unix milliseconds, ISO datetime, or relative input like "now".'),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
-      program_id: z.array(z.string()).optional().describe('Program IDs'),
-      d1: z.array(z.string()).optional().describe('1-byte discriminator filter (0x-prefixed hex)'),
-      d2: z.array(z.string()).optional().describe('2-byte discriminator filter (0x-prefixed hex)'),
-      d4: z.array(z.string()).optional().describe('4-byte discriminator filter (0x-prefixed hex)'),
-      d8: z.array(z.string()).optional().describe('8-byte discriminator filter - Anchor (0x-prefixed hex)'),
-      a0: z.array(z.string()).optional().describe('Account at index 0'),
-      a1: z.array(z.string()).optional().describe('Account at index 1'),
-      a2: z.array(z.string()).optional().describe('Account at index 2'),
-      a3: z.array(z.string()).optional().describe('Account at index 3'),
-      a4: z.array(z.string()).optional().describe('Account at index 4'),
-      a5: z.array(z.string()).optional().describe('Account at index 5'),
-      a6: z.array(z.string()).optional().describe('Account at index 6'),
-      a7: z.array(z.string()).optional().describe('Account at index 7'),
-      a8: z.array(z.string()).optional().describe('Account at index 8'),
-      a9: z.array(z.string()).optional().describe('Account at index 9'),
-      a10: z.array(z.string()).optional().describe('Account at index 10'),
-      a11: z.array(z.string()).optional().describe('Account at index 11'),
-      a12: z.array(z.string()).optional().describe('Account at index 12'),
-      a13: z.array(z.string()).optional().describe('Account at index 13'),
-      a14: z.array(z.string()).optional().describe('Account at index 14'),
-      a15: z.array(z.string()).optional().describe('Account at index 15'),
-      mentions_account: z.array(z.string()).optional().describe('Accounts mentioned anywhere in the instruction'),
+      program_id: stringListInput('Program IDs.'),
+      d1: stringListInput('1-byte discriminator filter (0x-prefixed hex).'),
+      d2: stringListInput('2-byte discriminator filter (0x-prefixed hex).'),
+      d4: stringListInput('4-byte discriminator filter (0x-prefixed hex).'),
+      d8: stringListInput('8-byte discriminator filter - Anchor (0x-prefixed hex).'),
+      a0: stringListInput('Account at index 0.'),
+      a1: stringListInput('Account at index 1.'),
+      a2: stringListInput('Account at index 2.'),
+      a3: stringListInput('Account at index 3.'),
+      a4: stringListInput('Account at index 4.'),
+      a5: stringListInput('Account at index 5.'),
+      a6: stringListInput('Account at index 6.'),
+      a7: stringListInput('Account at index 7.'),
+      a8: stringListInput('Account at index 8.'),
+      a9: stringListInput('Account at index 9.'),
+      a10: stringListInput('Account at index 10.'),
+      a11: stringListInput('Account at index 11.'),
+      a12: stringListInput('Account at index 12.'),
+      a13: stringListInput('Account at index 13.'),
+      a14: stringListInput('Account at index 14.'),
+      a15: stringListInput('Account at index 15.'),
+      mentions_account: stringListInput('Accounts mentioned anywhere in the instruction.'),
       is_committed: z.boolean().optional().describe('Only committed transactions'),
-      transaction_fee_payer: z.array(z.string()).optional().describe('Fee payer filter'),
+      transaction_fee_payer: stringListInput('Fee payer filter.'),
       limit: z.number().optional().default(50).describe('Max instructions'),
       include_transaction: z.boolean().optional().default(false).describe('Include transaction data'),
       include_transaction_balances: z.boolean().optional().default(false).describe('Include SOL balance changes'),
@@ -210,9 +220,14 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
       const paginationCursor = cursor
         ? decodeRecentPageCursor<SolanaInstructionsRequest>(cursor, 'portal_solana_query_instructions')
         : undefined
-      let dataset = paginationCursor?.dataset ?? (network ? await resolveDataset(network) : undefined)
+      const requestedDataset = network ? await resolveDataset(network) : undefined
+      let dataset = paginationCursor?.dataset ?? requestedDataset
       if (!dataset) {
-        throw new Error('network is required unless you are continuing with cursor.')
+        throw new ActionableError('network is required unless you are continuing with cursor.', [
+          'Provide network for a fresh Solana instruction query.',
+          'Reuse _pagination.next_cursor from a previous response to continue paging.',
+          'Example: network: "solana-mainnet", program_id: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"',
+        ])
       }
       const chainType = detectChainType(dataset)
 
@@ -226,6 +241,15 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
             'Use portal_evm_query_transactions or portal_evm_query_logs for EVM datasets.',
             'Use portal_bitcoin_query_transactions for Bitcoin datasets.',
           ],
+        })
+      }
+      if (paginationCursor && requestedDataset && paginationCursor.dataset !== requestedDataset) {
+        throw new ActionableError('This cursor belongs to a different network.', [
+          'Reuse the cursor with the same network as the previous response.',
+          'Omit cursor to start a fresh Solana instruction query.',
+        ], {
+          cursor_dataset: paginationCursor.dataset,
+          requested_dataset: requestedDataset,
         })
       }
       if (paginationCursor) {
@@ -307,7 +331,11 @@ export function registerQuerySolanaInstructionsTool(server: McpServer) {
         limit,
       })
       if (!validation.valid) {
-        throw new Error(validation.error)
+        throw new ActionableError(validation.error ?? 'Solana instruction query is too large for a safe MCP response.', [
+          'Reduce the slot range or add more specific filters like program_id, mentions_account, or a discriminator.',
+          'Example: program_id: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"',
+          'Example: timeframe: "15m", program_id: ["TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"]',
+        ])
       }
 
       const instructionFilter: Record<string, unknown> = {}

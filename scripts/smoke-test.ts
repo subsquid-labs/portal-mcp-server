@@ -7,6 +7,7 @@ import { execSync, spawn } from 'node:child_process'
 const TIMEOUT_MS = 15_000
 let child: ReturnType<typeof spawn> | null = null
 let msgId = 0
+let stdoutBuffer = ''
 
 function fail(msg: string): never {
   console.error(`FAIL: ${msg}`)
@@ -26,7 +27,10 @@ async function readResponse(expectedId: string): Promise<any> {
     const timer = setTimeout(() => reject(new Error('Timeout waiting for response')), 8000)
 
     const onData = (chunk: Buffer) => {
-      const lines = chunk.toString().split('\n').filter(Boolean)
+      stdoutBuffer += chunk.toString()
+      const lines = stdoutBuffer.split('\n')
+      stdoutBuffer = lines.pop() ?? ''
+
       for (const line of lines) {
         try {
           const parsed = JSON.parse(line)

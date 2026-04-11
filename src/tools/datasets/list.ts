@@ -17,7 +17,7 @@ export function registerListDatasetsTool(server: McpServer) {
       vm: z.enum(['evm', 'solana', 'bitcoin', 'substrate', 'hyperliquid']).optional().describe('Filter by VM family'),
       network_type: z.enum(['mainnet', 'testnet', 'devnet']).optional().describe('Filter by network type'),
       query: z.string().optional().describe('Search by name, alias, or chain ID'),
-      real_time_only: z.boolean().optional().describe('Only show real-time datasets'),
+      real_time_only: z.boolean().optional().describe('Only show networks with a real-time indexed head'),
       limit: z.number().max(100).optional().default(25).describe('Max results to return (default: 25, max: 100)'),
     },
     async ({ vm, network_type, query, real_time_only, limit }) => {
@@ -107,8 +107,8 @@ export function registerListDatasetsTool(server: McpServer) {
       const limitedResults = results.slice(0, limit)
       const message =
         totalAvailable > limitedResults.length
-          ? `Found ${totalAvailable} datasets (showing ${limitedResults.length}). Use limit parameter to see more.`
-          : `Found ${limitedResults.length} datasets`
+          ? `Found ${totalAvailable} networks (showing ${limitedResults.length}). Increase limit to see more.`
+          : `Found ${limitedResults.length} network${limitedResults.length === 1 ? '' : 's'}.`
 
       return formatResult(limitedResults, message, {
         toolName: 'portal_list_networks',

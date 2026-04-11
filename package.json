@@ -8,10 +8,13 @@
     "sqd-portal-mcp": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build:app-ui": "node scripts/build-app-ui.mjs",
+    "build": "npm run build:app-ui && tsc",
     "start": "node dist/index.js",
     "start:http": "node dist/http.js",
+    "predev": "npm run build:app-ui",
     "dev": "tsx src/index.ts",
+    "predev:http": "npm run build:app-ui",
     "dev:http": "tsx src/http.ts",
     "inspect": "npx @modelcontextprotocol/inspector node dist/index.js",
     "test": "tsx scripts/smoke-test.ts",
@@ -28,7 +31,8 @@
     "release:major": "./scripts/release.sh major"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@modelcontextprotocol/ext-apps": "^1.5.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@noble/hashes": "^1.8.0",
     "prom-client": "^15.1.3",
     "zod": "^3.24.0"
@@ -37,6 +41,7 @@
     "@biomejs/biome": "^2.3.14",
     "@cloudflare/workers-types": "^4.20250110.0",
     "@types/node": "^22.10.0",
+    "esbuild": "^0.28.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
