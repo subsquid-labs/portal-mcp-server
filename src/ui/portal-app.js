@@ -1,6 +1,6 @@
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps'
 
-const ACCENT_COLORS = ['#0f766e', '#2563eb', '#ea580c', '#7c3aed', '#059669', '#dc2626', '#0891b2', '#9333ea']
+const ACCENT_COLORS = ['#2d7ff9', '#f59e0b', '#22c55e', '#f97316', '#a855f7', '#ef4444', '#14b8a6', '#eab308']
 const ZOOM_DURATION_MAP = {
   '30d': '7d',
   '7d': '24h',
@@ -64,26 +64,34 @@ function installBaseStyles() {
   const style = document.createElement('style')
   style.textContent = `
     :root {
-      color-scheme: light dark;
-      --portal-bg: var(--color-background-primary, #f5f7fb);
-      --portal-panel: var(--color-background-secondary, rgba(255, 255, 255, 0.92));
-      --portal-panel-strong: var(--color-background-tertiary, rgba(255, 255, 255, 0.98));
-      --portal-border: var(--color-border-primary, rgba(15, 23, 42, 0.08));
-      --portal-border-strong: var(--color-border-secondary, rgba(15, 23, 42, 0.16));
-      --portal-text: var(--color-text-primary, #0f172a);
-      --portal-text-muted: var(--color-text-secondary, #475569);
-      --portal-text-subtle: var(--color-text-tertiary, #64748b);
-      --portal-accent: var(--color-brand-primary, #0f766e);
-      --portal-accent-soft: color-mix(in srgb, var(--portal-accent) 12%, transparent);
-      --portal-shadow: 0 24px 56px rgba(15, 23, 42, 0.08);
-      --portal-radius-xl: 24px;
-      --portal-radius-lg: 18px;
-      --portal-radius-md: 14px;
-      --portal-radius-sm: 10px;
+      color-scheme: dark;
+      --portal-bg: #05070b;
+      --portal-bg-top: #0b1019;
+      --portal-shell: rgba(7, 10, 16, 0.96);
+      --portal-panel: #0c1118;
+      --portal-panel-strong: #111824;
+      --portal-panel-muted: #0a0e15;
+      --portal-border: rgba(117, 138, 175, 0.22);
+      --portal-border-strong: rgba(245, 158, 11, 0.42);
+      --portal-grid: rgba(99, 118, 151, 0.16);
+      --portal-grid-strong: rgba(99, 118, 151, 0.28);
+      --portal-text: #f4f7fb;
+      --portal-text-muted: #aab4c6;
+      --portal-text-subtle: #728097;
+      --portal-accent: #f59e0b;
+      --portal-accent-soft: rgba(245, 158, 11, 0.12);
+      --portal-accent-cool: #2d7ff9;
+      --portal-accent-positive: #22c55e;
+      --portal-accent-negative: #ef4444;
+      --portal-shadow: 0 22px 50px rgba(0, 0, 0, 0.38);
+      --portal-radius-xl: 16px;
+      --portal-radius-lg: 12px;
+      --portal-radius-md: 10px;
+      --portal-radius-sm: 8px;
       --portal-font: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
-      background:
-        radial-gradient(circle at top left, color-mix(in srgb, var(--portal-accent) 12%, transparent), transparent 28%),
-        linear-gradient(180deg, color-mix(in srgb, var(--portal-bg) 92%, white), var(--portal-bg));
+      --portal-font-mono: var(--font-mono, "SFMono-Regular", "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace);
+      --portal-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+      --portal-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     }
 
     * {
@@ -93,13 +101,17 @@ function installBaseStyles() {
     html, body {
       margin: 0;
       min-height: 100%;
-      background: transparent;
+      background:
+        radial-gradient(circle at top center, rgba(45, 127, 249, 0.1), transparent 26%),
+        radial-gradient(circle at top left, rgba(245, 158, 11, 0.1), transparent 30%),
+        linear-gradient(180deg, var(--portal-bg-top), var(--portal-bg));
       color: var(--portal-text);
       font-family: var(--portal-font);
+      font-variant-numeric: tabular-nums;
     }
 
     body {
-      padding: 18px;
+      padding: 12px;
     }
 
     button, input {
@@ -108,8 +120,8 @@ function installBaseStyles() {
 
     .portal-app {
       display: grid;
-      gap: 18px;
-      max-width: 1200px;
+      gap: 12px;
+      max-width: 1440px;
       margin: 0 auto;
     }
 
@@ -118,7 +130,9 @@ function installBaseStyles() {
       overflow: hidden;
       border: 1px solid var(--portal-border);
       border-radius: var(--portal-radius-xl);
-      background: linear-gradient(180deg, color-mix(in srgb, var(--portal-panel) 92%, white), var(--portal-panel));
+      background:
+        linear-gradient(180deg, rgba(17, 24, 36, 0.84), rgba(9, 13, 20, 0.98)),
+        linear-gradient(90deg, rgba(245, 158, 11, 0.04), transparent 26%);
       box-shadow: var(--portal-shadow);
     }
 
@@ -128,9 +142,15 @@ function installBaseStyles() {
       inset: 0;
       pointer-events: none;
       background:
-        radial-gradient(circle at top right, color-mix(in srgb, var(--portal-accent) 14%, transparent), transparent 22%),
-        linear-gradient(180deg, rgba(255, 255, 255, 0.35), transparent 22%);
-      opacity: 0.8;
+        linear-gradient(90deg, transparent 0, transparent calc(100% - 1px), rgba(245, 158, 11, 0.18) calc(100% - 1px)),
+        repeating-linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.018) 0,
+          rgba(255, 255, 255, 0.018) 1px,
+          transparent 1px,
+          transparent 32px
+        );
+      opacity: 0.7;
     }
 
     .portal-shell > * {
@@ -138,42 +158,113 @@ function installBaseStyles() {
       z-index: 1;
     }
 
+    .portal-status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0;
+      border-bottom: 1px solid rgba(245, 158, 11, 0.22);
+      background:
+        linear-gradient(90deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.03) 32%, transparent 65%),
+        rgba(10, 14, 21, 0.9);
+    }
+
+    .portal-status-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-right: 1px solid rgba(245, 158, 11, 0.16);
+      font-family: var(--portal-font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--portal-text-subtle);
+    }
+
+    .portal-status-label {
+      color: rgba(245, 158, 11, 0.84);
+    }
+
+    .portal-status-value {
+      color: var(--portal-text);
+    }
+
     .portal-header {
       display: grid;
-      gap: 14px;
-      padding: 24px 24px 8px;
+      gap: 12px;
+      padding: 18px 18px 6px;
     }
 
     .portal-eyebrow {
       display: flex;
       flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .portal-headline {
+      display: grid;
+      gap: 6px;
+    }
+
+    .portal-title-stack {
+      display: grid;
       gap: 8px;
+    }
+
+    .portal-title-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--portal-font-mono);
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(245, 158, 11, 0.84);
+    }
+
+    .portal-title-kicker::before {
+      content: '';
+      width: 26px;
+      height: 1px;
+      background: currentColor;
     }
 
     .portal-chip {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 10px;
+      padding: 5px 9px;
       border-radius: 999px;
-      background: color-mix(in srgb, var(--portal-panel-strong) 90%, white);
-      border: 1px solid var(--portal-border);
-      color: var(--portal-text-subtle);
-      font-size: 12px;
-      letter-spacing: 0.01em;
+      background: rgba(17, 24, 36, 0.85);
+      border: 1px solid rgba(117, 138, 175, 0.2);
+      color: var(--portal-text-muted);
+      font-size: 11px;
+      font-family: var(--portal-font-mono);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
 
     .portal-chip--accent {
-      background: var(--portal-accent-soft);
-      border-color: color-mix(in srgb, var(--portal-accent) 30%, transparent);
-      color: color-mix(in srgb, var(--portal-accent) 82%, black);
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(245, 158, 11, 0.34);
+      color: rgba(245, 195, 92, 0.98);
     }
 
     .portal-title {
       margin: 0;
-      font-size: clamp(28px, 4vw, 42px);
-      line-height: 1.05;
+      font-size: clamp(24px, 3vw, 34px);
+      line-height: 1.04;
+      letter-spacing: -0.035em;
+      max-width: 20ch;
+    }
+
+    .portal-title--value {
+      font-family: var(--portal-font-mono);
+      font-size: clamp(22px, 2.7vw, 30px);
+      line-height: 1.08;
       letter-spacing: -0.03em;
+      word-break: break-all;
+      max-width: 100%;
     }
 
     .portal-subtitle,
@@ -182,8 +273,8 @@ function installBaseStyles() {
     .portal-error-copy {
       margin: 0;
       color: var(--portal-text-muted);
-      font-size: 14px;
-      line-height: 1.6;
+      font-size: 13px;
+      line-height: 1.55;
     }
 
     .portal-actions,
@@ -192,27 +283,27 @@ function installBaseStyles() {
     .portal-metrics,
     .portal-panels {
       display: grid;
-      gap: 14px;
+      gap: 10px;
     }
 
     .portal-notices {
-      padding: 0 24px;
+      padding: 0 18px;
     }
 
     .portal-badges,
     .portal-actions {
-      padding: 0 24px;
-      grid-template-columns: repeat(auto-fit, minmax(160px, max-content));
+      padding: 0 18px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, max-content));
       align-items: start;
     }
 
     .portal-metrics {
-      padding: 0 24px 2px;
-      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      padding: 0 18px 2px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     }
 
     .portal-panels {
-      padding: 0 24px 24px;
+      padding: 0 18px 18px;
       grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
     }
 
@@ -224,8 +315,9 @@ function installBaseStyles() {
     .portal-raw {
       border: 1px solid var(--portal-border);
       border-radius: var(--portal-radius-lg);
-      background: color-mix(in srgb, var(--portal-panel-strong) 94%, white);
-      backdrop-filter: blur(10px);
+      background:
+        linear-gradient(180deg, rgba(19, 25, 37, 0.95), rgba(12, 17, 24, 0.98)),
+        rgba(12, 17, 24, 0.94);
     }
 
     .portal-panel--wide {
@@ -234,22 +326,26 @@ function installBaseStyles() {
 
     .portal-panel {
       display: grid;
-      gap: 14px;
-      padding: 18px;
+      gap: 12px;
+      padding: 14px;
     }
 
     .portal-panel-header {
       display: grid;
-      gap: 4px;
+      gap: 6px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(117, 138, 175, 0.14);
     }
 
     .portal-panel-title,
     .portal-metric-label {
       margin: 0;
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 600;
-      color: var(--portal-text-muted);
-      letter-spacing: 0.01em;
+      font-family: var(--portal-font-mono);
+      color: rgba(245, 158, 11, 0.88);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
     }
 
     .portal-panel-copy,
@@ -266,47 +362,53 @@ function installBaseStyles() {
     .portal-metric {
       display: grid;
       gap: 8px;
-      padding: 16px;
+      padding: 12px;
+      min-height: 110px;
     }
 
     .portal-metric-value {
       margin: 0;
-      font-size: 28px;
+      font-size: clamp(26px, 2.8vw, 34px);
       line-height: 1;
       letter-spacing: -0.03em;
+      font-family: var(--portal-font-mono);
     }
 
     .portal-metric--primary {
-      border-color: color-mix(in srgb, var(--portal-accent) 24%, transparent);
-      background: linear-gradient(180deg, color-mix(in srgb, var(--portal-accent) 12%, white), color-mix(in srgb, var(--portal-panel-strong) 92%, white));
+      border-color: rgba(245, 158, 11, 0.42);
+      background:
+        linear-gradient(180deg, rgba(245, 158, 11, 0.14), rgba(245, 158, 11, 0.04) 32%, rgba(12, 17, 24, 0.98) 100%),
+        rgba(12, 17, 24, 0.98);
     }
 
     .portal-badge {
-      padding: 12px 14px;
+      padding: 10px 12px;
     }
 
     .portal-badge-key {
       display: block;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 600;
       color: var(--portal-text-subtle);
       text-transform: uppercase;
-      letter-spacing: 0.08em;
+      letter-spacing: 0.18em;
       margin-bottom: 6px;
+      font-family: var(--portal-font-mono);
     }
 
     .portal-badge-value {
-      font-size: 14px;
+      font-size: 13px;
       line-height: 1.4;
       color: var(--portal-text);
       word-break: break-word;
+      font-family: var(--portal-font-mono);
     }
 
     .portal-notice {
       padding: 12px 14px;
       border-radius: var(--portal-radius-md);
-      border: 1px solid color-mix(in srgb, var(--portal-accent) 22%, transparent);
-      background: color-mix(in srgb, var(--portal-accent) 10%, white);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.1), rgba(245, 158, 11, 0.03));
       color: var(--portal-text-muted);
       font-size: 13px;
       line-height: 1.5;
@@ -315,23 +417,32 @@ function installBaseStyles() {
     .portal-button-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 8px;
     }
 
     .portal-button {
-      border: 1px solid var(--portal-border-strong);
-      background: color-mix(in srgb, var(--portal-panel-strong) 94%, white);
+      border: 1px solid rgba(117, 138, 175, 0.28);
+      background: linear-gradient(180deg, rgba(20, 27, 39, 0.96), rgba(11, 15, 23, 0.96));
       color: var(--portal-text);
       border-radius: 999px;
       padding: 10px 14px;
       cursor: pointer;
-      transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      font-family: var(--portal-font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      transition: transform 140ms var(--portal-ease-out), border-color 140ms ease, background 140ms ease, color 140ms ease;
     }
 
     .portal-button:hover:not(:disabled) {
       transform: translateY(-1px);
-      border-color: color-mix(in srgb, var(--portal-accent) 28%, transparent);
-      background: color-mix(in srgb, var(--portal-accent) 10%, white);
+      border-color: rgba(245, 158, 11, 0.42);
+      background: linear-gradient(180deg, rgba(33, 42, 61, 0.98), rgba(14, 20, 30, 0.98));
+      color: rgba(255, 232, 194, 0.98);
+    }
+
+    .portal-button:active:not(:disabled) {
+      transform: scale(0.97);
     }
 
     .portal-button:disabled {
@@ -342,7 +453,7 @@ function installBaseStyles() {
     .portal-button--accent {
       background: var(--portal-accent);
       border-color: var(--portal-accent);
-      color: white;
+      color: #090b0f;
     }
 
     .portal-empty,
@@ -361,51 +472,87 @@ function installBaseStyles() {
       padding: 16px;
       display: grid;
       gap: 10px;
-      border: 1px solid color-mix(in srgb, var(--portal-accent) 22%, transparent);
-      background: color-mix(in srgb, var(--portal-accent) 8%, white);
+      border: 1px solid rgba(245, 158, 11, 0.28);
+      background: linear-gradient(90deg, rgba(245, 158, 11, 0.09), rgba(245, 158, 11, 0.03));
       border-radius: var(--portal-radius-lg);
     }
 
     .portal-chart {
       display: grid;
-      gap: 12px;
+      gap: 10px;
       position: relative;
+    }
+
+    .portal-chart-stage {
+      position: relative;
+      overflow: hidden;
+      border-radius: 12px;
+      border: 1px solid rgba(117, 138, 175, 0.2);
+      background:
+        linear-gradient(180deg, rgba(15, 21, 31, 0.98), rgba(7, 10, 16, 0.98));
     }
 
     .portal-chart-svg {
       width: 100%;
       height: auto;
-      border-radius: 14px;
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(248, 250, 252, 0.95));
-      border: 1px solid var(--portal-border);
+      display: block;
+    }
+
+    .portal-chart-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    .portal-chart-crosshair {
+      position: absolute;
+      opacity: 0;
+      transition: opacity 120ms ease;
+      background: rgba(226, 232, 240, 0.18);
+      pointer-events: none;
+    }
+
+    .portal-chart-crosshair--x {
+      top: 18px;
+      bottom: 32px;
+      width: 1px;
+    }
+
+    .portal-chart-crosshair--y {
+      left: 18px;
+      right: 72px;
+      height: 1px;
     }
 
     .portal-chart-tooltip {
       position: absolute;
       top: 12px;
       left: 12px;
+      min-width: 164px;
       padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--portal-border);
-      background: color-mix(in srgb, var(--portal-panel-strong) 96%, white);
+      border-radius: 10px;
+      border: 1px solid rgba(117, 138, 175, 0.22);
+      background: rgba(7, 11, 17, 0.95);
       font-size: 12px;
       color: var(--portal-text);
       display: none;
       pointer-events: none;
-      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+      font-family: var(--portal-font-mono);
     }
 
     .portal-chart-tooltip strong {
       display: block;
       font-size: 12px;
-      margin-bottom: 4px;
-      color: var(--portal-text-muted);
+      margin-bottom: 8px;
+      color: rgba(245, 158, 11, 0.92);
+      letter-spacing: 0.04em;
     }
 
     .portal-legend {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px 14px;
+      gap: 8px 12px;
     }
 
     .portal-legend-item {
@@ -413,7 +560,10 @@ function installBaseStyles() {
       align-items: center;
       gap: 8px;
       color: var(--portal-text-muted);
-      font-size: 12px;
+      font-size: 11px;
+      font-family: var(--portal-font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }
 
     .portal-legend-dot {
@@ -435,27 +585,36 @@ function installBaseStyles() {
       min-width: 220px;
       max-width: 320px;
       width: 100%;
-      border-radius: 12px;
-      border: 1px solid var(--portal-border-strong);
+      border-radius: 999px;
+      border: 1px solid rgba(117, 138, 175, 0.24);
       padding: 10px 12px;
-      background: rgba(255, 255, 255, 0.8);
+      background: rgba(11, 16, 24, 0.94);
       color: var(--portal-text);
+      font-family: var(--portal-font-mono);
+    }
+
+    .portal-search::placeholder {
+      color: var(--portal-text-subtle);
     }
 
     .portal-table-wrap {
       overflow-x: auto;
+      border: 1px solid rgba(117, 138, 175, 0.14);
+      border-radius: 12px;
+      background: rgba(8, 12, 18, 0.7);
     }
 
     .portal-table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      font-size: 12px;
+      font-family: var(--portal-font-mono);
     }
 
     .portal-table th,
     .portal-table td {
       padding: 10px 12px;
-      border-bottom: 1px solid var(--portal-border);
+      border-bottom: 1px solid rgba(117, 138, 175, 0.12);
       text-align: left;
       vertical-align: top;
     }
@@ -463,10 +622,21 @@ function installBaseStyles() {
     .portal-table th {
       position: sticky;
       top: 0;
-      background: color-mix(in srgb, var(--portal-panel-strong) 98%, white);
+      background: rgba(12, 18, 28, 0.98);
       z-index: 1;
-      color: var(--portal-text-muted);
+      color: rgba(245, 158, 11, 0.88);
       font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-size: 10px;
+    }
+
+    .portal-table tbody tr:nth-child(even) {
+      background: rgba(255, 255, 255, 0.015);
+    }
+
+    .portal-table tbody tr:hover {
+      background: rgba(45, 127, 249, 0.08);
     }
 
     .portal-table-sort {
@@ -483,10 +653,14 @@ function installBaseStyles() {
     .portal-table-row-button {
       border: none;
       background: transparent;
-      color: var(--portal-accent);
+      color: var(--portal-accent-cool);
       cursor: pointer;
       font-weight: 600;
       padding: 0;
+      font-family: var(--portal-font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 11px;
     }
 
     .portal-table-meta {
@@ -494,6 +668,9 @@ function installBaseStyles() {
       flex-wrap: wrap;
       gap: 12px;
       justify-content: space-between;
+      font-family: var(--portal-font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
     .portal-timeline {
@@ -504,9 +681,11 @@ function installBaseStyles() {
     .portal-timeline-item {
       display: grid;
       gap: 8px;
-      border: 1px solid var(--portal-border);
+      border: 1px solid rgba(117, 138, 175, 0.16);
       border-radius: var(--portal-radius-md);
-      background: color-mix(in srgb, var(--portal-panel-strong) 92%, white);
+      background:
+        linear-gradient(90deg, rgba(45, 127, 249, 0.07), transparent 14%),
+        rgba(10, 14, 21, 0.92);
       padding: 14px;
     }
 
@@ -529,13 +708,14 @@ function installBaseStyles() {
       align-items: center;
       padding: 4px 8px;
       border-radius: 999px;
-      background: color-mix(in srgb, var(--portal-accent) 10%, white);
-      color: color-mix(in srgb, var(--portal-accent) 78%, black);
-      border: 1px solid color-mix(in srgb, var(--portal-accent) 20%, transparent);
+      background: rgba(45, 127, 249, 0.12);
+      color: rgba(147, 197, 253, 0.98);
+      border: 1px solid rgba(45, 127, 249, 0.28);
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.06em;
+      font-family: var(--portal-font-mono);
     }
 
     .portal-bars,
@@ -557,19 +737,20 @@ function installBaseStyles() {
       gap: 12px;
       color: var(--portal-text-muted);
       font-size: 13px;
+      font-family: var(--portal-font-mono);
     }
 
     .portal-bar-track {
       height: 10px;
       border-radius: 999px;
-      background: rgba(148, 163, 184, 0.18);
+      background: rgba(99, 118, 151, 0.18);
       overflow: hidden;
     }
 
     .portal-bar-fill {
       height: 100%;
       border-radius: inherit;
-      background: linear-gradient(90deg, var(--portal-accent), color-mix(in srgb, var(--portal-accent) 45%, white));
+      background: linear-gradient(90deg, var(--portal-accent), rgba(245, 158, 11, 0.36));
     }
 
     .portal-raw pre,
@@ -579,23 +760,25 @@ function installBaseStyles() {
       word-break: break-word;
       font-size: 12px;
       line-height: 1.6;
-      color: var(--portal-text-muted);
+      color: #d7e1f1;
+      font-family: var(--portal-font-mono);
     }
 
     .portal-drawer {
       display: grid;
       gap: 12px;
-      padding: 18px 24px 24px;
-      border-top: 1px solid var(--portal-border);
-      background: color-mix(in srgb, var(--portal-panel-strong) 94%, white);
+      padding: 16px 18px 18px;
+      border-top: 1px solid rgba(245, 158, 11, 0.18);
+      background:
+        linear-gradient(180deg, rgba(8, 12, 18, 0.98), rgba(5, 8, 12, 0.98));
     }
 
     .portal-skeleton {
       height: 14px;
       border-radius: 999px;
-      background: linear-gradient(90deg, rgba(148, 163, 184, 0.12), rgba(148, 163, 184, 0.22), rgba(148, 163, 184, 0.12));
+      background: linear-gradient(90deg, rgba(117, 138, 175, 0.08), rgba(245, 158, 11, 0.22), rgba(117, 138, 175, 0.08));
       background-size: 200% 100%;
-      animation: portal-pulse 1.4s ease-in-out infinite;
+      animation: portal-pulse 1.3s var(--portal-ease-in-out) infinite;
     }
 
     @keyframes portal-pulse {
@@ -605,7 +788,7 @@ function installBaseStyles() {
 
     @media (max-width: 720px) {
       body {
-        padding: 12px;
+        padding: 8px;
       }
 
       .portal-header,
@@ -615,12 +798,25 @@ function installBaseStyles() {
       .portal-metrics,
       .portal-panels,
       .portal-drawer {
-        padding-left: 16px;
-        padding-right: 16px;
+        padding-left: 12px;
+        padding-right: 12px;
       }
 
       .portal-panels {
         grid-template-columns: 1fr;
+      }
+
+      .portal-status-strip {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .portal-status-item {
+        border-bottom: 1px solid rgba(245, 158, 11, 0.12);
+      }
+
+      .portal-title {
+        max-width: 100%;
       }
     }
   `
@@ -714,6 +910,7 @@ function render() {
   root.innerHTML = `
     <main class="portal-app">
       <section class="portal-shell">
+        ${renderStatusStrip(payload, isPartial)}
         <header class="portal-header">
           <div class="portal-eyebrow">
             <span class="portal-chip portal-chip--accent">${escapeHtml(payload?._tool_contract?.name ? humanize(payload._tool_contract.name.replace(/^portal_/, '')) : 'Portal')}</span>
@@ -722,8 +919,8 @@ function render() {
             ${state.loading ? '<span class="portal-chip">Refreshing...</span>' : ''}
             ${state.statusMessage ? `<span class="portal-chip">${escapeHtml(state.statusMessage)}</span>` : ''}
           </div>
-          <div>
-            <h1 class="portal-title">${escapeHtml(title)}</h1>
+          <div class="portal-headline">
+            ${renderHeadline(title)}
             ${subtitle ? `<p class="portal-subtitle">${escapeHtml(subtitle)}</p>` : ''}
           </div>
           ${summary ? `<p class="portal-summary">${escapeHtml(summary)}</p>` : ''}
@@ -758,6 +955,47 @@ function render() {
 function renderNotices(notices) {
   if (!notices.length) return ''
   return `<section class="portal-notices">${notices.map((notice) => `<div class="portal-notice">${escapeHtml(notice)}</div>`).join('')}</section>`
+}
+
+function renderStatusStrip(payload, isPartial) {
+  const stateLabel = state.loading ? 'Refreshing' : isPartial ? 'Preview' : 'Live'
+  const items = [
+    ['System', 'Portal MCP'],
+    ['Tool', payload?._tool_contract?.name ? humanize(payload._tool_contract.name.replace(/^portal_/, '')) : 'Explorer'],
+    ['Network', payload?.display?.network || payload?.display?.source || 'Auto'],
+    ['State', stateLabel],
+  ]
+
+  return `
+    <div class="portal-status-strip">
+      ${items.map(([label, value]) => `
+        <span class="portal-status-item">
+          <span class="portal-status-label">${escapeHtml(label)}</span>
+          <span class="portal-status-value">${escapeHtml(String(value || 'n/a'))}</span>
+        </span>
+      `).join('')}
+    </div>
+  `
+}
+
+function renderHeadline(title) {
+  const text = String(title || 'Portal Explorer').trim()
+  const dividerIndex = text.indexOf(':')
+
+  if (dividerIndex > -1) {
+    const kicker = text.slice(0, dividerIndex).trim()
+    const detail = text.slice(dividerIndex + 1).trim()
+    if (kicker && detail) {
+      return `
+        <div class="portal-title-stack">
+          <span class="portal-title-kicker">${escapeHtml(kicker)}</span>
+          <h1 class="portal-title portal-title--value">${escapeHtml(detail)}</h1>
+        </div>
+      `
+    }
+  }
+
+  return `<h1 class="portal-title">${escapeHtml(text)}</h1>`
 }
 
 function renderMetricCard(card, payload) {
@@ -896,8 +1134,14 @@ function renderChartPanel(panel, payload) {
     panel,
     `
       <div class="portal-chart">
-        ${renderChartSvg(chartModel, chartId)}
-        <div class="portal-chart-tooltip" data-chart-tooltip="${chartId}"></div>
+        <div class="portal-chart-stage">
+          ${renderChartSvg(chartModel, chartId)}
+          <div class="portal-chart-overlay">
+            <div class="portal-chart-crosshair portal-chart-crosshair--x" data-chart-crosshair-x="${chartId}"></div>
+            <div class="portal-chart-crosshair portal-chart-crosshair--y" data-chart-crosshair-y="${chartId}"></div>
+            <div class="portal-chart-tooltip" data-chart-tooltip="${chartId}"></div>
+          </div>
+        </div>
         ${chartModel.series.length > 1 ? renderLegend(chartModel.series) : ''}
       </div>
     `,
@@ -1080,35 +1324,44 @@ function renderTimelineItem(panel, row, index) {
 }
 
 function renderChartSvg(chartModel, chartId) {
-  const width = 960
-  const height = 280
-  const padding = { top: 24, right: 18, bottom: 34, left: 52 }
+  const width = 1080
+  const height = 320
+  const padding = { top: 18, right: 72, bottom: 32, left: 18 }
   const chartWidth = width - padding.left - padding.right
   const chartHeight = height - padding.top - padding.bottom
-  const maxY = Math.max(chartModel.maxY, 1)
-  const gridLines = [0, 0.25, 0.5, 0.75, 1]
+  const minY = Number.isFinite(chartModel.minY) ? chartModel.minY : 0
+  const maxY = Number.isFinite(chartModel.maxY) ? chartModel.maxY : 1
+  const domain = Math.max(maxY - minY, 1)
+  const gridCount = 6
 
-  const grid = gridLines.map((ratio) => {
-    const y = padding.top + chartHeight - chartHeight * ratio
-    const labelValue = maxY * ratio
+  const grid = Array.from({ length: gridCount }, (_, index) => {
+    const ratio = gridCount === 1 ? 0 : index / (gridCount - 1)
+    const y = padding.top + chartHeight * ratio
+    const labelValue = maxY - domain * ratio
     return `
-      <line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="rgba(148, 163, 184, 0.22)" stroke-width="1" />
-      <text x="${padding.left - 10}" y="${y + 4}" font-size="11" text-anchor="end" fill="rgba(71, 85, 105, 0.82)">${escapeHtml(formatValue(labelValue, chartModel.valueFormat, chartModel.unit))}</text>
+      <line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="rgba(99, 118, 151, 0.16)" stroke-width="1" />
+      <text x="${width - padding.right + 8}" y="${y + 4}" font-size="11" text-anchor="start" fill="rgba(170, 180, 198, 0.72)">${escapeHtml(formatValue(labelValue, chartModel.valueFormat, chartModel.unit))}</text>
     `
   }).join('')
 
-  const xLabels = chartModel.labels.map((label, index) => {
-    if (!(index === 0 || index === chartModel.labels.length - 1 || index === Math.floor(chartModel.labels.length / 2))) {
-      return ''
-    }
+  const xLabelIndexes = Array.from(new Set([
+    0,
+    Math.floor((chartModel.labels.length - 1) * 0.25),
+    Math.floor((chartModel.labels.length - 1) * 0.5),
+    Math.floor((chartModel.labels.length - 1) * 0.75),
+    Math.max(chartModel.labels.length - 1, 0),
+  ].filter((value) => value >= 0)))
+
+  const xLabels = xLabelIndexes.map((index) => {
+    const label = chartModel.labels[index]
     const x = padding.left + (chartWidth * index) / Math.max(chartModel.labels.length - 1, 1)
-    return `<text x="${x}" y="${height - 12}" font-size="11" text-anchor="middle" fill="rgba(71, 85, 105, 0.82)">${escapeHtml(label)}</text>`
+    return `<text x="${x}" y="${height - 10}" font-size="11" text-anchor="middle" fill="rgba(170, 180, 198, 0.66)">${escapeHtml(label)}</text>`
   }).join('')
 
   const seriesMarkup = chartModel.series.map((series, seriesIndex) => {
     const points = series.points.map((point, index) => {
       const x = padding.left + (chartWidth * index) / Math.max(series.points.length - 1, 1)
-      const y = padding.top + chartHeight - (chartHeight * point.value) / maxY
+      const y = padding.top + chartHeight - (chartHeight * (point.value - minY)) / domain
       return { x, y }
     })
 
@@ -1123,9 +1376,9 @@ function renderChartSvg(chartModel, chartId) {
             y="${point.y}"
             width="${Math.max(barWidth, 8)}"
             height="${heightValue}"
-            rx="6"
+            rx="3"
             fill="${series.color}"
-            fill-opacity="0.85"
+            fill-opacity="0.88"
           />
         `
       }).join('')
@@ -1133,18 +1386,25 @@ function renderChartSvg(chartModel, chartId) {
 
     const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
     const areaPath = `${linePath} L ${points[points.length - 1].x} ${padding.top + chartHeight} L ${points[0].x} ${padding.top + chartHeight} Z`
+    const gradientId = `${chartId}-${series.key || seriesIndex}`
 
     return `
-      ${chartModel.series.length === 1 ? `<path d="${areaPath}" fill="${series.color}" fill-opacity="0.14"></path>` : ''}
-      <path d="${linePath}" fill="none" stroke="${series.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
-      ${points.map((point) => `<circle cx="${point.x}" cy="${point.y}" r="3.5" fill="${series.color}" />`).join('')}
+      <defs>
+        <linearGradient id="${gradientId}" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stop-color="${series.color}" stop-opacity="0.28"></stop>
+          <stop offset="100%" stop-color="${series.color}" stop-opacity="0"></stop>
+        </linearGradient>
+      </defs>
+      ${chartModel.series.length === 1 ? `<path d="${areaPath}" fill="url(#${gradientId})"></path>` : ''}
+      <path d="${linePath}" fill="none" stroke="${series.color}" stroke-width="${chartModel.series.length === 1 ? 2.8 : 2.2}" stroke-linecap="round" stroke-linejoin="round"></path>
     `
   }).join('')
 
   return `
     <svg class="portal-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttribute(chartModel.title)}" ${chartId ? `data-chart-id="${chartId}"` : ''}>
+      <rect x="${padding.left}" y="${padding.top}" width="${chartWidth}" height="${chartHeight}" fill="rgba(10, 14, 21, 0.84)" />
       ${grid}
-      <line x1="${padding.left}" y1="${padding.top + chartHeight}" x2="${width - padding.right}" y2="${padding.top + chartHeight}" stroke="rgba(148, 163, 184, 0.3)" stroke-width="1"></line>
+      <line x1="${padding.left}" y1="${padding.top + chartHeight}" x2="${width - padding.right}" y2="${padding.top + chartHeight}" stroke="rgba(99, 118, 151, 0.24)" stroke-width="1"></line>
       ${seriesMarkup}
       ${xLabels}
     </svg>
@@ -1329,13 +1589,32 @@ function buildChartModel(chart, payload) {
     ]
   }
 
-  const maxY = Math.max(...series.flatMap((entry) => entry.points.map((point) => point.value)), 0)
+  const values = series.flatMap((entry) => entry.points.map((point) => point.value)).filter((value) => Number.isFinite(value))
+  const rawMin = values.length ? Math.min(...values) : 0
+  const rawMax = values.length ? Math.max(...values) : 0
+  const range = rawMax - rawMin
+  let minY = visual === 'bar' ? Math.min(0, rawMin) : rawMin
+  let maxY = visual === 'bar' ? Math.max(0, rawMax) : rawMax
+
+  if (visual === 'line') {
+    const padding = range > 0 ? range * 0.12 : Math.max(Math.abs(rawMax) * 0.12, 1)
+    minY = rawMin - padding
+    maxY = rawMax + padding
+    if (rawMin >= 0) {
+      minY = Math.max(0, minY)
+    }
+  }
+
+  if (minY === maxY) {
+    maxY = minY + 1
+  }
 
   return {
     title: chart.title || 'Chart',
     series,
     labels: series[0]?.points.map((point) => point.label) || labels,
     maxY,
+    minY,
     unit: chart.unit,
     valueFormat: chart.value_format,
     visual,
@@ -1531,21 +1810,32 @@ function attachEventHandlers() {
   root.querySelectorAll('[data-chart-id]').forEach((svg) => {
     const chartId = svg.getAttribute('data-chart-id')
     if (!chartId || !state.chartModels[chartId]) return
+    const stage = svg.closest('.portal-chart-stage')
     const tooltip = root.querySelector(`[data-chart-tooltip="${chartId}"]`)
+    const crosshairX = root.querySelector(`[data-chart-crosshair-x="${chartId}"]`)
+    const crosshairY = root.querySelector(`[data-chart-crosshair-y="${chartId}"]`)
     const chartModel = state.chartModels[chartId]
-    const width = 960
-    const paddingLeft = 52
-    const paddingRight = 18
+    const width = 1080
+    const height = 320
+    const paddingTop = 18
+    const paddingBottom = 32
+    const paddingLeft = 18
+    const paddingRight = 72
     const chartWidth = width - paddingLeft - paddingRight
+    const chartHeight = height - paddingTop - paddingBottom
+    const minY = Number.isFinite(chartModel.minY) ? chartModel.minY : 0
+    const maxY = Number.isFinite(chartModel.maxY) ? chartModel.maxY : 1
+    const domain = Math.max(maxY - minY, 1)
 
     const hideTooltip = () => {
-      if (!tooltip) return
-      tooltip.style.display = 'none'
+      if (tooltip) tooltip.style.display = 'none'
+      if (crosshairX) crosshairX.style.opacity = '0'
+      if (crosshairY) crosshairY.style.opacity = '0'
     }
 
     svg.addEventListener('mouseleave', hideTooltip)
     svg.addEventListener('mousemove', (event) => {
-      if (!tooltip) return
+      if (!tooltip || !stage) return
       const rect = svg.getBoundingClientRect()
       const x = event.clientX - rect.left
       const ratio = Math.min(1, Math.max(0, (x - paddingLeft) / chartWidth))
@@ -1556,18 +1846,46 @@ function attachEventHandlers() {
         value: series.points[index]?.value ?? 0,
         color: series.color,
       }))
+      const primaryValue = entries[0]?.value ?? minY
+      const yRatio = Math.min(1, Math.max(0, (primaryValue - minY) / domain))
+      const stageRect = stage.getBoundingClientRect()
+      const stageX = paddingLeft + ratio * chartWidth
+      const stageY = paddingTop + chartHeight - yRatio * chartHeight
+      const tooltipWidth = 180
+      const tooltipLeft = Math.max(10, Math.min(
+        stageX > stageRect.width - tooltipWidth - 24 ? stageX - tooltipWidth - 14 : stageX + 14,
+        stageRect.width - tooltipWidth - 10,
+      ))
+      const tooltipTop = Math.max(10, Math.min(stageY - 18, stageRect.height - 96))
+
       tooltip.innerHTML = `
         <strong>${escapeHtml(label)}</strong>
         ${entries.map((entry) => `
-          <div style="display:flex; align-items:center; gap:6px;">
-            <span style="width:8px;height:8px;border-radius:999px;background:${entry.color}"></span>
-            <span>${escapeHtml(entry.label)}:</span>
-            <span>${escapeHtml(formatValue(entry.value, chartModel.valueFormat, chartModel.unit))}</span>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:6px;">
+            <span style="display:inline-flex; align-items:center; gap:6px; color:var(--portal-text-muted);">
+              <span style="width:8px;height:8px;border-radius:999px;background:${entry.color}"></span>
+              <span>${escapeHtml(entry.label)}</span>
+            </span>
+            <span style="color:var(--portal-text);">${escapeHtml(formatValue(entry.value, chartModel.valueFormat, chartModel.unit))}</span>
           </div>
         `).join('')}
       `
       tooltip.style.display = 'block'
+      tooltip.style.left = `${tooltipLeft}px`
+      tooltip.style.top = `${tooltipTop}px`
+
+      if (crosshairX) {
+        crosshairX.style.opacity = '1'
+        crosshairX.style.transform = `translateX(${stageX}px)`
+      }
+
+      if (crosshairY) {
+        crosshairY.style.opacity = '1'
+        crosshairY.style.transform = `translateY(${stageY}px)`
+      }
     })
+
+    stage.addEventListener('mouseleave', hideTooltip)
   })
 }
 
