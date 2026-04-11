@@ -22,6 +22,7 @@
     "test:routing": "tsx scripts/test-routing.ts",
     "test:substrate": "tsx scripts/test-substrate.ts",
     "test:conversations": "tsx scripts/test-conversations.ts",
+    "prompt:taxonomy": "tsx scripts/prompt-taxonomy.ts",
     "test:negative": "tsx scripts/test-negative.ts",
     "test:quality": "tsx scripts/test-quality.ts",
     "test:all": "npm run build && npm test && npm run test:tools && npm run test:routing && npm run test:substrate && npm run test:conversations && npm run test:negative && npm run test:quality",

@@ -38,16 +38,22 @@ const SOFT_LATENCY_BUDGET_MS: Record<string, number> = {
   debug: 6_000,
 }
 
+const TOOL_LATENCY_BUDGET_MS: Record<string, { soft: number; hard: number }> = {
+  portal_get_time_series: { soft: 3_000, hard: 8_000 },
+  portal_get_wallet_summary: { soft: 1_500, hard: 4_000 },
+  portal_evm_get_analytics: { soft: 3_000, hard: 8_000 },
+}
+
 function getIntent(data: any): string {
   return typeof data?._tool_contract?.intent === 'string' ? data._tool_contract.intent : 'query'
 }
 
-function getHardLatencyBudget(intent: string) {
-  return HARD_LATENCY_BUDGET_MS[intent] ?? 10_000
+function getHardLatencyBudget(intent: string, toolName: string) {
+  return TOOL_LATENCY_BUDGET_MS[toolName]?.hard ?? HARD_LATENCY_BUDGET_MS[intent] ?? 10_000
 }
 
-function getSoftLatencyBudget(intent: string) {
-  return SOFT_LATENCY_BUDGET_MS[intent] ?? 5_000
+function getSoftLatencyBudget(intent: string, toolName: string) {
+  return TOOL_LATENCY_BUDGET_MS[toolName]?.soft ?? SOFT_LATENCY_BUDGET_MS[intent] ?? 5_000
 }
 
 function getResponseSizeBudget(data: any) {
@@ -77,8 +83,8 @@ async function main() {
         assert(!result.isError, `${spec.name} should succeed in the quality audit`)
 
         const intent = getIntent(result.data)
-        const hardLatencyBudget = getHardLatencyBudget(intent)
-        const softLatencyBudget = getSoftLatencyBudget(intent)
+        const hardLatencyBudget = getHardLatencyBudget(intent, spec.name)
+        const softLatencyBudget = getSoftLatencyBudget(intent, spec.name)
         let recoveredFromLatencySpike = false
         let originalSlowElapsedMs: number | undefined
 
@@ -95,6 +101,11 @@ async function main() {
         assertChatSurface(data, `${spec.name} quality audit`, {
           expectNextSteps: Array.isArray(data?._ui?.follow_up_actions) && data._ui.follow_up_actions.length > 0,
         })
+
+        if (spec.name === 'portal_get_time_series' || spec.name === 'portal_get_wallet_summary' || spec.name === 'portal_evm_get_analytics') {
+          assert(Array.isArray(data?._ui?.panels) && data._ui.panels.length > 0, `${spec.name} should include app panels`)
+          assert(data?._ui?.headline?.title, `${spec.name} should include app headline`)
+        }
 
         const responseSizeBudget = getResponseSizeBudget(data)
         if (result.text.length > responseSizeBudget) {

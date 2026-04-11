@@ -18,6 +18,8 @@ const state = {
   tableState: {},
   rawOpen: false,
   drawer: null,
+  statusMessage: '',
+  chartModels: {},
 }
 
 const root = document.getElementById('app')
@@ -355,9 +357,19 @@ function installBaseStyles() {
       gap: 12px;
     }
 
+    .portal-partial {
+      padding: 16px;
+      display: grid;
+      gap: 10px;
+      border: 1px solid color-mix(in srgb, var(--portal-accent) 22%, transparent);
+      background: color-mix(in srgb, var(--portal-accent) 8%, white);
+      border-radius: var(--portal-radius-lg);
+    }
+
     .portal-chart {
       display: grid;
       gap: 12px;
+      position: relative;
     }
 
     .portal-chart-svg {
@@ -366,6 +378,28 @@ function installBaseStyles() {
       border-radius: 14px;
       background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), rgba(248, 250, 252, 0.95));
       border: 1px solid var(--portal-border);
+    }
+
+    .portal-chart-tooltip {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--portal-border);
+      background: color-mix(in srgb, var(--portal-panel-strong) 96%, white);
+      font-size: 12px;
+      color: var(--portal-text);
+      display: none;
+      pointer-events: none;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
+    }
+
+    .portal-chart-tooltip strong {
+      display: block;
+      font-size: 12px;
+      margin-bottom: 4px;
+      color: var(--portal-text-muted);
     }
 
     .portal-legend {
@@ -661,6 +695,7 @@ function render() {
   if (!root) return
 
   const payload = state.payload
+  state.chartModels = {}
   const title = payload?._ui?.headline?.title || payload?.display?.title || 'Portal Explorer'
   const subtitle = payload?._ui?.headline?.subtitle || payload?.display?.subtitle || ''
   const summary = payload?.answer || payload?._summary || ''
@@ -674,6 +709,7 @@ function render() {
   const badges = buildBadges(payload)
   const actions = asArray(payload?._ui?.follow_up_actions)
   const hasPayload = Boolean(payload)
+  const isPartial = hasPayload && isPartialResult(payload)
 
   root.innerHTML = `
     <main class="portal-app">
@@ -682,7 +718,9 @@ function render() {
           <div class="portal-eyebrow">
             <span class="portal-chip portal-chip--accent">${escapeHtml(payload?._tool_contract?.name ? humanize(payload._tool_contract.name.replace(/^portal_/, '')) : 'Portal')}</span>
             ${payload?._pagination?.has_more ? '<span class="portal-chip">More results available</span>' : ''}
+            ${isPartial ? '<span class="portal-chip">Partial preview</span>' : ''}
             ${state.loading ? '<span class="portal-chip">Refreshing...</span>' : ''}
+            ${state.statusMessage ? `<span class="portal-chip">${escapeHtml(state.statusMessage)}</span>` : ''}
           </div>
           <div>
             <h1 class="portal-title">${escapeHtml(title)}</h1>
@@ -694,11 +732,16 @@ function render() {
         ${renderNotices(notices)}
         ${badges.length ? `<section class="portal-badges">${badges.join('')}</section>` : ''}
         ${metricCards.length ? `<section class="portal-metrics">${metricCards.map((card) => renderMetricCard(card, payload)).join('')}</section>` : ''}
-        ${actions.length ? `<section class="portal-actions"><div class="portal-button-row">${actions.map((action) => renderActionButton(action)).join('')}</div></section>` : ''}
+        ${(actions.length || hasPayload) ? `<section class="portal-actions"><div class="portal-button-row">${[
+          ...actions.map((action) => renderActionButton(action)),
+          ...renderUtilityActions(),
+        ].join('')}</div></section>` : ''}
 
         <section class="portal-panels">
+          ${state.loading && hasPayload ? renderLoadingState() : ''}
           ${state.error ? renderError() : ''}
           ${!hasPayload && !state.error ? renderEmptyState() : ''}
+          ${isPartial ? renderPartialState(payload) : ''}
           ${hasPayload ? panels.map((panel) => renderPanel(panel, payload)).join('') : ''}
           ${pipesHandoff ? renderPipesPanel(pipesHandoff) : ''}
           ${state.rawOpen && state.rawText ? renderRawPanel() : ''}
@@ -728,6 +771,28 @@ function renderMetricCard(card, payload) {
       ${card.subtitle ? `<p class="portal-metric-subtitle">${escapeHtml(card.subtitle)}</p>` : ''}
     </article>
   `
+}
+
+function renderUtilityActions() {
+  if (!state.payload) return []
+
+  return [
+    `
+      <button class="portal-button" type="button" data-action="copy-args">
+        Copy tool args
+      </button>
+    `,
+    `
+      <button class="portal-button" type="button" data-action="open-raw">
+        Open raw JSON
+      </button>
+    `,
+    `
+      <button class="portal-button" type="button" data-action="copy-raw">
+        Copy raw JSON
+      </button>
+    `,
+  ]
 }
 
 function renderActionButton(action) {
@@ -822,6 +887,7 @@ function renderChartPanel(panel, payload) {
   }
 
   const chartModel = buildChartModel(chart, payload)
+  const chartId = registerChartModel(chartModel)
   if (!chartModel.series.length) {
     return renderPanelShell(panel, '<div class="portal-empty-copy">This chart has no plotted points in the current window.</div>', true)
   }
@@ -830,7 +896,8 @@ function renderChartPanel(panel, payload) {
     panel,
     `
       <div class="portal-chart">
-        ${renderChartSvg(chartModel)}
+        ${renderChartSvg(chartModel, chartId)}
+        <div class="portal-chart-tooltip" data-chart-tooltip="${chartId}"></div>
         ${chartModel.series.length > 1 ? renderLegend(chartModel.series) : ''}
       </div>
     `,
@@ -1012,7 +1079,7 @@ function renderTimelineItem(panel, row, index) {
   `
 }
 
-function renderChartSvg(chartModel) {
+function renderChartSvg(chartModel, chartId) {
   const width = 960
   const height = 280
   const padding = { top: 24, right: 18, bottom: 34, left: 52 }
@@ -1075,7 +1142,7 @@ function renderChartSvg(chartModel) {
   }).join('')
 
   return `
-    <svg class="portal-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttribute(chartModel.title)}">
+    <svg class="portal-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttribute(chartModel.title)}" ${chartId ? `data-chart-id="${chartId}"` : ''}>
       ${grid}
       <line x1="${padding.left}" y1="${padding.top + chartHeight}" x2="${width - padding.right}" y2="${padding.top + chartHeight}" stroke="rgba(148, 163, 184, 0.3)" stroke-width="1"></line>
       ${seriesMarkup}
@@ -1086,19 +1153,48 @@ function renderChartSvg(chartModel) {
 
 function renderEmptyState() {
   if (state.loading) {
-    return `
-      <section class="portal-empty portal-panel--wide">
-        <div class="portal-skeleton" style="width: 36%"></div>
-        <div class="portal-skeleton" style="width: 82%"></div>
-        <div class="portal-skeleton" style="width: 74%"></div>
-      </section>
-    `
+    return renderLoadingState()
   }
 
   return `
     <section class="portal-empty portal-panel--wide">
       <strong>Waiting for a Portal result</strong>
       <p class="portal-empty-copy">Run a supported tool like wallet summary or time series and the interactive view will appear here.</p>
+    </section>
+  `
+}
+
+function renderLoadingState() {
+  return `
+    <section class="portal-empty portal-panel--wide">
+      <div class="portal-skeleton" style="width: 36%"></div>
+      <div class="portal-skeleton" style="width: 82%"></div>
+      <div class="portal-skeleton" style="width: 74%"></div>
+    </section>
+  `
+}
+
+function renderPartialState(payload) {
+  const hasCursor = Boolean(payload?._pagination?.has_more)
+  const coverage = payload?._coverage
+  const incomplete =
+    (coverage && typeof coverage === 'object' && coverage !== null && coverage.result_complete === false)
+    || (coverage && typeof coverage === 'object' && coverage !== null && coverage.sampled === true)
+  const message = incomplete
+    ? 'This view is a partial preview of the requested window. Consider loading more results or switching to a deeper scan.'
+    : 'More results are available for this view. Continue to load older or additional rows.'
+
+  return `
+    <section class="portal-partial portal-panel--wide">
+      <strong>Partial results</strong>
+      <p class="portal-empty-copy">${escapeHtml(message)}</p>
+      ${hasCursor ? `
+        <div class="portal-button-row">
+          <button class="portal-button portal-button--accent" type="button" data-action="followup" data-intent="continue">
+            Load more results
+          </button>
+        </div>
+      ` : ''}
     </section>
   `
 }
@@ -1117,7 +1213,7 @@ function renderError() {
 
 function renderRawPanel() {
   return `
-    <section class="portal-raw portal-panel--wide">
+    <section class="portal-raw portal-panel--wide" id="portal-raw">
       <header class="portal-panel-header">
         <h2 class="portal-panel-title">Raw result</h2>
         <p class="portal-panel-copy">Exact JSON payload returned by the Portal MCP tool.</p>
@@ -1142,6 +1238,14 @@ function renderDrawer() {
       <pre>${escapeHtml(JSON.stringify(item, null, 2))}</pre>
     </aside>
   `
+}
+
+function isPartialResult(payload) {
+  if (!payload) return false
+  if (payload?._pagination?.has_more) return true
+  const coverage = payload?._coverage
+  if (!coverage || typeof coverage !== 'object') return false
+  return coverage.result_complete === false || coverage.sampled === true
 }
 
 function buildBadges(payload) {
@@ -1181,20 +1285,36 @@ function buildChartModel(chart, payload) {
     }))
   } else if (chart.grouped_value_field) {
     const grouped = new Map()
-    for (const row of rows) {
+    const xLabelMap = new Map()
+    for (const [index, row] of rows.entries()) {
       const key = String(getByPath(row, chart.grouped_value_field) || 'Other')
       if (!grouped.has(key)) grouped.set(key, [])
       grouped.get(key).push(row)
+      const xValue = getByPath(row, chart.x_field || 'timestamp') ?? getByPath(row, 'timestamp')
+      if (!xLabelMap.has(xValue)) {
+        xLabelMap.set(xValue, labels[index])
+      }
     }
-    series = Array.from(grouped.entries()).map(([key, groupedRows], index) => ({
-      key,
-      label: humanize(key),
-      color: ACCENT_COLORS[index % ACCENT_COLORS.length],
-      points: groupedRows.map((row, rowIndex) => ({
-        label: String(getByPath(row, 'timestamp_human') || getByPath(row, 'timestamp') || `#${rowIndex + 1}`),
-        value: toNumber(getByPath(row, chart.y_field || 'value')) || 0,
-      })),
-    }))
+
+    const uniqueX = Array.from(xLabelMap.entries()).map(([value, label]) => ({ value, label }))
+
+    series = Array.from(grouped.entries()).map(([key, groupedRows], index) => {
+      const byX = new Map()
+      groupedRows.forEach((row) => {
+        const xValue = getByPath(row, chart.x_field || 'timestamp') ?? getByPath(row, 'timestamp')
+        byX.set(xValue, toNumber(getByPath(row, chart.y_field || 'value')) || 0)
+      })
+
+      return {
+        key,
+        label: humanize(key),
+        color: ACCENT_COLORS[index % ACCENT_COLORS.length],
+        points: uniqueX.map((entry) => ({
+          label: entry.label || String(entry.value),
+          value: byX.get(entry.value) || 0,
+        })),
+      }
+    })
   } else {
     series = [
       {
@@ -1214,12 +1334,18 @@ function buildChartModel(chart, payload) {
   return {
     title: chart.title || 'Chart',
     series,
-    labels,
+    labels: series[0]?.points.map((point) => point.label) || labels,
     maxY,
     unit: chart.unit,
     valueFormat: chart.value_format,
     visual,
   }
+}
+
+function registerChartModel(chartModel) {
+  const id = `chart-${Math.random().toString(36).slice(2, 9)}`
+  state.chartModels[id] = chartModel
+  return id
 }
 
 function discoverSeriesKeys(rows, groupedValueField) {
@@ -1290,6 +1416,29 @@ function attachEventHandlers() {
     button.addEventListener('click', () => {
       state.rawOpen = !state.rawOpen
       render()
+    })
+  })
+
+  root.querySelectorAll('[data-action="open-raw"]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.rawOpen = true
+      render()
+      const rawPanel = document.getElementById('portal-raw')
+      if (rawPanel && typeof rawPanel.scrollIntoView === 'function') {
+        rawPanel.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    })
+  })
+
+  root.querySelectorAll('[data-action="copy-raw"]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await copyToClipboard(state.rawText || '')
+    })
+  })
+
+  root.querySelectorAll('[data-action="copy-args"]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await copyToClipboard(JSON.stringify(state.currentArgs || {}, null, 2))
     })
   })
 
@@ -1378,6 +1527,48 @@ function attachEventHandlers() {
       render()
     })
   })
+
+  root.querySelectorAll('[data-chart-id]').forEach((svg) => {
+    const chartId = svg.getAttribute('data-chart-id')
+    if (!chartId || !state.chartModels[chartId]) return
+    const tooltip = root.querySelector(`[data-chart-tooltip="${chartId}"]`)
+    const chartModel = state.chartModels[chartId]
+    const width = 960
+    const paddingLeft = 52
+    const paddingRight = 18
+    const chartWidth = width - paddingLeft - paddingRight
+
+    const hideTooltip = () => {
+      if (!tooltip) return
+      tooltip.style.display = 'none'
+    }
+
+    svg.addEventListener('mouseleave', hideTooltip)
+    svg.addEventListener('mousemove', (event) => {
+      if (!tooltip) return
+      const rect = svg.getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const ratio = Math.min(1, Math.max(0, (x - paddingLeft) / chartWidth))
+      const index = Math.round(ratio * Math.max(chartModel.labels.length - 1, 0))
+      const label = chartModel.labels[index] || `#${index + 1}`
+      const entries = chartModel.series.map((series) => ({
+        label: series.label,
+        value: series.points[index]?.value ?? 0,
+        color: series.color,
+      }))
+      tooltip.innerHTML = `
+        <strong>${escapeHtml(label)}</strong>
+        ${entries.map((entry) => `
+          <div style="display:flex; align-items:center; gap:6px;">
+            <span style="width:8px;height:8px;border-radius:999px;background:${entry.color}"></span>
+            <span>${escapeHtml(entry.label)}:</span>
+            <span>${escapeHtml(formatValue(entry.value, chartModel.valueFormat, chartModel.unit))}</span>
+          </div>
+        `).join('')}
+      `
+      tooltip.style.display = 'block'
+    })
+  })
 }
 
 async function handleFollowUp(intent, target) {
@@ -1429,6 +1620,40 @@ async function handleFollowUp(intent, target) {
   }
 }
 
+async function copyToClipboard(text) {
+  if (!text) {
+    state.statusMessage = 'Nothing to copy'
+    render()
+    clearStatus()
+    return
+  }
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const temp = document.createElement('textarea')
+      temp.value = text
+      document.body.appendChild(temp)
+      temp.select()
+      document.execCommand('copy')
+      temp.remove()
+    }
+    state.statusMessage = 'Copied'
+  } catch {
+    state.statusMessage = 'Copy failed'
+  }
+
+  render()
+  clearStatus()
+}
+
+function clearStatus() {
+  setTimeout(() => {
+    state.statusMessage = ''
+    render()
+  }, 1800)
+}
 async function executeToolCall(name, args) {
   state.loading = true
   state.error = ''

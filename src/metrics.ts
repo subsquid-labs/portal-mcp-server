@@ -103,3 +103,10 @@ export const observabilityExportsTotal = new Counter({
   labelNames: ['sink', 'status'] as const,
   registers: [register],
 })
+
+export const userQueryCapturedTotal = new Counter({
+  name: 'mcp_user_query_captured_total',
+  help: 'Total number of user query strings captured for observability',
+  labelNames: ['transport', 'client_name'] as const,
+  registers: [register],
+})

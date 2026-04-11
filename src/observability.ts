@@ -1,4 +1,4 @@
-import { datasetQueriesTotal, observabilityExportsTotal, toolErrorsTotal, toolIntentCallsTotal, toolResponseSizeBytes } from './metrics.js'
+import { datasetQueriesTotal, observabilityExportsTotal, toolErrorsTotal, toolIntentCallsTotal, toolResponseSizeBytes, userQueryCapturedTotal } from './metrics.js'
 import { detectChainType } from './helpers/chain.js'
 import { ActionableError } from './helpers/errors.js'
 import { getToolContract } from './helpers/tool-ux.js'
@@ -376,6 +376,13 @@ export function recordToolOutcome(params: {
       tool: toolName,
       transport: runtime.transport,
       error_type: classifyErrorType(error),
+    })
+  }
+
+  if (OBS_CAPTURE_USER_QUERY && runtime.userQuery) {
+    userQueryCapturedTotal.inc({
+      transport: runtime.transport,
+      client_name: runtime.clientName || 'unknown',
     })
   }
 

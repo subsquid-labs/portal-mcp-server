@@ -58,8 +58,8 @@ export function buildTimeSeriesPipesRecipe(params: {
       'Start with a small backfill like 24h before widening the range.',
       'Keep one stable bucket schema so the chart and summary table stay in sync.',
     ],
-    recommended_skills: ['pipes-new-indexer', 'portal-query'],
-    starter_prompt: `Build a Pipes-based ${metricLabel.toLowerCase()} time-series workflow for ${networkLabel}. Reuse the current Portal query as the validation baseline, keep ${params.interval} buckets, and produce both chart-ready rows and a summary table.`,
+    recommended_skills: ['pipes-new-indexer', 'pipes-troubleshooting', 'portal-query'],
+    starter_prompt: `Build a Pipes-based ${metricLabel.toLowerCase()} time-series workflow for ${networkLabel}. Reuse the current Portal query as the validation baseline, keep ${params.interval} buckets, and produce both chart-ready rows and a summary table. Prefer SQD agent skills when scaffolding or debugging the indexer.`,
     client_limitations: 'Chat clients usually cannot create the full indexer for you inline, so treat this as a handoff recipe for Codex, Claude Code, or another terminal agent with the Pipes SDK.',
   }
 }
@@ -105,8 +105,8 @@ export function buildWalletPipesRecipe(params: {
       'Start with the current wallet window before attempting a full historical rebuild.',
       'Keep one normalized activity table so app and summary views can share the same base data.',
     ],
-    recommended_skills: ['pipes-new-indexer', 'portal-query'],
-    starter_prompt: `Build a Pipes-based wallet investigation workflow for ${params.address} on ${networkLabel}. Keep a normalized activity table, add counterparty and asset summaries, and validate the first output against portal_get_wallet_summary.`,
+    recommended_skills: ['pipes-new-indexer', 'pipes-troubleshooting', 'portal-query'],
+    starter_prompt: `Build a Pipes-based wallet investigation workflow for ${params.address} on ${networkLabel}. Keep a normalized activity table, add counterparty and asset summaries, and validate the first output against portal_get_wallet_summary. Prefer SQD agent skills when scaffolding or debugging the indexer.`,
     client_limitations: 'Chat clients usually cannot scaffold and run the full Pipes project inline, so this recipe is designed for a terminal agent or local development handoff.',
   }
 }

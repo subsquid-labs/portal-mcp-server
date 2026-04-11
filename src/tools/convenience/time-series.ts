@@ -612,6 +612,12 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             pct_change: previousPoint.value === 0 ? null : Number((((point.value - previousPoint.value) / previousPoint.value) * 100).toFixed(2)),
           }
         })
+        const includeFullSeries = mode === 'deep'
+        const maxDeltaBuckets = 160
+        const trimmedBucketDeltas = bucketDeltas.length > maxDeltaBuckets ? bucketDeltas.slice(-maxDeltaBuckets) : bucketDeltas
+        if (bucketDeltas.length > trimmedBucketDeltas.length) {
+          notices.push(`Bucket deltas trimmed to the most recent ${maxDeltaBuckets} buckets to keep the response compact. Use mode="deep" for the full window.`)
+        }
         const summaryRows = [
           {
             label: 'Total',
@@ -689,27 +695,30 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               timestampField: 'timestamp',
               defaultSort: { key: 'bucket_index', direction: 'asc' },
             }),
-            buildTableDescriptor({
-              id: 'bucket_deltas',
-              dataKey: 'bucket_deltas',
-              rowCount: bucketDeltas.length,
-              title: 'Bucket deltas',
-              defaultSort: { key: 'bucket_index', direction: 'asc' },
-              dense: true,
-              columns: [
-                { key: 'bucket_index', label: 'Bucket', kind: 'dimension', format: 'integer', align: 'right' },
-                { key: 'current_value', label: 'Current', kind: 'metric', format: getMetricValueFormat(metric), align: 'right', ...(getMetricUnit(metric) ? { unit: getMetricUnit(metric) } : {}) },
-                { key: 'previous_value', label: 'Previous', kind: 'metric', format: getMetricValueFormat(metric), align: 'right', ...(getMetricUnit(metric) ? { unit: getMetricUnit(metric) } : {}) },
-                { key: 'delta', label: 'Delta', kind: 'metric', format: getMetricValueFormat(metric), align: 'right', ...(getMetricUnit(metric) ? { unit: getMetricUnit(metric) } : {}) },
-                { key: 'pct_change', label: 'Pct change', kind: 'metric', format: 'percent', unit: '%', align: 'right' },
-              ],
-            }),
+            ...(trimmedBucketDeltas.length
+              ? [
+                  buildTableDescriptor({
+                    id: 'bucket_deltas',
+                    dataKey: 'bucket_deltas',
+                    rowCount: trimmedBucketDeltas.length,
+                    title: 'Bucket deltas',
+                    defaultSort: { key: 'bucket_index', direction: 'asc' },
+                    dense: true,
+                    columns: [
+                      { key: 'bucket_index', label: 'Bucket', kind: 'dimension', format: 'integer', align: 'right' },
+                      { key: 'current_value', label: 'Current', kind: 'metric', format: getMetricValueFormat(metric), align: 'right', ...(getMetricUnit(metric) ? { unit: getMetricUnit(metric) } : {}) },
+                      { key: 'previous_value', label: 'Previous', kind: 'metric', format: getMetricValueFormat(metric), align: 'right', ...(getMetricUnit(metric) ? { unit: getMetricUnit(metric) } : {}) },
+                      { key: 'delta', label: 'Delta', kind: 'metric', format: getMetricValueFormat(metric), align: 'right', ...(getMetricUnit(metric) ? { unit: getMetricUnit(metric) } : {}) },
+                      { key: 'pct_change', label: 'Pct change', kind: 'metric', format: 'percent', unit: '%', align: 'right' },
+                    ],
+                  }),
+                ]
+              : []),
           ],
           summary_rows: summaryRows,
-          current_series: currentSeries.timeSeries,
-          previous_series: previousSeries.timeSeries,
           comparison_series: comparisonSeries,
-          bucket_deltas: bucketDeltas,
+          ...(includeFullSeries ? { current_series: currentSeries.timeSeries, previous_series: previousSeries.timeSeries } : {}),
+          bucket_deltas: trimmedBucketDeltas,
           gap_diagnostics: currentSeries.gapDiagnostics,
         }, `Compared ${metric} over the current ${duration} window versus the immediately previous ${duration}.`, {
           toolName: 'portal_get_time_series',

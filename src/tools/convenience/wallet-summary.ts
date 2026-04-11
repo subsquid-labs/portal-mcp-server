@@ -305,6 +305,44 @@ function buildWalletCounterpartiesTable(title: string, rowCount: number) {
   })
 }
 
+function buildBitcoinOutputsTable(title: string, rowCount: number) {
+  return buildTableDescriptor({
+    id: 'bitcoin_outputs',
+    dataKey: 'bitcoin.recent_outputs',
+    rowCount,
+    title,
+    subtitle: 'Recent outputs sent to the wallet address',
+    keyField: 'primary_id',
+    defaultSort: { key: 'timestamp', direction: 'desc' },
+    dense: true,
+    columns: [
+      { key: 'timestamp_human', label: 'Time', kind: 'time', format: 'timestamp_human' },
+      { key: 'tx_hash', label: 'Tx hash', kind: 'dimension' },
+      { key: 'value', label: 'Value (sats)', kind: 'metric', format: 'integer', align: 'right' },
+      { key: 'outputIndex', label: 'Output index', kind: 'dimension' },
+    ],
+  })
+}
+
+function buildBitcoinInputsTable(title: string, rowCount: number) {
+  return buildTableDescriptor({
+    id: 'bitcoin_inputs',
+    dataKey: 'bitcoin.recent_inputs',
+    rowCount,
+    title,
+    subtitle: 'Recent inputs spent by the wallet address',
+    keyField: 'primary_id',
+    defaultSort: { key: 'timestamp', direction: 'desc' },
+    dense: true,
+    columns: [
+      { key: 'timestamp_human', label: 'Time', kind: 'time', format: 'timestamp_human' },
+      { key: 'tx_hash', label: 'Tx hash', kind: 'dimension' },
+      { key: 'prevoutValue', label: 'Value (sats)', kind: 'metric', format: 'integer', align: 'right' },
+      { key: 'inputIndex', label: 'Input index', kind: 'dimension' },
+    ],
+  })
+}
+
 function buildTopCounterparties(items: Array<Record<string, unknown>>, walletAddress: string, limit: number = 5): WalletCounterpartyRow[] {
   const normalizedWallet = walletAddress.toLowerCase()
   const counterparties = new Map<string, { activityCount: number; sentCount: number; receivedCount: number; recordTypes: Set<string> }>()
@@ -1009,6 +1047,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           analyzed_from_block: fromBlock,
           description: windowDescription,
           mode,
+          preview: hasMore,
         },
         activity: {
           count: combinedActivity.length,
@@ -1418,6 +1457,8 @@ async function buildNonEvmWalletSummary(params: {
       },
       tables: [
         buildWalletActivityTable('Wallet activity', outputs.length + inputs.length),
+        buildBitcoinOutputsTable('Recent outputs', outputs.length),
+        buildBitcoinInputsTable('Recent inputs', inputs.length),
       ],
     }, `Wallet summary for ${address} on ${networkLabel}: ${outputs.length} recent outputs and ${inputs.length} recent inputs.`, {
       toolName: 'portal_get_wallet_summary',
@@ -1447,6 +1488,41 @@ async function buildNonEvmWalletSummary(params: {
           buildMetricCard({ id: 'btc-spent', label: 'BTC spent (sats)', value_path: 'assets.total_btc_spent_sats', format: 'decimal' }),
           buildMetricCard({ id: 'outputs', label: 'Outputs', value_path: 'bitcoin.outputs_count', format: 'integer' }),
           buildMetricCard({ id: 'inputs', label: 'Inputs', value_path: 'bitcoin.inputs_count', format: 'integer' }),
+        ],
+        panels: [
+          buildTimelinePanel({
+            id: 'wallet-timeline',
+            kind: 'timeline_panel',
+            title: 'Activity timeline',
+            subtitle: 'Chronological Bitcoin activity for this wallet.',
+            data_key: 'activity.items',
+            timestamp_key: 'timestamp_human',
+            title_key: 'primary_id',
+            subtitle_keys: ['record_type', 'tx_hash'],
+            badge_key: 'record_type',
+            emphasis: 'primary',
+          }),
+          buildTablePanel({
+            id: 'wallet-table',
+            kind: 'table_panel',
+            title: 'Wallet activity',
+            subtitle: 'Normalized inputs and outputs for this wallet window.',
+            table_id: 'activity',
+          }),
+          buildTablePanel({
+            id: 'wallet-outputs',
+            kind: 'table_panel',
+            title: 'Recent outputs',
+            subtitle: 'Most recent outputs sent to the wallet.',
+            table_id: 'bitcoin_outputs',
+          }),
+          buildTablePanel({
+            id: 'wallet-inputs',
+            kind: 'table_panel',
+            title: 'Recent inputs',
+            subtitle: 'Most recent inputs spent by the wallet.',
+            table_id: 'bitcoin_inputs',
+          }),
         ],
         followUpActions: [
           { label: 'Show raw activity rows', intent: 'show_raw', target: 'activity.items' },
