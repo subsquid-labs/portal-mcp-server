@@ -1,6 +1,6 @@
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables } from '@modelcontextprotocol/ext-apps'
 
-const ACCENT_COLORS = ['#2d7ff9', '#f59e0b', '#22c55e', '#f97316', '#a855f7', '#ef4444', '#14b8a6', '#eab308']
+const ACCENT_COLORS = ['#4c8dff', '#7fb2ff', '#30d158', '#64d2ff', '#bfadff', '#ff9f0a', '#ff453a', '#8e8e93']
 const ZOOM_DURATION_MAP = {
   '30d': '7d',
   '7d': '24h',
@@ -65,31 +65,31 @@ function installBaseStyles() {
   style.textContent = `
     :root {
       color-scheme: dark;
-      --portal-bg: #05070b;
-      --portal-bg-top: #0b1019;
-      --portal-shell: rgba(7, 10, 16, 0.96);
-      --portal-panel: #0c1118;
-      --portal-panel-strong: #111824;
-      --portal-panel-muted: #0a0e15;
-      --portal-border: rgba(117, 138, 175, 0.22);
-      --portal-border-strong: rgba(245, 158, 11, 0.42);
-      --portal-grid: rgba(99, 118, 151, 0.16);
-      --portal-grid-strong: rgba(99, 118, 151, 0.28);
-      --portal-text: #f4f7fb;
-      --portal-text-muted: #aab4c6;
-      --portal-text-subtle: #728097;
-      --portal-accent: #f59e0b;
-      --portal-accent-soft: rgba(245, 158, 11, 0.12);
-      --portal-accent-cool: #2d7ff9;
-      --portal-accent-positive: #22c55e;
-      --portal-accent-negative: #ef4444;
-      --portal-shadow: 0 22px 50px rgba(0, 0, 0, 0.38);
-      --portal-radius-xl: 16px;
-      --portal-radius-lg: 12px;
-      --portal-radius-md: 10px;
-      --portal-radius-sm: 8px;
-      --portal-font: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
-      --portal-font-mono: var(--font-mono, "SFMono-Regular", "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace);
+      --portal-bg: #07090d;
+      --portal-bg-top: #11151b;
+      --portal-shell: rgba(10, 13, 18, 0.94);
+      --portal-panel: #11151b;
+      --portal-panel-strong: #171c24;
+      --portal-panel-muted: #0d1117;
+      --portal-border: rgba(255, 255, 255, 0.08);
+      --portal-border-strong: rgba(76, 141, 255, 0.32);
+      --portal-grid: rgba(255, 255, 255, 0.05);
+      --portal-grid-strong: rgba(255, 255, 255, 0.1);
+      --portal-text: #f5f7fa;
+      --portal-text-muted: #b0b7c3;
+      --portal-text-subtle: #7f8898;
+      --portal-accent: #4c8dff;
+      --portal-accent-soft: rgba(76, 141, 255, 0.12);
+      --portal-accent-cool: #4c8dff;
+      --portal-accent-positive: #30d158;
+      --portal-accent-negative: #ff453a;
+      --portal-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+      --portal-radius-xl: 20px;
+      --portal-radius-lg: 16px;
+      --portal-radius-md: 12px;
+      --portal-radius-sm: 10px;
+      --portal-font: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif);
+      --portal-font-mono: var(--font-mono, "SFMono-Regular", "SF Mono", ui-monospace, monospace);
       --portal-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
       --portal-ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
     }
@@ -102,8 +102,8 @@ function installBaseStyles() {
       margin: 0;
       min-height: 100%;
       background:
-        radial-gradient(circle at top center, rgba(45, 127, 249, 0.1), transparent 26%),
-        radial-gradient(circle at top left, rgba(245, 158, 11, 0.1), transparent 30%),
+        radial-gradient(circle at top center, rgba(76, 141, 255, 0.08), transparent 26%),
+        radial-gradient(circle at top left, rgba(255, 255, 255, 0.03), transparent 28%),
         linear-gradient(180deg, var(--portal-bg-top), var(--portal-bg));
       color: var(--portal-text);
       font-family: var(--portal-font);
@@ -111,7 +111,7 @@ function installBaseStyles() {
     }
 
     body {
-      padding: 12px;
+      padding: 10px;
     }
 
     button, input {
@@ -120,8 +120,8 @@ function installBaseStyles() {
 
     .portal-app {
       display: grid;
-      gap: 12px;
-      max-width: 1440px;
+      gap: 10px;
+      max-width: 1320px;
       margin: 0 auto;
     }
 
@@ -130,9 +130,7 @@ function installBaseStyles() {
       overflow: hidden;
       border: 1px solid var(--portal-border);
       border-radius: var(--portal-radius-xl);
-      background:
-        linear-gradient(180deg, rgba(17, 24, 36, 0.84), rgba(9, 13, 20, 0.98)),
-        linear-gradient(90deg, rgba(245, 158, 11, 0.04), transparent 26%);
+      background: linear-gradient(180deg, rgba(15, 19, 26, 0.98), rgba(10, 13, 18, 0.98));
       box-shadow: var(--portal-shadow);
     }
 
@@ -141,16 +139,8 @@ function installBaseStyles() {
       position: absolute;
       inset: 0;
       pointer-events: none;
-      background:
-        linear-gradient(90deg, transparent 0, transparent calc(100% - 1px), rgba(245, 158, 11, 0.18) calc(100% - 1px)),
-        repeating-linear-gradient(
-          180deg,
-          rgba(255, 255, 255, 0.018) 0,
-          rgba(255, 255, 255, 0.018) 1px,
-          transparent 1px,
-          transparent 32px
-        );
-      opacity: 0.7;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 18%);
+      opacity: 0.8;
     }
 
     .portal-shell > * {
@@ -158,47 +148,16 @@ function installBaseStyles() {
       z-index: 1;
     }
 
-    .portal-status-strip {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0;
-      border-bottom: 1px solid rgba(245, 158, 11, 0.22);
-      background:
-        linear-gradient(90deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.03) 32%, transparent 65%),
-        rgba(10, 14, 21, 0.9);
-    }
-
-    .portal-status-item {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      border-right: 1px solid rgba(245, 158, 11, 0.16);
-      font-family: var(--portal-font-mono);
-      font-size: 11px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--portal-text-subtle);
-    }
-
-    .portal-status-label {
-      color: rgba(245, 158, 11, 0.84);
-    }
-
-    .portal-status-value {
-      color: var(--portal-text);
-    }
-
     .portal-header {
       display: grid;
-      gap: 12px;
-      padding: 18px 18px 6px;
+      gap: 10px;
+      padding: 24px 24px 10px;
     }
 
     .portal-eyebrow {
       display: flex;
       flex-wrap: wrap;
-      gap: 6px;
+      gap: 8px;
     }
 
     .portal-headline {
@@ -208,63 +167,62 @@ function installBaseStyles() {
 
     .portal-title-stack {
       display: grid;
-      gap: 8px;
+      gap: 6px;
     }
 
     .portal-title-kicker {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      font-family: var(--portal-font-mono);
-      font-size: 11px;
-      letter-spacing: 0.22em;
-      text-transform: uppercase;
-      color: rgba(245, 158, 11, 0.84);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--portal-text-subtle);
     }
 
     .portal-title-kicker::before {
       content: '';
-      width: 26px;
+      width: 18px;
       height: 1px;
-      background: currentColor;
+      background: rgba(255, 255, 255, 0.14);
     }
 
     .portal-chip {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 5px 9px;
+      padding: 6px 10px;
       border-radius: 999px;
-      background: rgba(17, 24, 36, 0.85);
-      border: 1px solid rgba(117, 138, 175, 0.2);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
       color: var(--portal-text-muted);
-      font-size: 11px;
-      font-family: var(--portal-font-mono);
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-size: 12px;
+      font-weight: 500;
     }
 
     .portal-chip--accent {
-      background: rgba(245, 158, 11, 0.12);
-      border-color: rgba(245, 158, 11, 0.34);
-      color: rgba(245, 195, 92, 0.98);
+      background: rgba(76, 141, 255, 0.14);
+      border-color: rgba(76, 141, 255, 0.2);
+      color: #dce9ff;
     }
 
     .portal-title {
       margin: 0;
-      font-size: clamp(24px, 3vw, 34px);
-      line-height: 1.04;
+      font-size: clamp(28px, 3.2vw, 38px);
+      line-height: 1.05;
       letter-spacing: -0.035em;
-      max-width: 20ch;
+      max-width: 18ch;
+      font-weight: 650;
     }
 
     .portal-title--value {
-      font-family: var(--portal-font-mono);
-      font-size: clamp(22px, 2.7vw, 30px);
+      font-family: var(--portal-font);
+      font-size: clamp(24px, 2.9vw, 32px);
       line-height: 1.08;
       letter-spacing: -0.03em;
       word-break: break-all;
       max-width: 100%;
+      font-weight: 650;
     }
 
     .portal-subtitle,
@@ -273,8 +231,9 @@ function installBaseStyles() {
     .portal-error-copy {
       margin: 0;
       color: var(--portal-text-muted);
-      font-size: 13px;
-      line-height: 1.55;
+      font-size: 14px;
+      line-height: 1.6;
+      max-width: 70ch;
     }
 
     .portal-actions,
@@ -283,28 +242,28 @@ function installBaseStyles() {
     .portal-metrics,
     .portal-panels {
       display: grid;
-      gap: 10px;
+      gap: 12px;
     }
 
     .portal-notices {
-      padding: 0 18px;
+      padding: 0 24px;
     }
 
     .portal-badges,
     .portal-actions {
-      padding: 0 18px;
+      padding: 0 24px;
       grid-template-columns: repeat(auto-fit, minmax(180px, max-content));
       align-items: start;
     }
 
     .portal-metrics {
-      padding: 0 18px 2px;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      padding: 0 24px 2px;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     }
 
     .portal-panels {
-      padding: 0 18px 18px;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      padding: 0 24px 24px;
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
     }
 
     .portal-panel,
@@ -315,9 +274,7 @@ function installBaseStyles() {
     .portal-raw {
       border: 1px solid var(--portal-border);
       border-radius: var(--portal-radius-lg);
-      background:
-        linear-gradient(180deg, rgba(19, 25, 37, 0.95), rgba(12, 17, 24, 0.98)),
-        rgba(12, 17, 24, 0.94);
+      background: rgba(17, 21, 27, 0.88);
     }
 
     .portal-panel--wide {
@@ -326,26 +283,25 @@ function installBaseStyles() {
 
     .portal-panel {
       display: grid;
-      gap: 12px;
-      padding: 14px;
+      gap: 14px;
+      padding: 18px;
     }
 
     .portal-panel-header {
       display: grid;
       gap: 6px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid rgba(117, 138, 175, 0.14);
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     }
 
     .portal-panel-title,
     .portal-metric-label {
       margin: 0;
-      font-size: 11px;
+      font-size: 13px;
       font-weight: 600;
-      font-family: var(--portal-font-mono);
-      color: rgba(245, 158, 11, 0.88);
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
+      font-family: var(--portal-font);
+      color: var(--portal-text);
+      letter-spacing: -0.01em;
     }
 
     .portal-panel-copy,
@@ -362,38 +318,37 @@ function installBaseStyles() {
     .portal-metric {
       display: grid;
       gap: 8px;
-      padding: 12px;
-      min-height: 110px;
+      padding: 16px;
+      min-height: 118px;
     }
 
     .portal-metric-value {
       margin: 0;
-      font-size: clamp(26px, 2.8vw, 34px);
+      font-size: clamp(28px, 3vw, 36px);
       line-height: 1;
       letter-spacing: -0.03em;
       font-family: var(--portal-font-mono);
     }
 
     .portal-metric--primary {
-      border-color: rgba(245, 158, 11, 0.42);
+      border-color: rgba(76, 141, 255, 0.24);
       background:
-        linear-gradient(180deg, rgba(245, 158, 11, 0.14), rgba(245, 158, 11, 0.04) 32%, rgba(12, 17, 24, 0.98) 100%),
-        rgba(12, 17, 24, 0.98);
+        linear-gradient(180deg, rgba(76, 141, 255, 0.09), rgba(76, 141, 255, 0.03) 34%, rgba(17, 21, 27, 0.92) 100%),
+        rgba(17, 21, 27, 0.92);
     }
 
     .portal-badge {
-      padding: 10px 12px;
+      padding: 12px 14px;
     }
 
     .portal-badge-key {
       display: block;
-      font-size: 10px;
+      font-size: 11px;
       font-weight: 600;
       color: var(--portal-text-subtle);
-      text-transform: uppercase;
-      letter-spacing: 0.18em;
+      letter-spacing: -0.01em;
       margin-bottom: 6px;
-      font-family: var(--portal-font-mono);
+      font-family: var(--portal-font);
     }
 
     .portal-badge-value {
@@ -401,14 +356,14 @@ function installBaseStyles() {
       line-height: 1.4;
       color: var(--portal-text);
       word-break: break-word;
-      font-family: var(--portal-font-mono);
+      font-family: var(--portal-font);
     }
 
     .portal-notice {
       padding: 12px 14px;
       border-radius: var(--portal-radius-md);
-      border: 1px solid rgba(245, 158, 11, 0.28);
-      background: linear-gradient(90deg, rgba(245, 158, 11, 0.1), rgba(245, 158, 11, 0.03));
+      border: 1px solid rgba(76, 141, 255, 0.18);
+      background: rgba(76, 141, 255, 0.08);
       color: var(--portal-text-muted);
       font-size: 13px;
       line-height: 1.5;
@@ -421,24 +376,23 @@ function installBaseStyles() {
     }
 
     .portal-button {
-      border: 1px solid rgba(117, 138, 175, 0.28);
-      background: linear-gradient(180deg, rgba(20, 27, 39, 0.96), rgba(11, 15, 23, 0.96));
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
       color: var(--portal-text);
-      border-radius: 999px;
+      border-radius: 12px;
       padding: 10px 14px;
       cursor: pointer;
-      font-family: var(--portal-font-mono);
-      font-size: 11px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
+      font-family: var(--portal-font);
+      font-size: 13px;
+      font-weight: 500;
       transition: transform 140ms var(--portal-ease-out), border-color 140ms ease, background 140ms ease, color 140ms ease;
     }
 
     .portal-button:hover:not(:disabled) {
       transform: translateY(-1px);
-      border-color: rgba(245, 158, 11, 0.42);
-      background: linear-gradient(180deg, rgba(33, 42, 61, 0.98), rgba(14, 20, 30, 0.98));
-      color: rgba(255, 232, 194, 0.98);
+      border-color: rgba(255, 255, 255, 0.14);
+      background: rgba(255, 255, 255, 0.05);
+      color: white;
     }
 
     .portal-button:active:not(:disabled) {
@@ -453,7 +407,7 @@ function installBaseStyles() {
     .portal-button--accent {
       background: var(--portal-accent);
       border-color: var(--portal-accent);
-      color: #090b0f;
+      color: white;
     }
 
     .portal-empty,
@@ -472,8 +426,8 @@ function installBaseStyles() {
       padding: 16px;
       display: grid;
       gap: 10px;
-      border: 1px solid rgba(245, 158, 11, 0.28);
-      background: linear-gradient(90deg, rgba(245, 158, 11, 0.09), rgba(245, 158, 11, 0.03));
+      border: 1px solid rgba(76, 141, 255, 0.18);
+      background: rgba(76, 141, 255, 0.06);
       border-radius: var(--portal-radius-lg);
     }
 
@@ -486,10 +440,9 @@ function installBaseStyles() {
     .portal-chart-stage {
       position: relative;
       overflow: hidden;
-      border-radius: 12px;
-      border: 1px solid rgba(117, 138, 175, 0.2);
-      background:
-        linear-gradient(180deg, rgba(15, 21, 31, 0.98), rgba(7, 10, 16, 0.98));
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: linear-gradient(180deg, rgba(11, 14, 20, 0.98), rgba(8, 11, 16, 0.98));
     }
 
     .portal-chart-svg {
@@ -508,7 +461,7 @@ function installBaseStyles() {
       position: absolute;
       opacity: 0;
       transition: opacity 120ms ease;
-      background: rgba(226, 232, 240, 0.18);
+      background: rgba(255, 255, 255, 0.14);
       pointer-events: none;
     }
 
@@ -528,16 +481,16 @@ function installBaseStyles() {
       position: absolute;
       top: 12px;
       left: 12px;
-      min-width: 164px;
+      min-width: 172px;
       padding: 10px 12px;
-      border-radius: 10px;
-      border: 1px solid rgba(117, 138, 175, 0.22);
-      background: rgba(7, 11, 17, 0.95);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(13, 17, 24, 0.94);
       font-size: 12px;
       color: var(--portal-text);
       display: none;
       pointer-events: none;
-      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.42);
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
       font-family: var(--portal-font-mono);
     }
 
@@ -545,7 +498,7 @@ function installBaseStyles() {
       display: block;
       font-size: 12px;
       margin-bottom: 8px;
-      color: rgba(245, 158, 11, 0.92);
+      color: #dce9ff;
       letter-spacing: 0.04em;
     }
 
@@ -561,9 +514,8 @@ function installBaseStyles() {
       gap: 8px;
       color: var(--portal-text-muted);
       font-size: 11px;
-      font-family: var(--portal-font-mono);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
+      font-family: var(--portal-font);
+      letter-spacing: 0.01em;
     }
 
     .portal-legend-dot {
@@ -585,12 +537,12 @@ function installBaseStyles() {
       min-width: 220px;
       max-width: 320px;
       width: 100%;
-      border-radius: 999px;
-      border: 1px solid rgba(117, 138, 175, 0.24);
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
       padding: 10px 12px;
-      background: rgba(11, 16, 24, 0.94);
+      background: rgba(255, 255, 255, 0.03);
       color: var(--portal-text);
-      font-family: var(--portal-font-mono);
+      font-family: var(--portal-font);
     }
 
     .portal-search::placeholder {
@@ -599,22 +551,22 @@ function installBaseStyles() {
 
     .portal-table-wrap {
       overflow-x: auto;
-      border: 1px solid rgba(117, 138, 175, 0.14);
-      border-radius: 12px;
-      background: rgba(8, 12, 18, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 14px;
+      background: rgba(8, 11, 16, 0.45);
     }
 
     .portal-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 12px;
-      font-family: var(--portal-font-mono);
+      font-family: var(--portal-font);
     }
 
     .portal-table th,
     .portal-table td {
       padding: 10px 12px;
-      border-bottom: 1px solid rgba(117, 138, 175, 0.12);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
       text-align: left;
       vertical-align: top;
     }
@@ -622,9 +574,9 @@ function installBaseStyles() {
     .portal-table th {
       position: sticky;
       top: 0;
-      background: rgba(12, 18, 28, 0.98);
+      background: rgba(15, 19, 26, 0.98);
       z-index: 1;
-      color: rgba(245, 158, 11, 0.88);
+      color: var(--portal-text-subtle);
       font-weight: 600;
       letter-spacing: 0.12em;
       text-transform: uppercase;
@@ -632,11 +584,11 @@ function installBaseStyles() {
     }
 
     .portal-table tbody tr:nth-child(even) {
-      background: rgba(255, 255, 255, 0.015);
+      background: rgba(255, 255, 255, 0.01);
     }
 
     .portal-table tbody tr:hover {
-      background: rgba(45, 127, 249, 0.08);
+      background: rgba(76, 141, 255, 0.05);
     }
 
     .portal-table-sort {
@@ -657,10 +609,8 @@ function installBaseStyles() {
       cursor: pointer;
       font-weight: 600;
       padding: 0;
-      font-family: var(--portal-font-mono);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      font-size: 11px;
+      font-family: var(--portal-font);
+      font-size: 12px;
     }
 
     .portal-table-meta {
@@ -668,9 +618,8 @@ function installBaseStyles() {
       flex-wrap: wrap;
       gap: 12px;
       justify-content: space-between;
-      font-family: var(--portal-font-mono);
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
+      font-family: var(--portal-font);
+      letter-spacing: 0.01em;
     }
 
     .portal-timeline {
@@ -681,11 +630,9 @@ function installBaseStyles() {
     .portal-timeline-item {
       display: grid;
       gap: 8px;
-      border: 1px solid rgba(117, 138, 175, 0.16);
+      border: 1px solid rgba(255, 255, 255, 0.06);
       border-radius: var(--portal-radius-md);
-      background:
-        linear-gradient(90deg, rgba(45, 127, 249, 0.07), transparent 14%),
-        rgba(10, 14, 21, 0.92);
+      background: rgba(12, 16, 22, 0.9);
       padding: 14px;
     }
 
@@ -708,13 +655,12 @@ function installBaseStyles() {
       align-items: center;
       padding: 4px 8px;
       border-radius: 999px;
-      background: rgba(45, 127, 249, 0.12);
-      color: rgba(147, 197, 253, 0.98);
-      border: 1px solid rgba(45, 127, 249, 0.28);
+      background: rgba(76, 141, 255, 0.12);
+      color: #dce9ff;
+      border: 1px solid rgba(76, 141, 255, 0.16);
       font-size: 11px;
       font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.01em;
       font-family: var(--portal-font-mono);
     }
 
@@ -737,20 +683,20 @@ function installBaseStyles() {
       gap: 12px;
       color: var(--portal-text-muted);
       font-size: 13px;
-      font-family: var(--portal-font-mono);
+      font-family: var(--portal-font);
     }
 
     .portal-bar-track {
       height: 10px;
       border-radius: 999px;
-      background: rgba(99, 118, 151, 0.18);
+      background: rgba(255, 255, 255, 0.06);
       overflow: hidden;
     }
 
     .portal-bar-fill {
       height: 100%;
       border-radius: inherit;
-      background: linear-gradient(90deg, var(--portal-accent), rgba(245, 158, 11, 0.36));
+      background: linear-gradient(90deg, var(--portal-accent), rgba(76, 141, 255, 0.4));
     }
 
     .portal-raw pre,
@@ -767,16 +713,15 @@ function installBaseStyles() {
     .portal-drawer {
       display: grid;
       gap: 12px;
-      padding: 16px 18px 18px;
-      border-top: 1px solid rgba(245, 158, 11, 0.18);
-      background:
-        linear-gradient(180deg, rgba(8, 12, 18, 0.98), rgba(5, 8, 12, 0.98));
+      padding: 18px 24px 24px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(10, 13, 18, 0.96);
     }
 
     .portal-skeleton {
       height: 14px;
       border-radius: 999px;
-      background: linear-gradient(90deg, rgba(117, 138, 175, 0.08), rgba(245, 158, 11, 0.22), rgba(117, 138, 175, 0.08));
+      background: linear-gradient(90deg, rgba(255, 255, 255, 0.04), rgba(76, 141, 255, 0.16), rgba(255, 255, 255, 0.04));
       background-size: 200% 100%;
       animation: portal-pulse 1.3s var(--portal-ease-in-out) infinite;
     }
@@ -798,21 +743,12 @@ function installBaseStyles() {
       .portal-metrics,
       .portal-panels,
       .portal-drawer {
-        padding-left: 12px;
-        padding-right: 12px;
+        padding-left: 14px;
+        padding-right: 14px;
       }
 
       .portal-panels {
         grid-template-columns: 1fr;
-      }
-
-      .portal-status-strip {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .portal-status-item {
-        border-bottom: 1px solid rgba(245, 158, 11, 0.12);
       }
 
       .portal-title {
@@ -910,7 +846,6 @@ function render() {
   root.innerHTML = `
     <main class="portal-app">
       <section class="portal-shell">
-        ${renderStatusStrip(payload, isPartial)}
         <header class="portal-header">
           <div class="portal-eyebrow">
             <span class="portal-chip portal-chip--accent">${escapeHtml(payload?._tool_contract?.name ? humanize(payload._tool_contract.name.replace(/^portal_/, '')) : 'Portal')}</span>
@@ -957,27 +892,6 @@ function renderNotices(notices) {
   return `<section class="portal-notices">${notices.map((notice) => `<div class="portal-notice">${escapeHtml(notice)}</div>`).join('')}</section>`
 }
 
-function renderStatusStrip(payload, isPartial) {
-  const stateLabel = state.loading ? 'Refreshing' : isPartial ? 'Preview' : 'Live'
-  const items = [
-    ['System', 'Portal MCP'],
-    ['Tool', payload?._tool_contract?.name ? humanize(payload._tool_contract.name.replace(/^portal_/, '')) : 'Explorer'],
-    ['Network', payload?.display?.network || payload?.display?.source || 'Auto'],
-    ['State', stateLabel],
-  ]
-
-  return `
-    <div class="portal-status-strip">
-      ${items.map(([label, value]) => `
-        <span class="portal-status-item">
-          <span class="portal-status-label">${escapeHtml(label)}</span>
-          <span class="portal-status-value">${escapeHtml(String(value || 'n/a'))}</span>
-        </span>
-      `).join('')}
-    </div>
-  `
-}
-
 function renderHeadline(title) {
   const text = String(title || 'Portal Explorer').trim()
   const dividerIndex = text.indexOf(':')
@@ -1017,17 +931,17 @@ function renderUtilityActions() {
   return [
     `
       <button class="portal-button" type="button" data-action="copy-args">
-        Copy tool args
+        Copy args
       </button>
     `,
     `
       <button class="portal-button" type="button" data-action="open-raw">
-        Open raw JSON
+        Open raw
       </button>
     `,
     `
       <button class="portal-button" type="button" data-action="copy-raw">
-        Copy raw JSON
+        Copy raw
       </button>
     `,
   ]
@@ -1035,7 +949,8 @@ function renderUtilityActions() {
 
 function renderActionButton(action) {
   const intent = typeof action.intent === 'string' ? action.intent : 'show_raw'
-  const label = typeof action.label === 'string' ? action.label : humanize(intent)
+  const rawLabel = typeof action.label === 'string' ? action.label : humanize(intent)
+  const label = compactActionLabel(rawLabel, intent)
   const disabled =
     state.loading
     || (intent === 'continue' && !state.payload?._pagination?.next_cursor)
@@ -1053,6 +968,24 @@ function renderActionButton(action) {
       ${escapeHtml(label)}
     </button>
   `
+}
+
+function compactActionLabel(label, intent) {
+  switch (intent) {
+    case 'continue':
+      return 'Load more'
+    case 'compare_previous':
+      return 'Compare previous'
+    case 'zoom_in':
+      return 'Zoom in'
+    case 'show_raw':
+      return 'Show raw'
+    default:
+      return label
+        .replace(/^Show raw .*$/i, 'Show raw')
+        .replace(/^Compare against the previous window$/i, 'Compare previous')
+        .replace(/^Zoom into the latest .*$/i, 'Zoom in')
+    }
 }
 
 function renderPanel(panel, payload) {
