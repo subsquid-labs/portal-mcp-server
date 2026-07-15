@@ -30,6 +30,8 @@
     "test:http-runtime": "tsx scripts/test-http-runtime.ts",
     "test:plugin": "tsx scripts/test-codex-plugin.ts",
     "test:claude-plugin": "tsx scripts/test-claude-plugin.ts",
+    "sync:plugin-skills": "node scripts/sync-plugin-skills.mjs --write",
+    "check:plugin-skills": "node scripts/sync-plugin-skills.mjs --check",
     "test:conversations": "tsx scripts/test-conversations.ts",
     "test:realistic-prompts": "tsx scripts/test-realistic-prompts.ts",
     "prompt:taxonomy": "tsx scripts/prompt-taxonomy.ts",

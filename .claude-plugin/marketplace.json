@@ -3,14 +3,14 @@
   "owner": {
     "name": "Subsquid Labs"
   },
-  "description": "Claude Code plugins for SQD Portal blockchain data access.",
+  "description": "Discover SQD plugins for blockchain and onchain data across Hyperliquid, Bitcoin, Solana, EVM, Tron, and more.",
   "version": "0.8.0",
   "plugins": [
     {
       "name": "portal",
       "source": "./plugins/portal",
-      "displayName": "SQD Portal",
-      "description": "Read validated onchain data from Claude Code through SQD Portal.",
+      "displayName": "SQD",
+      "description": "Explore blockchain and onchain data across Hyperliquid, Bitcoin, Solana, EVM, Tron, and more with SQD Portal MCP tools and agent skills.",
       "version": "0.8.0",
       "author": {
         "name": "Subsquid Labs"
@@ -28,7 +28,11 @@
         "evm",
         "solana",
         "bitcoin",
-        "hyperliquid"
+        "tron",
+        "hyperliquid",
+        "onchain",
+        "blockchain-data",
+        "pipes-sdk"
       ],
       "category": "data-analytics"
     }

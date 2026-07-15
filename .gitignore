@@ -67,6 +67,7 @@ data/
 !CHANGELOG.md
 !LICENSE.md
 !CONTRIBUTING.md
+!plugins/*/skills/**/*.md
 
 # Environment files with secrets
 .env

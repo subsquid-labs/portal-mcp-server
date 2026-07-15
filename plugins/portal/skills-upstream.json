@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/subsquid-labs/skills",
+  "skills": [
+    {
+      "source": "portal",
+      "target": "portal",
+      "version": "1.2.0",
+      "tree": "7df387c2e8d1a3dece20cf735a1882de46fbf308"
+    },
+    {
+      "source": "pipes-sdk",
+      "target": "pipes-sdk",
+      "version": "1.2.0",
+      "tree": "ecf23fcf341465fcf17ac4843bcc3591be81cf69"
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+name: Sync bundled plugin skills
+
+on:
+  repository_dispatch:
+    types: [skills-updated]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-plugin-skills
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out portal MCP server
+        uses: actions/checkout@v7
+
+      - name: Check out upstream skills
+        uses: actions/checkout@v7
+        with:
+          repository: subsquid-labs/skills
+          ref: ${{ github.event.client_payload.skills_sha || 'main' }}
+          path: .upstream-skills
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Sync bundled skills
+        run: npm run sync:plugin-skills -- --source .upstream-skills
+
+      - name: Verify bundle and plugin release gates
+        run: |
+          npm ci
+          npm run check:plugin-skills -- --source .upstream-skills
+          npm run build
+          npm run test:plugin
+          npm run test:claude-plugin
+
+      - name: Open or update sync pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- plugins/portal/skills plugins/portal/skills-upstream.json; then
+            echo "Bundled skills are already current."
+            exit 0
+          fi
+
+          branch="automation/sync-plugin-skills"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # The repository intentionally ignores broad file patterns such as examples/,
+          # data/, test-*.js, and *.parquet. Upstream skills may legitimately contain
+          # those paths, so force-add the complete generated bundle.
+          git add --force -- plugins/portal/skills plugins/portal/skills-upstream.json
+
+          unstaged_skill_files="$({
+            git ls-files --others --exclude-standard -- plugins/portal/skills
+            git ls-files --others --ignored --exclude-standard -- plugins/portal/skills
+          } | sort -u)"
+          if [ -n "$unstaged_skill_files" ]; then
+            echo "Skill sync left files outside the commit:"
+            echo "$unstaged_skill_files"
+            exit 1
+          fi
+
+          git commit -m "chore(plugin): sync bundled upstream skills"
+          git push --force origin "HEAD:$branch"
+
+          if gh pr view "$branch" --json url >/dev/null 2>&1; then
+            gh pr edit "$branch" --title "chore(plugin): sync bundled upstream skills" --body "Automated refresh of the Portal and Pipes SDK skills bundled with the SQD plugin."
+          else
+            gh pr create --draft --base main --head "$branch" --title "chore(plugin): sync bundled upstream skills" --body "Automated refresh of the Portal and Pipes SDK skills bundled with the SQD plugin."
+          fi

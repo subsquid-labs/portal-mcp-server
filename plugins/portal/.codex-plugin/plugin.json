@@ -1,7 +1,7 @@
 {
   "name": "portal",
   "version": "0.8.0",
-  "description": "Read validated onchain data through SQD Portal from Codex.",
+  "description": "Explore blockchain and onchain data across Hyperliquid, Bitcoin, Solana, EVM, Tron, and more with SQD Portal MCP tools and agent skills.",
   "author": {
     "name": "Subsquid Labs",
     "url": "https://sqd.dev/"
@@ -19,25 +19,27 @@
     "evm",
     "solana",
     "bitcoin",
-    "hyperliquid"
+    "tron",
+    "hyperliquid",
+    "onchain",
+    "blockchain-data",
+    "pipes-sdk"
   ],
+  "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "SQD Portal",
-    "shortDescription": "Read validated onchain data from Codex.",
-    "longDescription": "Connect Codex to the hosted SQD Portal MCP server for read-only blockchain data. Discover networks, resolve tokens and contracts, inspect wallet or contract activity, and run analytics across EVM, Solana, Bitcoin, Substrate, and Hyperliquid data.",
+    "displayName": "SQD",
+    "shortDescription": "Blockchain & onchain data for Hyperliquid, Bitcoin, Solana.",
+    "longDescription": "Query live blockchain and onchain data across Hyperliquid, Bitcoin, Solana, EVM, Substrate, Tron, and hundreds of SQD Portal datasets. Use hosted MCP tools for fast analysis and bundled Portal and Pipes SDK skills for raw exports and durable indexers.",
     "developerName": "Subsquid Labs",
     "category": "Data & Analytics",
-    "capabilities": [
-      "Interactive",
-      "Read"
-    ],
+    "capabilities": ["Interactive", "Read"],
     "websiteURL": "https://sqd.dev/portal/",
     "privacyPolicyURL": "https://sqd.dev/imprint/",
     "defaultPrompt": [
-      "Show me the last 200 BTC perp fills on Hyperliquid.",
+      "Show me up to 200 BTC perp fills on Hyperliquid from the past hour.",
       "How many transactions landed on Base in the past 2h?",
-      "Who sent the most USDC on Base in the past hour?"
+      "Show me the 20 most recent USDC transfers on Base from the past hour."
     ],
     "brandColor": "#08090A",
     "composerIcon": "./assets/sqd-composer-icon.svg",
