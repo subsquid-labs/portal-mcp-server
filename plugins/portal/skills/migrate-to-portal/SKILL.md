@@ -55,7 +55,7 @@ Activate when the user says any of:
 
 ## Add the v2 gateway API key — EVM only (alternative to migrating)
 
-Only use the v2-auth path when the user explicitly wants to remain on an EVM v2 gateway that still exists. For versions, environment setup, and the `setGateway({ url, apiKey })` form, read [references/v2-auth.md](references/v2-auth.md). On Solana, follow the Portal migration below instead.
+Only use the v2-auth path when the user explicitly wants to remain on an EVM v2 gateway that still exists. For the package versions and how the user adds their key, read [references/v2-auth.md](references/v2-auth.md). On Solana, follow the Portal migration below instead.
 
 ---
 

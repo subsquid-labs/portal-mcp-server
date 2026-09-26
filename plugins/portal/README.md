@@ -11,8 +11,8 @@ It also includes the four official SQD agent skills for Portal, Pipes SDK, Porta
 ## Data and privacy
 
 - The plugin connects to one MCP server, `https://portal.sqd.dev/mcp`, run by SQD. Each tool call sends that server its arguments, such as network names, addresses, block ranges, and time windows, and the server returns public blockchain data. The plugin sends no credentials, and the server needs no account or API key.
-- The skills run on your machine. `squid-perf` uses your installed `sqd` CLI and its existing login to read logs from your own SQD Cloud deployments, and writes its report to your project folder. The report is one HTML file that loads nothing from the network.
-- Some skill steps configure your own indexer or database. They use settings such as an SQD API key for the v2 gateway or a local ClickHouse password only with the service they belong to, and never send them to the MCP server.
+- The skills run on your machine. `squid-perf` runs your installed `sqd` CLI to read logs from your own SQD Cloud deployments and writes its report to your project folder. The report is one HTML file that loads nothing from the network.
+- Skills that set up your own indexer or database don't read keys or passwords from your machine. When a step needs one, such as an SQD API key for the v2 gateway or a ClickHouse password, you provide it, and it is used only with that service.
 - Privacy policy: [sqd.dev/imprint](https://sqd.dev/imprint/)
 
 ## Name and logo

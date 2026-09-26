@@ -27,6 +27,15 @@ const FONT_EXTENSIONS = new Set(['.otf', '.ttf', '.woff', '.woff2'])
 const SYSTEM_FILE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '__MACOSX'])
 const BINARY_ASSET_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', ...FONT_EXTENSIONS])
 const DOWNLOAD_AND_RUN = /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\bbash\s+<\(\s*(?:curl|wget)\b/
+// The directory holds a version that reads a key or password already on the user's machine and passes it on, even in
+// documentation. Skills leave those values for the user to supply; example code may fall back to a local default.
+const CREDENTIAL_NAME = String.raw`[A-Z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*`
+const CREDENTIAL_READS = [
+  new RegExp(String.raw`\$\{?${CREDENTIAL_NAME}\b`),
+  new RegExp(String.raw`process\.env\.${CREDENTIAL_NAME}\b(?!\s*(?:\|\||\?\?)\s*['"])`),
+  /(?:import\s+['"]dotenv|from\s+['"]dotenv|require\(\s*['"]dotenv|"dotenv"\s*:)/,
+  /docker inspect[^\n]*(?:PASSWORD|TOKEN|SECRET|KEY)/i,
+]
 const REQUIRE_MCP_2026_LIVE = process.env.REQUIRE_MCP_2026_LIVE === '1'
 const MODERN_PROTOCOL_VERSION = '2026-07-28'
 const LEGACY_PROTOCOL_VERSION = '2025-11-25'
@@ -263,6 +272,10 @@ function assertDirectoryReadiness() {
       !DOWNLOAD_AND_RUN.test(text),
       `${file} pipes a downloaded script into a shell; link to the installer instead`,
     )
+    for (const pattern of CREDENTIAL_READS) {
+      const match = text.match(pattern)
+      assert(!match, `${file} reads a key or password from the user's machine (${match?.[0]}); leave it to the user`)
+    }
     textFiles.set(file, text)
   }
 

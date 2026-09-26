@@ -88,9 +88,8 @@ The portal validates and scans every file in `plugins/portal`. `npm run test:cla
 - Every file is readable text, an SVG, or a PNG image. The squid-perf report template is plain HTML with its own chart code, not a packed or minified bundle.
 - No text file names a bundled PNG or font by its path. This file lives outside the plugin folder for that reason.
 - Skill references link to official installers instead of piping a downloaded script into a shell.
+- No skill command expands a key or password variable, reads one out of a container, or loads `.env` through `dotenv`. Example indexer code reads a password from the environment only with a local default. The v2 gateway key and ClickHouse passwords are left for the user to supply, as the directory's credential rule requires, and the README says so.
 - Every text file stays under 256 KiB.
-
-Skill references include setup examples in which the user's own indexer reads its own settings, such as an SQD API key for the v2 gateway or a ClickHouse password for the user's database. The plugin reads no credentials itself, and the README states where each value goes.
 
 ## OpenAI directory
 

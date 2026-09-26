@@ -121,27 +121,13 @@ The upstream doc embeds an interactive converter inline at <https://docs.sqd.dev
 
 ## Required from 2026-05-19 12:00 UTC: API key on v2 gateway
 
-Self-hosted squids that still hit the v2 archive must authenticate from May 19, 2026 12:00 UTC. Cloud-hosted squids are unaffected. Get a key at <https://portal.sqd.dev/app>.
+Self-hosted squids that still hit the v2 archive must authenticate from May 19, 2026 12:00 UTC. Cloud-hosted squids are unaffected. To stay on v2 for now, upgrade the stream package:
 
 ```bash
 npm i @subsquid/solana-stream@^0.5.0
 ```
 
-```diff
-- .setGateway('https://v2.archive.subsquid.io/network/solana-mainnet')
-+ .setGateway({
-+   url: 'https://v2.archive.subsquid.io/network/solana-mainnet',
-+   apiKey: process.env.SQD_API_KEY,
-+ })
-```
-
-```bash
-echo 'SQD_API_KEY=...' >> .env
-echo 'SQD_API_KEY=your_api_key_here' >> .env.example
-echo '.env' >> .gitignore
-```
-
-`apiKey` defaults to `SQD_API_KEY` from the environment when omitted on the call. The `apiKey` field was added to `GatewaySettings` in `@subsquid/solana-stream@0.5.0`; earlier 0.x versions reject the field.
+The user then creates a key at <https://portal.sqd.dev/app> and adds it to the squid as SQD's guide describes. Don't ask for the key, read it, or write it into the project. The `apiKey` gateway setting was added in `@subsquid/solana-stream@0.5.0`; earlier 0.x versions reject it.
 
 Reference docs: <https://docs.sqd.dev/changelog/gateway-api-keys> · <https://docs.sqd.dev/en/data/api-keys>
 
