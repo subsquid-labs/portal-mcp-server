@@ -10,7 +10,7 @@ Each entry maps back to a step in `SKILL.md`.
 
 ### `TS2353: 'apiKey' does not exist in type 'GatewaySettings'`
 
-On `.setGateway({ url, apiKey: process.env.SQD_API_KEY })` while still on a v2 squid (pre-Portal migration). Applies to both EVM and Solana.
+On `.setGateway({ url, apiKey })` while still on a v2 squid (pre-Portal migration). Applies to both EVM and Solana.
 
 **Cause:** `apiKey` on `GatewaySettings` was added in:
 
@@ -40,7 +40,7 @@ Symptom: `HttpError: Got 401 from https://v2.archive.subsquid.io/network/...` or
 
 **Cause:** the v2 gateway requires API-key authentication from May 19, 2026 12:00 UTC onward. Cloud-hosted squids are not affected (Cloud injects the key). RPC-only squids (no `setGateway`) are not affected.
 
-**Fix:** add an API key as above. Either pin the v2 package version that supports `apiKey` (`@subsquid/evm-processor@^1.30.0` / `@subsquid/solana-stream@^0.5.0`) and use the object form of `setGateway`, or complete the Portal migration in the rest of this skill (`setGateway` is replaced by `setPortal`; use the access mode configured for that Portal endpoint).
+**Fix:** either pin the v2 package version that supports `apiKey` (`@subsquid/evm-processor@^1.30.0` / `@subsquid/solana-stream@^0.5.0`) and have the user add their key as SQD's guide describes, or complete the Portal migration in the rest of this skill (`setGateway` is replaced by `setPortal`; use the access mode configured for that Portal endpoint). Don't ask for the key, read it, or write it into the project.
 
 ---
 

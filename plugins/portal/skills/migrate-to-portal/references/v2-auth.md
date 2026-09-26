@@ -6,32 +6,18 @@ Use this intermediate configuration only when the user explicitly wants to remai
 
 ## Configure the key
 
-1. Register at <https://portal.sqd.dev/app> and create a gateway API key.
+The key belongs to the user. Don't ask for it, read it from the user's environment or files, or write it into the project.
+
+1. The user registers at <https://portal.sqd.dev/app> and creates a gateway API key.
 2. Upgrade `@subsquid/evm-processor` to `1.30.0` or later on the v2 line:
 
 ```bash
 npm i @subsquid/evm-processor@^1.30.0
 ```
 
-3. Convert the gateway call:
+3. The user adds the key to the squid as SQD's gateway API key guide describes: <https://docs.sqd.dev/changelog/gateway-api-keys>.
 
-```diff
-- .setGateway('https://v2.archive.subsquid.io/network/<slug>')
-+ .setGateway({
-+   url: 'https://v2.archive.subsquid.io/network/<slug>',
-+   apiKey: process.env.SQD_API_KEY,
-+ })
-```
-
-4. Keep the credential untracked:
-
-```bash
-echo 'SQD_API_KEY=...' >> .env
-echo 'SQD_API_KEY=your_api_key_here' >> .env.example
-echo '.env' >> .gitignore
-```
-
-`GatewaySettings.apiKey` defaults to `SQD_API_KEY`, but passing it explicitly makes the dependency visible. Older processor versions reject the field with `TS2353: 'apiKey' does not exist in type 'GatewaySettings'`.
+Older processor versions reject the gateway `apiKey` setting with `TS2353: 'apiKey' does not exist in type 'GatewaySettings'`.
 
 Going to `latest` instead skips this intermediate configuration: the current EVM stack uses `@subsquid/evm-stream` / `@subsquid/evm-objects`, where `setGateway` is gone. Pin the v2 version only when remaining on v2 is deliberate.
 

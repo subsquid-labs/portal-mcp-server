@@ -116,21 +116,17 @@ if [ -z "$EXISTING" ]; then
     -e CLICKHOUSE_USER=default \
     clickhouse/clickhouse-server:latest
   CONTAINER_NAME="clickhouse"
-  CLICKHOUSE_PASSWORD="default"
 else
   CONTAINER_NAME=$EXISTING
-  CLICKHOUSE_PASSWORD=$(docker inspect $CONTAINER_NAME | \
-    grep -A 10 "Env" | grep CLICKHOUSE_PASSWORD | \
-    cut -d'=' -f2 | tr -d '",')
-  CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-default}
 fi
 ```
+
+`clickhouse-client` inside the container signs in with the `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD` the container was started with, so the `docker exec` commands below pass no password. A container started here uses the local development password `default`. For a container that already existed, ask the user for its password when you configure `.env` in Step 5; don't read it out of the container.
 
 **Step 2: Verify container health**
 
 ```bash
 docker exec $CONTAINER_NAME clickhouse-client \
-  --password "$CLICKHOUSE_PASSWORD" \
   --query "SELECT 1"
 # Expected output: 1
 ```
@@ -139,7 +135,6 @@ docker exec $CONTAINER_NAME clickhouse-client \
 
 ```bash
 docker exec $CONTAINER_NAME clickhouse-client \
-  --password "$CLICKHOUSE_PASSWORD" \
   --query "CREATE DATABASE IF NOT EXISTS $DATABASE_NAME"
 ```
 
@@ -147,10 +142,8 @@ docker exec $CONTAINER_NAME clickhouse-client \
 
 ```bash
 docker exec $CONTAINER_NAME clickhouse-client \
-  --password "$CLICKHOUSE_PASSWORD" \
   --query "SELECT id, current, finalized FROM $DATABASE_NAME.sync"
 docker exec $CONTAINER_NAME clickhouse-client \
-  --password "$CLICKHOUSE_PASSWORD" \
   --query "ALTER TABLE $DATABASE_NAME.sync DELETE WHERE id = '<confirmed-pipe-id>' SETTINGS mutations_sync=1"
 ```
 
@@ -167,7 +160,7 @@ CLICKHOUSE_PASSWORD=<password>
 - The CLI-generated `docker-compose.yml` and `.env` both use `password`
 - Standalone `docker run` commands (in this doc and ENVIRONMENT_SETUP.md) use `default`
 - If using the generated `docker-compose.yml`, keep `password` — it is internally consistent
-- If connecting to an existing standalone container, check: `docker inspect <container> | grep CLICKHOUSE_PASSWORD`
+- If connecting to an existing standalone container, ask the user which password it was started with
 - Mismatched passwords cause: `ClickHouseError: Authentication failed: password is incorrect`
 
 **Step 6: Start indexer**
@@ -188,7 +181,6 @@ Check the first log line:
 sleep 30
 
 ROW_COUNT=$(docker exec $CONTAINER_NAME clickhouse-client \
-  --password "$CLICKHOUSE_PASSWORD" \
   --database "$DATABASE_NAME" \
   --query "SELECT COUNT(*) FROM $MAIN_TABLE")
 
@@ -200,19 +192,20 @@ Sample data:
 
 ```bash
 docker exec $CONTAINER_NAME clickhouse-client \
-  --password "$CLICKHOUSE_PASSWORD" \
   --database "$DATABASE_NAME" \
   --query "SELECT * FROM $MAIN_TABLE LIMIT 3 FORMAT Vertical"
 ```
 
 ### MCP Setup (Local)
 
+Adding an MCP server changes the user's Claude Code configuration, so ask the user to run this themselves, with the container's password in place of `<password>` (`default` for a container started in Step 1).
+
 ```bash
 claude mcp add -t stdio \
   -e CLICKHOUSE_HOST=localhost \
   -e CLICKHOUSE_PORT=8123 \
   -e CLICKHOUSE_USER=default \
-  -e CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD" \
+  -e CLICKHOUSE_PASSWORD=<password> \
   -e CLICKHOUSE_SECURE=false \
   -e CLICKHOUSE_DATABASE="$DATABASE_NAME" \
   -- clickhouse /path/to/.local/bin/mcp-clickhouse
@@ -233,7 +226,7 @@ claude mcp add -t stdio \
 
 ## Commands
 tail -f $PROJECT_PATH/indexer.log
-docker exec $CONTAINER_NAME clickhouse-client --password "$CLICKHOUSE_PASSWORD" \
+docker exec $CONTAINER_NAME clickhouse-client \
   --database "$DATABASE_NAME" \
   --query "SELECT COUNT(*) as events, MAX(block_number) as block FROM $MAIN_TABLE"
 kill $INDEXER_PID
@@ -344,6 +337,8 @@ FORMAT Vertical"
 
 ### MCP Setup (Cloud)
 
+As with the local setup, ask the user to run this themselves with their Cloud password in place of `[password]`.
+
 ```bash
 claude mcp add -t stdio \
   -e CLICKHOUSE_HOST=[service-id].[region].aws.clickhouse.cloud \
@@ -371,11 +366,11 @@ ClickHouse Cloud is the database. The indexer process itself can run anywhere:
 ```bash
 npm i -g @railway/cli
 railway login && railway init
-railway variables set \
-  CLICKHOUSE_URL="$CLICKHOUSE_URL" \
-  CLICKHOUSE_DATABASE="$CLICKHOUSE_DATABASE" \
-  CLICKHOUSE_USER="$CLICKHOUSE_USER" \
-  CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD"
+```
+
+Ask the user to set `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_USER`, and `CLICKHOUSE_PASSWORD` on the Railway service with their own values, in the Railway dashboard or with `railway variables set`. Don't copy them out of the local `.env`. Then deploy:
+
+```bash
 railway up
 ```
 
@@ -405,7 +400,7 @@ FROM [database-name].[main-table];
 **Error**: `Code: 516. DB::Exception: Authentication failed` or `password is incorrect`
 
 **Fix**:
-- Local: `docker inspect $CONTAINER_NAME | grep CLICKHOUSE_PASSWORD`
+- Local: a container started in Step 1 uses `default`; for another container, ask the user which password it was started with
 - Cloud: Verify password in ClickHouse Cloud console
 - Update `.env` with the correct password
 
@@ -443,7 +438,6 @@ docker stop clickhouse && docker rm clickhouse
 6. After 30 seconds, verify data is flowing:
    ```bash
    docker exec $CONTAINER_NAME clickhouse-client \
-     --password "$CLICKHOUSE_PASSWORD" \
      --database "$DATABASE_NAME" \
      --query "SELECT COUNT(*) FROM $MAIN_TABLE"
    ```

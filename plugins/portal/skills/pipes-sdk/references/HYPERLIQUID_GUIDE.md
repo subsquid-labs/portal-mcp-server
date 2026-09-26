@@ -28,9 +28,7 @@ mkdir hl-indexer && cd hl-indexer
   },
   "dependencies": {
     "@subsquid/pipes": "^1.0.0-beta.1",
-    "@clickhouse/client": "^1.14.0",
-    "dotenv": "^16.4.7",
-    "zod": "^4.3.4"
+    "@clickhouse/client": "^1.14.0"
   },
   "devDependencies": {
     "tsx": "^4.19.4",
@@ -40,14 +38,9 @@ mkdir hl-indexer && cd hl-indexer
 }
 ```
 
-### 3. .env
+### 3. Connection settings
 
-```env
-CLICKHOUSE_URL=http://localhost:8123
-CLICKHOUSE_DATABASE=hl_perps
-CLICKHOUSE_USER=default
-CLICKHOUSE_PASSWORD=default
-```
+The indexer in step 5 connects to the local ClickHouse from step 6 (user `default`, password `default`, database `hl_perps`). To use another ClickHouse, the user sets `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_USER`, and `CLICKHOUSE_PASSWORD` in the environment that runs the indexer.
 
 ### 4. migrations/001-create-tables.sql
 
@@ -77,21 +70,10 @@ PARTITION BY toYYYYMM(timestamp);
 ### 5. src/index.ts
 
 ```typescript
-import 'dotenv/config'
 import path from 'node:path'
 import { createClient } from '@clickhouse/client'
 import { hyperliquidFillsPortalStream, hyperliquidFillsQuery } from '@subsquid/pipes/hyperliquid'
 import { clickhouseTarget } from '@subsquid/pipes/targets/clickhouse'
-import { z } from 'zod'
-
-const env = z
-  .object({
-    CLICKHOUSE_USER: z.string(),
-    CLICKHOUSE_PASSWORD: z.string(),
-    CLICKHOUSE_URL: z.string(),
-    CLICKHOUSE_DATABASE: z.string(),
-  })
-  .parse(process.env)
 
 const output = hyperliquidFillsQuery()
   .addRange({ from: 920000000 })
@@ -150,10 +132,10 @@ export async function main() {
     .pipeTo(
       clickhouseTarget({
         client: createClient({
-          username: env.CLICKHOUSE_USER,
-          password: env.CLICKHOUSE_PASSWORD,
-          url: env.CLICKHOUSE_URL,
-          database: env.CLICKHOUSE_DATABASE,
+          url: process.env.CLICKHOUSE_URL || 'http://localhost:8123',
+          database: process.env.CLICKHOUSE_DATABASE || 'hl_perps',
+          username: process.env.CLICKHOUSE_USER || 'default',
+          password: process.env.CLICKHOUSE_PASSWORD || 'default',
           clickhouse_settings: {
             date_time_input_format: 'best_effort',
             date_time_output_format: 'iso',

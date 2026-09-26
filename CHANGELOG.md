@@ -11,6 +11,7 @@
 
 - Clarified contributor guidance and updated API documentation references.
 - The Pipes SDK setup guide links to the official nvm, Bun, and Docker install guides instead of piping install scripts into a shell.
+- The bundled skills leave API keys and passwords for the user to supply. The Portal migration skill points to SQD's gateway API key guide instead of wiring the key into the squid. The Pipes SDK deployment guide no longer reads the ClickHouse password out of a container or the shell, and the Hyperliquid guide no longer loads it from a `.env` file.
 
 ## [0.8.5] - 2026-09-05
 
