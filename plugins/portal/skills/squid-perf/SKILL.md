@@ -34,7 +34,7 @@ These are settled — don't ask the user again unless they change something.
   - For multi-deployment comparison: shared effective range = `min(catchupBlock across deployments) - firstBlock`.
   - Output surfaces both the percentage and the absolute block count (e.g., "10% (500K blocks)"). Override via `--breakpoints 500K,1M,5M,10M,20M` (absolute block offsets from firstBlock; catchup logic does NOT apply to overrides).
 - **Catchup gap threshold:** `CATCHUP_GAP_BLOCKS = 10` (constant in `report.mjs`). Matches the indexer's own steady-state lag behind chain head; tuneable if a chain's head noise is higher.
-- **Output:** self-contained HTML (Chart.js inlined — no CDN), plus Markdown with tables only (no charts in MD, link to HTML at the top).
+- **Output:** self-contained HTML (charts drawn by the template's own canvas code, no external scripts or CDN), plus Markdown with tables only (no charts in MD, link to HTML at the top).
 - **HTML template:** the HTML report MUST be rendered from `<skill-dir>/templates/report.html`. `report.mjs` resolves this path relative to itself and substitutes placeholders rather than building markup via string concatenation. Edit the template to change layout/styling; do not inline HTML in the script.
 - **Output layout:**
   ```
@@ -226,6 +226,6 @@ Triggered when only 1 ref is supplied (or only 1 fetch succeeded). Behavior:
 ## Notes for future maintenance
 
 - The `"type \"it\" to fetch more logs"` pagination prompt is hard-coded in `fetch-logs.sh`. If the sqd CLI changes its prompt, update that string.
-- Chart assets ship inside `templates/report.html` as part of the bundler manifest; `report.mjs` doesn't fetch or embed Chart.js itself. To update the client renderer, re-bundle and replace the template file.
+- `templates/report.html` is plain, readable HTML with inline CSS and JavaScript. Its `drawLineChart` function draws the progress and Tier-3 charts on a canvas, so the report needs no chart library and `report.mjs` fetches nothing. Edit the template directly to change the client renderer; don't replace it with a bundled or minified build.
 - `report.mjs` injects a `ReportData` JSON payload (schema defined inside `templates/report.html` as a TEMPLATE CONTRACT comment) into the `<script id="__REPORT_DATA__">` slot. If the schema changes, update both the template contract and `buildReportData` in lockstep.
 - To extend Tier-3 discovery (e.g., add known log shapes), edit `parse.mjs`'s `TIER3_EXTRACTORS`.

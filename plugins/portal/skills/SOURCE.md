@@ -5,7 +5,15 @@ These skills are bundled from `subsquid-labs/skills` so Codex, Claude, and Grok 
 - Repository: `https://github.com/subsquid-labs/skills`
 - Commit: `66aebe851af0258bf9d38c0bc43fcbb33ae7e47d`
 - Synced: `2026-09-01`
-- Packaging normalization: trailing spaces are removed from the generated report wrapper. The Portal skill is bundled without content changes.
+- The Portal skill is bundled without content changes.
+
+Packaging changes for the Claude plugin directory, which reads every file in the plugin as source:
+
+- `squid-perf/templates/report.html` is the plain HTML document that the upstream bundler wrapper packed, with trailing spaces removed. A built-in canvas renderer (`drawLineChart`) replaces the packed Chart.js copy, so the report still works offline. `squid-perf/scripts/report.mjs` injects the report data into the plain document and escapes every `<` in it, `squid-perf/SKILL.md` describes the template, and the squid-perf tests read the plain document.
+- `squid-perf/tests/fixtures/fake-sqd` is renamed `fake-sqd.sh`.
+- `pipes-sdk/references/ENVIRONMENT_SETUP.md` links to the official nvm, Bun, and Docker install guides instead of piping downloaded install scripts into a shell.
+
+Re-apply these changes on the next sync unless upstream has adopted them.
 
 Bundled skills:
 

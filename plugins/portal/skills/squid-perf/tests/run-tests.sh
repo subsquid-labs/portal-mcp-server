@@ -5,7 +5,7 @@ set -euo pipefail
 TESTS_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$TESTS_DIR/.." && pwd)"
 TEST_TMP_DIR="$(mktemp -d)"
-FAKE_BIN_DIR="$TEST_TMP_DIR/bin"
+FAKE_BIN_DIR="$TEST_TMP_DIR/fake-path"
 
 cleanup() {
   case "$TEST_TMP_DIR" in
@@ -29,7 +29,7 @@ CACHE_KEY_TWO="$(node "$SKILL_DIR/scripts/cache-key.mjs" 'a/b-c@d' '2026-01-01T0
 [ "$CACHE_KEY_ONE" != "$CACHE_KEY_TWO" ] || fail "cache key helper collapsed distinct refs"
 
 mkdir -p "$FAKE_BIN_DIR"
-cp "$TESTS_DIR/fixtures/fake-sqd" "$FAKE_BIN_DIR/sqd"
+cp "$TESTS_DIR/fixtures/fake-sqd.sh" "$FAKE_BIN_DIR/sqd"
 chmod +x "$FAKE_BIN_DIR/sqd"
 
 printf 'test: preflight rejects an unsuccessful auth probe\n' >&2
@@ -301,9 +301,7 @@ if grep -Fq '9999ms' "$EDGE_REPORT_DIR/report.md"; then
   fail "interval multicall statistics included a same-timestamp idle-tail sample"
 fi
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -339,9 +337,7 @@ node -e '
 ' "$EDGE_REPORT_DIR/parsed/edge-a.json" "$EDGE_REPORT_DIR/parsed/edge-b.json"
 node "$SKILL_DIR/scripts/report.mjs" --run-dir "$EDGE_REPORT_DIR"
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -360,9 +356,7 @@ if grep -Fq '9999ms' "$EDGE_REPORT_DIR/report.md"; then
 fi
 node "$SKILL_DIR/scripts/report.mjs" --run-dir "$EDGE_REPORT_DIR" --breakpoints 900
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -410,9 +404,7 @@ node "$SKILL_DIR/scripts/parse.mjs" \
 printf '[]\n' > "$OVERRIDE_RESTART_DIR/failures.json"
 node "$SKILL_DIR/scripts/report.mjs" --run-dir "$OVERRIDE_RESTART_DIR" --breakpoints 100
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -468,9 +460,7 @@ grep -Fq '### Diagnostic-only multicall stats' "$STARTUP_DIAGNOSTICS_DIR/report.
 grep -Fq '| startup-failed | 1 | 250ms | 250ms | 1 |' "$STARTUP_DIAGNOSTICS_DIR/report.md" \
   || fail "diagnostic-only multicall values were omitted from Markdown"
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -513,9 +503,7 @@ node "$SKILL_DIR/scripts/parse.mjs" --input "$TEST_TMP_DIR/capped-reverse.log" -
 printf '[]\n' > "$CAP_REPORT_DIR/failures.json"
 node "$SKILL_DIR/scripts/report.mjs" --run-dir "$CAP_REPORT_DIR"
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -563,9 +551,7 @@ grep -Fq '| 10% → 20% (1 blocks) | 2.0 blk/s · map — · items — |' "$STAT
 grep -Fq '| 10% → 20% (1 blocks) | 1 calls · avg 20ms · p95 20ms' "$STATS_REPORT_DIR/report.md" \
   || fail "second interval reused the prior-boundary multicall sample"
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -604,9 +590,7 @@ printf '[]\n' > "$RANGE_REPORT_DIR/failures.json"
 node "$SKILL_DIR/scripts/report.mjs" --run-dir "$RANGE_REPORT_DIR"
 grep -Fq "starting or ending coverage differs by > 5%" "$RANGE_REPORT_DIR/report.md" || fail "ending-range divergence warning is missing"
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -637,9 +621,7 @@ node "$SKILL_DIR/scripts/parse.mjs" --input "$TEST_TMP_DIR/short-range.log" --ou
 printf '[]\n' > "$SHORT_REPORT_DIR/failures.json"
 node "$SKILL_DIR/scripts/report.mjs" --run-dir "$SHORT_REPORT_DIR"
 node -e '
-  const lines = require("fs").readFileSync(process.argv[1], "utf8").split("\n");
-  const templateLine = lines.findIndex(line => line.includes("type=\"__bundler/template\"") && line.trim().startsWith("<script"));
-  const inner = JSON.parse(lines[templateLine + 1]);
+  const inner = require("fs").readFileSync(process.argv[1], "utf8");
   const openTag = "<script id=\"__REPORT_DATA__\" type=\"application/json\">";
   const openAt = inner.indexOf(openTag, inner.indexOf("-->") + 3);
   const closeAt = inner.indexOf("</script>", openAt + openTag.length);
@@ -650,4 +632,25 @@ node -e '
   if (breakpoints[0].perIndexer.short?.block !== 101) process.exit(1);
 ' "$SHORT_REPORT_DIR/report.html" || fail "short sync range produced zero or duplicate breakpoints"
 
-printf '{"status":"ok","tests":21}\n'
+printf 'test: report chart ticks stay readable on narrow and wide charts\n' >&2
+node -e '
+  const html = require("fs").readFileSync(process.argv[1], "utf8");
+  const start = html.indexOf("// chart-ticks:start");
+  const end = html.indexOf("// chart-ticks:end");
+  if (start < 0 || end < start) process.exit(1);
+  const { niceScale, WALL_SECONDS_STEPS } = new Function(html.slice(start, end) + "\nreturn { niceScale, WALL_SECONDS_STEPS };")();
+  const same = (actual, expected) => JSON.stringify(actual) === JSON.stringify(expected);
+  // A 13.5-minute capture on a phone-width chart still gets two time ticks.
+  if (!same(niceScale(0, 810, 2, WALL_SECONDS_STEPS, true).ticks, [0, 600])) process.exit(1);
+  if (!same(niceScale(0, 810, 4, WALL_SECONDS_STEPS, true).ticks, [0, 300, 600])) process.exit(1);
+  // Fitted time axes keep the data range, so every series spans the full width.
+  const fitted = niceScale(0, 810, 11, WALL_SECONDS_STEPS, true);
+  if (fitted.min !== 0 || fitted.max !== 810 || !same(fitted.ticks, [0, 120, 240, 360, 480, 600, 720])) process.exit(1);
+  // Block axes round out to whole 1-2-5 steps.
+  if (!same(niceScale(16010000, 18000000, 5).ticks, [16000000, 16500000, 17000000, 17500000, 18000000])) process.exit(1);
+  // A flat series still gets a usable range.
+  const flat = niceScale(5, 5, 4);
+  if (!(flat.min < 5 && flat.max > 5 && flat.ticks.length >= 2)) process.exit(1);
+' "$SKILL_DIR/templates/report.html" || fail "report chart ticks are unreadable or out of range"
+
+printf '{"status":"ok","tests":22}\n'

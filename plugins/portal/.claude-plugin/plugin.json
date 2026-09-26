@@ -8,6 +8,8 @@
   },
   "homepage": "https://docs.sqd.dev/en/ai/mcp-server",
   "repository": "https://github.com/subsquid-labs/portal-mcp-server",
+  "privacyPolicyUrl": "https://sqd.dev/imprint/",
+  "icon": "./assets/sqd-logo.svg",
   "license": "MIT",
   "keywords": [
     "sqd",
