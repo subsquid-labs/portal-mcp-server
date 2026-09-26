@@ -6,7 +6,14 @@ The plugin uses the public SQD endpoint at `https://portal.sqd.dev/mcp`. No acco
 
 The packaged server runtime uses stateless HTTP and negotiates MCP 2026-07-28, matching the current Claude rollout. Set `REQUIRE_MCP_2026_LIVE=1` when running the plugin checks after deployment to verify the public endpoint.
 
-It also includes the four official SQD agent skills for Portal, Pipes SDK, Portal migration, and indexer performance. The bundled snapshot comes from `subsquid-labs/skills` at commit `6eed8d82d0ceac35855742d6e4b5cc150bc5d402`; see `skills/SOURCE.md`. The upstream Squid SDK subtree is flattened into two top-level skills so Claude, Codex, Grok, Gemini, and Cursor discover all four skills consistently.
+It also includes the four official SQD agent skills for Portal, Pipes SDK, Portal migration, and indexer performance. The bundled snapshot comes from `subsquid-labs/skills`; `skills/SOURCE.md` records the upstream commit and the packaging changes made here. The upstream Squid SDK subtree is flattened into two top-level skills so Claude, Codex, Grok, Gemini, and Cursor discover all four skills consistently.
+
+## Data and privacy
+
+- The plugin connects to one MCP server, `https://portal.sqd.dev/mcp`, run by SQD. Each tool call sends that server its arguments, such as network names, addresses, block ranges, and time windows, and the server returns public blockchain data. The plugin sends no credentials, and the server needs no account or API key.
+- The skills run on your machine. `squid-perf` uses your installed `sqd` CLI and its existing login to read logs from your own SQD Cloud deployments, and writes its report to your project folder. The report is one HTML file that loads nothing from the network.
+- Some skill steps configure your own indexer or database. They use settings such as an SQD API key for the v2 gateway or a local ClickHouse password only with the service they belong to, and never send them to the MCP server.
+- Privacy policy: [sqd.dev/imprint](https://sqd.dev/imprint/)
 
 ## Name and logo
 
@@ -90,6 +97,6 @@ The generated `candidate.json` records the package digest and the limits of the 
 
 ## Public directory submission
 
-See [DIRECTORY_SUBMISSION.md](./DIRECTORY_SUBMISSION.md) for the exact OpenAI, Claude, xAI, Gemini, and Cursor publication routes, listing copy, review tests, and remaining owner actions.
+See [DIRECTORY_SUBMISSION.md](https://github.com/subsquid-labs/portal-mcp-server/blob/main/distribution/DIRECTORY_SUBMISSION.md) for the exact OpenAI, Claude, xAI, Gemini, and Cursor publication routes, listing copy, review tests, and remaining owner actions. It lives in the repository's `distribution` folder, outside this package.
 
 Do not commit credentials, personal paths, or private endpoints to this package.

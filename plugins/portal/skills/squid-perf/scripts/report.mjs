@@ -1299,47 +1299,26 @@ function structuredWarning(raw) {
 
 // --------- Template injector ---------
 //
-// The template is a self-contained bundler artifact: assets live in the
-// __bundler/manifest script tag, the document body lives JSON-encoded in the
-// __bundler/template script tag (one line), and the actual data slot is a
-// <script id="__REPORT_DATA__" type="application/json"> tag inside that
-// encoded document. We parse the encoded document, swap the data slot's body,
-// and re-encode — leaving every other byte untouched.
+// The template is a plain HTML document with inline CSS and JavaScript. The
+// data slot is its <script id="__REPORT_DATA__" type="application/json"> tag.
+// We swap that tag's body for the payload and leave every other byte untouched.
 
 function injectReportData(templateHtml, reportData) {
-  const lines = templateHtml.split('\n')
-  let tplLineIdx = -1
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes('type="__bundler/template"') && lines[i].trim().startsWith('<script')) {
-      tplLineIdx = i + 1
-      break
-    }
-  }
-  if (tplLineIdx === -1 || tplLineIdx >= lines.length) {
-    throw new Error('injectReportData: <script type="__bundler/template"> not found')
-  }
-
-  const innerHtml = JSON.parse(lines[tplLineIdx])
-
   // The template mentions <script id="__REPORT_DATA__"> inside its own contract
   // comment; skip that occurrence by searching past the first HTML comment.
-  const commentEnd = innerHtml.indexOf('-->')
+  const commentEnd = templateHtml.indexOf('-->')
   const searchFrom = commentEnd >= 0 ? commentEnd + 3 : 0
   const openTag = '<script id="__REPORT_DATA__" type="application/json">'
-  const openAt = innerHtml.indexOf(openTag, searchFrom)
+  const openAt = templateHtml.indexOf(openTag, searchFrom)
   if (openAt === -1) throw new Error('injectReportData: __REPORT_DATA__ script tag not found in template')
-  const closeAt = innerHtml.indexOf('</script>', openAt + openTag.length)
+  const closeAt = templateHtml.indexOf('</script>', openAt + openTag.length)
   if (closeAt === -1) throw new Error('injectReportData: __REPORT_DATA__ closing tag not found')
 
-  // Escape </ in the payload so it can't terminate the enclosing script tag.
-  const payload = JSON.stringify(reportData).replace(/<\//g, '<\\/')
-  const newInner = innerHtml.slice(0, openAt) + openTag + '\n' + payload + '\n' + innerHtml.slice(closeAt)
-
-  // Re-encode and apply the same </ escape — the outer file wraps this in
-  // another <script type="__bundler/template"> tag.
-  const reEncoded = JSON.stringify(newInner).replace(/<\//g, '<\\/')
-  lines[tplLineIdx] = reEncoded
-  return lines.join('\n')
+  // Escape every < in the payload (log excerpts are raw text) so no </script>
+  // or <!-- sequence can end or change the enclosing script tag. The result is
+  // still valid JSON.
+  const payload = JSON.stringify(reportData).replace(/</g, '\\u003c')
+  return templateHtml.slice(0, openAt) + openTag + '\n' + payload + '\n' + templateHtml.slice(closeAt)
 }
 
 function findRefForLabel(config, label) {

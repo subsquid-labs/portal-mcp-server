@@ -41,10 +41,10 @@ node --version
 - Choose LTS (Long Term Support) version
 
 **Option B - Using nvm (Recommended)**:
-```bash
-# Install nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
 
+Install nvm with the steps in its official guide: https://github.com/nvm-sh/nvm#installing-and-updating. Ask the user before running any installer. Then:
+
+```bash
 # Install Node.js 22 LTS (recommended)
 nvm install 22
 
@@ -81,10 +81,7 @@ pnpx --version
 bun --version
 ```
 
-**Install bun** (optional but faster):
-```bash
-curl -fsSL https://bun.sh/install | bash
-```
+**Install bun** (optional but faster): follow the official guide at https://bun.sh/docs/installation.
 
 **Note**: npm comes with Node.js. Install pnpm with Corepack or the official pnpm installer before running `pnpx @subsquid/pipes-cli@...` commands.
 
@@ -108,11 +105,9 @@ docker ps
 - Install and start Docker Desktop
 
 **Linux**:
-```bash
-# Ubuntu/Debian
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
+- Install Docker Engine from Docker's official packages for your distribution: https://docs.docker.com/engine/install/
 
+```bash
 # Start Docker
 sudo systemctl start docker
 sudo systemctl enable docker

@@ -2,6 +2,8 @@
 
 Public listing copy and publication routes for the SQD plugin in the OpenAI, Claude, Grok, Gemini, and Cursor directories.
 
+This file sits outside `plugins/portal` on purpose. People who install the plugin receive only that folder, so it holds only what the plugin runs and shows. Paths below are relative to the repository root.
+
 ## Release automation
 
 - A `v*` tag publishes the matching version to the official MCP Registry and builds the GitHub release with the Gemini extension archive (`sqd.tar.gz`) and the Claude Desktop bundle (`sqd.mcpb`).
@@ -41,16 +43,16 @@ Public URLs:
 - Terms: `https://cloud.sqd.dev/terms.pdf`
 - Public server: `https://portal.sqd.dev/mcp`
 
-Logo: use `https://sqd.dev/brand/Symbol_bl-bg.svg`. It is the canonical white SQD symbol on a black square. The package keeps a local SVG at `assets/sqd-logo.svg`, a 1024 x 1024 OpenAI directory PNG at `assets/sqd-directory-icon.png`, and a 256 x 256 ChatGPT composer PNG at `assets/sqd-chatgpt-composer-icon.png`.
+Logo: use `https://sqd.dev/brand/Symbol_bl-bg.svg`. It is the canonical white SQD symbol on a black square. The package keeps a local SVG at `plugins/portal/assets/sqd-logo.svg`, a 1024 x 1024 OpenAI directory PNG at `plugins/portal/assets/sqd-directory-icon.png`, and a 256 x 256 ChatGPT composer PNG at `plugins/portal/assets/sqd-chatgpt-composer-icon.png`.
 
 ## Claude directory
 
 SQD is published in the Claude Connectors Directory at `https://claude.ai/directory/connectors/sqd`. The public SQD documentation links to that listing and describes the no-login connection flow.
 
-The hosted connector and the installable Claude Code plugin are complementary:
+The hosted connector and the plugin are complementary:
 
-- The directory listing connects Claude on web, desktop, and mobile to `https://portal.sqd.dev/mcp`.
-- The package in this repository gives Claude Code the same hosted MCP server plus the four official SQD skills.
+- The connector listing connects Claude on web, desktop, and mobile to `https://portal.sqd.dev/mcp`.
+- The plugin in `plugins/portal` bundles the same hosted MCP server with the four official SQD skills. It is submitted to the Claude plugin directory as a Plugin bundle from the developer portal at `https://claude.ai/directory/manage`, with `plugins/portal` as the plugin path.
 
 Listing values:
 
@@ -70,6 +72,26 @@ Listing values:
 
 The hosted endpoint serves the full default catalog. Toolsets (`MCP_TOOLSETS`, `MCP_TOOLS`, `?toolsets=`, `X-MCP-Toolsets`) exist for self-hosted deployments and single connections that want a smaller catalog, and they do not change what the directory listing scans. The Claude Code tool namespace for an install from this package is `mcp__plugin_portal_SQD__<tool-name>`, for example `mcp__plugin_portal_SQD__portal_get_head`. Treat this as client-generated configuration, not part of the public MCP tool name.
 
+### Claude plugin directory
+
+The plugin directory reads its listing from `plugins/portal/.claude-plugin/plugin.json` and `plugins/portal/README.md`:
+
+- Name and description: `displayName` and `description`
+- Icon: `icon`, which points at `./assets/sqd-logo.svg`
+- Privacy policy: `privacyPolicyUrl`, set to `https://sqd.dev/imprint/`, and the README's Data and privacy section
+- License: `license` (`MIT`)
+
+Claude Code's manifest schema does not include `icon` or `privacyPolicyUrl`, so `claude plugin validate --strict` reports both as unknown fields. `npm run test:claude-plugin` strictly validates a copy of the plugin without those two fields and checks their values separately.
+
+The portal validates and scans every file in `plugins/portal`. `npm run test:claude-plugin` keeps the package within these rules:
+
+- Every file is readable text, an SVG, or a PNG image. The squid-perf report template is plain HTML with its own chart code, not a packed or minified bundle.
+- No text file names a bundled PNG or font by its path. This file lives outside the plugin folder for that reason.
+- Skill references link to official installers instead of piping a downloaded script into a shell.
+- Every text file stays under 256 KiB.
+
+Skill references include setup examples in which the user's own indexer reads its own settings, such as an SQD API key for the v2 gateway or a ClickHouse password for the user's database. The plugin reads no credentials itself, and the README states where each value goes.
+
 ## OpenAI directory
 
 OpenAI uses one Plugins Directory for both ChatGPT and Codex. SQD is submitted as a plugin with MCP through the OpenAI Platform plugin submission portal.
@@ -80,8 +102,8 @@ Submission values:
 
 1. Name: `SQD`.
 2. Version: the current release.
-3. Directory icon: `assets/sqd-directory-icon.png`.
-4. ChatGPT composer icon: `assets/sqd-chatgpt-composer-icon.png`.
+3. Directory icon: `plugins/portal/assets/sqd-directory-icon.png`.
+4. ChatGPT composer icon: `plugins/portal/assets/sqd-chatgpt-composer-icon.png`.
 5. Universal MCP server URL: `https://portal.sqd.dev/mcp`.
 6. Authentication: none.
 7. Domain challenge URL: `https://portal.sqd.dev/.well-known/openai-apps-challenge`.

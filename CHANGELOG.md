@@ -2,9 +2,15 @@
 
 ## [Unreleased]
 
+### Improvements
+
+- **Claude plugin directory listing.** The plugin manifest declares the SQD logo as its icon and links the SQD privacy policy, and the plugin README states what the plugin sends and where. The directory listing notes moved to `distribution/DIRECTORY_SUBMISSION.md`, outside the installed package, and `npm run test:claude-plugin` checks the plugin files against the directory's file rules.
+- **Readable squid-perf report.** The report template is plain HTML that draws its own charts instead of a packed bundle with Chart.js. Reports stay self-contained, work offline, and are about half their previous size.
+
 ### Documentation
 
 - Clarified contributor guidance and updated API documentation references.
+- The Pipes SDK setup guide links to the official nvm, Bun, and Docker install guides instead of piping install scripts into a shell.
 
 ## [0.8.5] - 2026-09-05
 

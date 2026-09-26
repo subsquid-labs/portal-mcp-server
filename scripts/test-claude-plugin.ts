@@ -1,8 +1,9 @@
 #!/usr/bin/env tsx
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, extname, join, resolve } from 'node:path'
 
 type JsonObject = Record<string, unknown>
 
@@ -10,7 +11,22 @@ const PLUGIN_ROOT = 'plugins/portal'
 const MARKETPLACE_PATH = '.claude-plugin/marketplace.json'
 const PLUGIN_JSON_PATH = `${PLUGIN_ROOT}/.claude-plugin/plugin.json`
 const MCP_JSON_PATH = `${PLUGIN_ROOT}/.mcp.json`
-const DIRECTORY_SUBMISSION_PATH = `${PLUGIN_ROOT}/DIRECTORY_SUBMISSION.md`
+const README_PATH = `${PLUGIN_ROOT}/README.md`
+const DIRECTORY_SUBMISSION_PATH = 'distribution/DIRECTORY_SUBMISSION.md'
+const PRIVACY_POLICY_URL = 'https://sqd.dev/imprint/'
+const PLUGIN_ICON_PATH = './assets/sqd-logo.svg'
+// Listing fields the Claude plugin directory reads that Claude Code's manifest schema does not define.
+const DIRECTORY_ONLY_MANIFEST_FIELDS = ['icon', 'privacyPolicyUrl']
+// Limits from the Claude plugin directory's pre-submission checklist.
+const DIRECTORY_MAX_FILES = 512
+const DIRECTORY_MAX_TEXT_FILE_BYTES = 256 * 1024
+// Minified or packed code shows up as very long lines; the plugin's longest readable line is under 1,000 characters.
+const MAX_READABLE_LINE_LENGTH = 2_000
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const FONT_EXTENSIONS = new Set(['.otf', '.ttf', '.woff', '.woff2'])
+const SYSTEM_FILE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '__MACOSX'])
+const BINARY_ASSET_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', ...FONT_EXTENSIONS])
+const DOWNLOAD_AND_RUN = /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\bbash\s+<\(\s*(?:curl|wget)\b/
 const REQUIRE_MCP_2026_LIVE = process.env.REQUIRE_MCP_2026_LIVE === '1'
 const MODERN_PROTOCOL_VERSION = '2026-07-28'
 const LEGACY_PROTOCOL_VERSION = '2025-11-25'
@@ -29,10 +45,30 @@ function assertWithInstalledClaudeCli() {
     return
   }
   for (const path of [PLUGIN_ROOT, MARKETPLACE_PATH]) {
-    const result = spawnSync('claude', ['plugin', 'validate', '--strict', path], { encoding: 'utf8' })
+    const result = spawnSync('claude', ['plugin', 'validate', path], { encoding: 'utf8' })
     assert(result.status === 0, `claude plugin validate failed for ${path}: ${result.stderr || result.stdout}`)
   }
-  console.log('PASS  Claude Code strictly validates the plugin and marketplace packages')
+
+  // Strict mode reports the directory-only listing fields as unknown, so validate a copy without them.
+  const staging = mkdtempSync(join(tmpdir(), 'sqd-claude-plugin-'))
+  try {
+    cpSync('.claude-plugin', join(staging, '.claude-plugin'), { recursive: true })
+    cpSync(PLUGIN_ROOT, join(staging, PLUGIN_ROOT), { recursive: true })
+    const stagedManifestPath = join(staging, PLUGIN_JSON_PATH)
+    const stagedManifest = readJson(stagedManifestPath)
+    for (const field of DIRECTORY_ONLY_MANIFEST_FIELDS) delete stagedManifest[field]
+    writeFileSync(stagedManifestPath, `${JSON.stringify(stagedManifest, null, 2)}\n`)
+    for (const path of [PLUGIN_ROOT, MARKETPLACE_PATH]) {
+      const result = spawnSync('claude', ['plugin', 'validate', '--strict', join(staging, path)], { encoding: 'utf8' })
+      assert(
+        result.status === 0,
+        `claude plugin validate --strict failed for ${path}: ${result.stderr || result.stdout}`,
+      )
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true })
+  }
+  console.log('PASS  Claude Code strictly validates the plugin and marketplace apart from the directory listing fields')
 }
 
 function readJson(path: string): JsonObject {
@@ -149,6 +185,8 @@ function getEndpoint() {
     )
   }
   assertNoCommittedSecretOrLocalPath(manifest)
+  assert(manifest.privacyPolicyUrl === PRIVACY_POLICY_URL, 'Claude plugin should link the SQD privacy policy')
+  assert(manifest.icon === PLUGIN_ICON_PATH, 'Claude plugin icon should be the black SQD square logo')
 
   const mcp = readJson(MCP_JSON_PATH)
   assertRecord(mcp.mcpServers, '.mcp.json mcpServers must be an object')
@@ -179,6 +217,75 @@ function assertDirectoryListing() {
     'Claude submission packet should use the canonical black-background logo',
   )
   assert(!/[\u2014\u2013]/.test(submission), 'Claude submission packet should not use em or en dashes')
+}
+
+function listEntries(dir: string): { path: string; isDirectory: boolean }[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const item = { path: join(dir, entry.name), isDirectory: entry.isDirectory() }
+    return item.isDirectory ? [item, ...listEntries(item.path)] : [item]
+  })
+}
+
+// The Claude plugin directory validates and scans every file in the plugin folder. These checks mirror the
+// findings that block a submission or hold a version for a reviewer, so a release keeps passing them.
+function assertDirectoryReadiness() {
+  const entries = listEntries(PLUGIN_ROOT)
+  for (const entry of entries) {
+    assert(!SYSTEM_FILE_NAMES.has(basename(entry.path)), `${entry.path} is an OS system file the directory rejects`)
+  }
+  const files = entries.filter((entry) => !entry.isDirectory).map((entry) => entry.path)
+  assert(files.length <= DIRECTORY_MAX_FILES, `the plugin has ${files.length} files; keep it to ${DIRECTORY_MAX_FILES}`)
+
+  const binaryAssets: string[] = []
+  const textFiles = new Map<string, string>()
+  for (const file of files) {
+    const bytes = readFileSync(file)
+    const extension = extname(file).toLowerCase()
+    if (BINARY_ASSET_EXTENSIONS.has(extension)) {
+      if (extension === '.png') {
+        assert(bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE), `${file} is not a complete PNG image`)
+      }
+      binaryAssets.push(file)
+      continue
+    }
+    const text = bytes.toString('utf8')
+    assert(!text.includes('\u0000') && !text.includes('\ufffd'), `${file} should be UTF-8 text, not a binary file`)
+    assert(
+      bytes.length < DIRECTORY_MAX_TEXT_FILE_BYTES,
+      `${file} is ${bytes.length} bytes; keep text files under 256 KiB`,
+    )
+    const longestLine = text.split('\n').reduce((longest, line) => Math.max(longest, line.length), 0)
+    assert(
+      longestLine <= MAX_READABLE_LINE_LENGTH,
+      `${file} looks packed or minified (longest line ${longestLine} characters); ship readable source`,
+    )
+    assert(
+      !DOWNLOAD_AND_RUN.test(text),
+      `${file} pipes a downloaded script into a shell; link to the installer instead`,
+    )
+    textFiles.set(file, text)
+  }
+
+  // Image and font files are not read as code, so the directory holds any text that names one for review.
+  for (const asset of binaryAssets) {
+    const name = basename(asset)
+    for (const [file, text] of textFiles) {
+      assert(!text.includes(name), `${file} names the bundled binary asset ${name}; keep asset paths out of the plugin`)
+    }
+  }
+
+  const icon = textFiles.get(join(PLUGIN_ROOT, PLUGIN_ICON_PATH))
+  assert(icon !== undefined && /^<svg[\s>]/.test(icon.trim()), `${PLUGIN_ICON_PATH} should be an SVG in the plugin`)
+  assert(
+    !/<script|<foreignObject|\son[a-z]+\s*=|\b(?:href|src)\s*=\s*["'](?!#)/i.test(icon ?? ''),
+    `${PLUGIN_ICON_PATH} should be a static SVG without scripts or external references`,
+  )
+  const readmeLines = (textFiles.get(README_PATH) ?? '').split('\n')
+  assert(
+    readmeLines.some((line) => /privacy/i.test(line) && line.includes(PRIVACY_POLICY_URL)),
+    'README should link the privacy policy on a line that mentions privacy',
+  )
+  console.log(`PASS  ${files.length} plugin files meet the Claude plugin directory file rules`)
 }
 
 async function assertHostedMcp(endpoint: string) {
@@ -224,6 +331,7 @@ async function main() {
   assertWithInstalledClaudeCli()
   assertMarketplace()
   assertDirectoryListing()
+  assertDirectoryReadiness()
   const endpoint = getEndpoint()
   await assertHostedMcp(endpoint)
   console.log(
