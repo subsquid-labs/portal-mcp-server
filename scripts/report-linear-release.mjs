@@ -24,7 +24,10 @@ export function reportRelease(env, run = runCommand) {
   const dryRun = env.DRY_RUN ?? 'true'
   if (!['true', 'false'].includes(dryRun)) throw new Error('DRY_RUN must be true or false')
 
-  const args = [`--release-version=${env.RELEASE_TAG}`, '--quiet', '--timeout=120']
+  const version = /^v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$/.exec(env.RELEASE_TAG)?.[1]
+  if (!version) throw new Error('A version tag is required')
+
+  const args = [`--release-version=${version}`, '--quiet', '--timeout=120']
   const syncArgs = [`--name=${env.RELEASE_TAG}`, '--no-branch-ref-detection']
   if (env.BASE_REF) syncArgs.push(`--base-ref=${env.BASE_REF}`)
   syncArgs.push(`--link=GitHub release=https://github.com/${env.GITHUB_REPOSITORY}/releases/tag/${env.RELEASE_TAG}`)

@@ -111,11 +111,11 @@ test('rejects drafts and missing or unfinished release assets', async () => {
   }
 })
 
-function report({ dryRun, baseRef, failCommand, checkoutSha = sha } = {}) {
+function report({ dryRun, baseRef, failCommand, checkoutSha = sha, releaseTag = tag } = {}) {
   const commands = []
   const env = {
     LINEAR_ACCESS_KEY: 'test-placeholder',
-    RELEASE_TAG: tag,
+    RELEASE_TAG: releaseTag,
     RELEASE_SHA: sha,
     GITHUB_REPOSITORY: repository,
     BASE_REF: baseRef ?? '',
@@ -156,7 +156,7 @@ test('successful reporting syncs and completes the same explicit version', () =>
     ['sync', 'complete'],
   )
   for (const command of result.commands) {
-    assert.ok(command.includes(`--release-version=${tag}`))
+    assert.ok(command.includes('--release-version=1.2.3'))
     assert.ok(!command.includes('--dry-run'))
   }
 })
@@ -175,4 +175,19 @@ test('rejects a mismatched checkout and invalid dry-run flag before accessing Li
     assert.notEqual(result.status, 0)
     assert.equal(result.commands.length, 0)
   }
+})
+
+test('uses the package version while preserving the GitHub tag in names and links', () => {
+  for (const version of ['0.8.5', '1.2.3-rc.1', '1.2.3+build.4']) {
+    const result = report({ dryRun: 'false', releaseTag: `v${version}` })
+    assert.equal(result.status, 0)
+    for (const args of result.commands) assert.ok(args.includes(`--release-version=${version}`))
+    assert.ok(result.commands[0].includes(`--name=v${version}`))
+    assert.ok(
+      result.commands[0].includes(`--link=GitHub release=https://github.com/${repository}/releases/tag/v${version}`),
+    )
+  }
+  const invalid = report({ releaseTag: 'main' })
+  assert.equal(invalid.status, 1)
+  assert.equal(invalid.commands.length, 0)
 })
