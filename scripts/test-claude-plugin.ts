@@ -1,9 +1,10 @@
 #!/usr/bin/env tsx
 
-import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { throws } from 'node:assert/strict'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, extname, join, resolve } from 'node:path'
+
+import { parse } from 'yaml'
 
 type JsonObject = Record<string, unknown>
 
@@ -15,8 +16,6 @@ const README_PATH = `${PLUGIN_ROOT}/README.md`
 const DIRECTORY_SUBMISSION_PATH = 'distribution/DIRECTORY_SUBMISSION.md'
 const PRIVACY_POLICY_URL = 'https://sqd.dev/imprint/'
 const PLUGIN_ICON_PATH = './assets/sqd-logo.svg'
-// Listing fields the Claude plugin directory reads that Claude Code's manifest schema does not define.
-const DIRECTORY_ONLY_MANIFEST_FIELDS = ['icon', 'privacyPolicyUrl']
 // Limits from the Claude plugin directory's pre-submission checklist.
 const DIRECTORY_MAX_FILES = 512
 const DIRECTORY_MAX_TEXT_FILE_BYTES = 256 * 1024
@@ -28,14 +27,15 @@ const SYSTEM_FILE_NAMES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', '__M
 const BINARY_ASSET_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', ...FONT_EXTENSIONS])
 const DOWNLOAD_AND_RUN = /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b|\bbash\s+<\(\s*(?:curl|wget)\b/
 // The directory holds a version that reads a key or password already on the user's machine and passes it on, even in
-// documentation. Skills leave those values for the user to supply; example code may fall back to a local default.
+// documentation. A fallback value still reads the existing credential when it is set.
 const CREDENTIAL_NAME = String.raw`[A-Z0-9_]*(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD)[A-Z0-9_]*`
 const CREDENTIAL_READS = [
   new RegExp(String.raw`\$\{?${CREDENTIAL_NAME}\b`),
-  new RegExp(String.raw`process\.env\.${CREDENTIAL_NAME}\b(?!\s*(?:\|\||\?\?)\s*['"])`),
+  new RegExp(String.raw`process\.env\s*(?:\.\s*${CREDENTIAL_NAME}\b|\[\s*['"]${CREDENTIAL_NAME}['"]\s*\])`),
   /(?:import\s+['"]dotenv|from\s+['"]dotenv|require\(\s*['"]dotenv|"dotenv"\s*:)/,
   /docker inspect[^\n]*(?:PASSWORD|TOKEN|SECRET|KEY)/i,
 ]
+const OFFLINE = process.argv.includes('--offline')
 const REQUIRE_MCP_2026_LIVE = process.env.REQUIRE_MCP_2026_LIVE === '1'
 const MODERN_PROTOCOL_VERSION = '2026-07-28'
 const LEGACY_PROTOCOL_VERSION = '2025-11-25'
@@ -47,37 +47,48 @@ function assert(condition: boolean, message: string) {
   }
 }
 
-function assertWithInstalledClaudeCli() {
-  const version = spawnSync('claude', ['--version'], { encoding: 'utf8' })
-  if (version.error && (version.error as NodeJS.ErrnoException).code === 'ENOENT') {
-    console.log('SKIP  Claude Code CLI is not installed; static package checks passed')
-    return
-  }
-  for (const path of [PLUGIN_ROOT, MARKETPLACE_PATH]) {
-    const result = spawnSync('claude', ['plugin', 'validate', path], { encoding: 'utf8' })
-    assert(result.status === 0, `claude plugin validate failed for ${path}: ${result.stderr || result.stdout}`)
-  }
+function assertSkillPermissions(text: string, file: string) {
+  const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  assert(Boolean(frontmatter), `${file} should have skill frontmatter`)
+  const metadata = parse(frontmatter![1]) as unknown
+  assertRecord(metadata, `${file} should have a frontmatter mapping`)
+  assert(
+    !Object.hasOwn(metadata, 'allowed-tools'),
+    `${file} pre-approves tools; omit allowed-tools so the user's permission settings apply`,
+  )
+}
 
-  // Strict mode reports the directory-only listing fields as unknown, so validate a copy without them.
-  const staging = mkdtempSync(join(tmpdir(), 'sqd-claude-plugin-'))
-  try {
-    cpSync('.claude-plugin', join(staging, '.claude-plugin'), { recursive: true })
-    cpSync(PLUGIN_ROOT, join(staging, PLUGIN_ROOT), { recursive: true })
-    const stagedManifestPath = join(staging, PLUGIN_JSON_PATH)
-    const stagedManifest = readJson(stagedManifestPath)
-    for (const field of DIRECTORY_ONLY_MANIFEST_FIELDS) delete stagedManifest[field]
-    writeFileSync(stagedManifestPath, `${JSON.stringify(stagedManifest, null, 2)}\n`)
-    for (const path of [PLUGIN_ROOT, MARKETPLACE_PATH]) {
-      const result = spawnSync('claude', ['plugin', 'validate', '--strict', join(staging, path)], { encoding: 'utf8' })
-      assert(
-        result.status === 0,
-        `claude plugin validate --strict failed for ${path}: ${result.stderr || result.stdout}`,
-      )
-    }
-  } finally {
-    rmSync(staging, { recursive: true, force: true })
+function assertNoCredentialReads(text: string, file: string) {
+  for (const pattern of CREDENTIAL_READS) {
+    const match = text.match(pattern)
+    assert(!match, `${file} reads a key or password from the user's machine (${match?.[0]}); leave it to the user`)
   }
-  console.log('PASS  Claude Code strictly validates the plugin and marketplace apart from the directory listing fields')
+}
+
+function assertPolicyRegressions() {
+  for (const permissions of ['Bash', '[Bash, Write, Edit]', '\n  - Bash\n  - WebFetch', 'Bash(node:*)']) {
+    throws(
+      () => assertSkillPermissions(`---\nname: example\nallowed-tools: ${permissions}\n---\n`, 'fixture'),
+      /pre-approves tools/,
+    )
+  }
+  assertSkillPermissions('---\nname: example\n---\nUse the tools the user has approved.\n', 'fixture')
+  for (const text of [
+    "password: process.env.CLICKHOUSE_PASSWORD || 'default'",
+    "password: process.env.CLICKHOUSE_PASSWORD ?? 'default'",
+    "password: process.env['CLICKHOUSE_PASSWORD'] || 'default'",
+    'password: process.env["CLICKHOUSE_PASSWORD"]',
+    'apiKey: process.env.SQD_API_KEY',
+    'curl -H "x-api-key: ${SQD_API_KEY}"',
+    'curl -H "Authorization: Bearer $ACCESS_TOKEN"',
+    "import 'dotenv/config'",
+    'docker inspect --format PASSWORD example',
+  ]) {
+    throws(() => assertNoCredentialReads(text, 'fixture'), /reads a key or password/)
+  }
+  assertNoCredentialReads("password: 'default', url: 'http://localhost:8123'", 'fixture')
+  assertNoCredentialReads('const start = process.env.START_DATE', 'fixture')
+  console.log('PASS  permission and credential regression cases')
 }
 
 function readJson(path: string): JsonObject {
@@ -250,6 +261,9 @@ function assertDirectoryReadiness() {
   for (const file of files) {
     const bytes = readFileSync(file)
     const extension = extname(file).toLowerCase()
+    if (BINARY_ASSET_EXTENSIONS.has(extension) || extension === '.svg') {
+      assert((statSync(file).mode & 0o111) === 0, `${file} should not be executable`)
+    }
     if (BINARY_ASSET_EXTENSIONS.has(extension)) {
       if (extension === '.png') {
         assert(bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE), `${file} is not a complete PNG image`)
@@ -272,9 +286,14 @@ function assertDirectoryReadiness() {
       !DOWNLOAD_AND_RUN.test(text),
       `${file} pipes a downloaded script into a shell; link to the installer instead`,
     )
-    for (const pattern of CREDENTIAL_READS) {
-      const match = text.match(pattern)
-      assert(!match, `${file} reads a key or password from the user's machine (${match?.[0]}); leave it to the user`)
+    assertNoCredentialReads(text, file)
+    if (basename(file) === 'SKILL.md') assertSkillPermissions(text, file)
+    if (extension === '.svg') {
+      assert(/^<svg[\s>]/.test(text.trim()), `${file} should be an SVG`)
+      assert(
+        !/<script|<foreignObject|\son[a-z]+\s*=|\b(?:href|src)\s*=\s*["'](?!#)/i.test(text),
+        `${file} should be a static SVG without scripts or external references`,
+      )
     }
     textFiles.set(file, text)
   }
@@ -341,11 +360,17 @@ async function assertHostedMcp(endpoint: string) {
 }
 
 async function main() {
-  assertWithInstalledClaudeCli()
+  assertPolicyRegressions()
   assertMarketplace()
   assertDirectoryListing()
   assertDirectoryReadiness()
   const endpoint = getEndpoint()
+  if (OFFLINE) {
+    console.log('Claude plugin offline gate passed: package, permissions, credentials, and manifests are valid')
+    return
+  }
+  const { assertWithInstalledClaudeCli } = await import('./claude-plugin-cli.ts')
+  assertWithInstalledClaudeCli(PLUGIN_ROOT, MARKETPLACE_PATH)
   await assertHostedMcp(endpoint)
   console.log(
     `Claude plugin release gate passed: marketplace, manifest, MCP config, and hosted MCP smoke are valid${REQUIRE_MCP_2026_LIVE ? ' with live MCP 2026-07-28' : ''}`,

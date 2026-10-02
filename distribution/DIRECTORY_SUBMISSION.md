@@ -81,15 +81,19 @@ The plugin directory reads its listing from `plugins/portal/.claude-plugin/plugi
 - Privacy policy: `privacyPolicyUrl`, set to `https://sqd.dev/imprint/`, and the README's Data and privacy section
 - License: `license` (`MIT`)
 
-Claude Code's manifest schema does not include `icon` or `privacyPolicyUrl`, so `claude plugin validate --strict` reports both as unknown fields. `npm run test:claude-plugin` strictly validates a copy of the plugin without those two fields and checks their values separately.
+Claude Code 2.1.281 and later accept these [directory listing fields](https://code.claude.com/docs/en/plugins/manifest-reference#directory-listing-fields) without warnings. `npm run test:claude-plugin` strictly validates the actual package on those versions. On older CLIs it validates a copy without `icon` and `privacyPolicyUrl` and checks their values separately.
 
-The portal validates and scans every file in `plugins/portal`. `npm run test:claude-plugin` keeps the package within these rules:
+The portal validates and scans every file in `plugins/portal`. `npm run test:claude-plugin:offline` checks the package locally and runs in the required offline gate. `npm run test:claude-plugin` also runs the installed Claude CLI validator and a hosted MCP smoke test. These checks cover:
 
 - Every file is readable text, an SVG, or a PNG image. The squid-perf report template is plain HTML with its own chart code, not a packed or minified bundle.
 - No text file names a bundled PNG or font by its path. This file lives outside the plugin folder for that reason.
 - Skill references link to official installers instead of piping a downloaded script into a shell.
-- No skill command expands a key or password variable, reads one out of a container, or loads `.env` through `dotenv`. Example indexer code reads a password from the environment only with a local default. The v2 gateway key and ClickHouse passwords are left for the user to supply, as the directory's credential rule requires, and the README says so.
+- Skills inherit the user's tool permissions without `allowed-tools` pre-approvals.
+- No skill command or example reads an existing key or password from the environment, a container, or `.env` through `dotenv`, including reads with fallback values. The ClickHouse examples use explicit local development settings; users configure other connections directly in their application.
+- Bundled images are non-executable display assets. Both SVGs contain no scripts, event handlers, or external references.
 - Every text file stays under 256 KiB.
+
+Local checks do not establish directory approval. After a new commit reaches the submission's tracked branch, confirm that the Versions page has fetched that exact commit and review its new findings. Image findings that identify only static display assets can be left for the reviewer; the directory's policy and content review must still clear before publication.
 
 ## OpenAI directory
 

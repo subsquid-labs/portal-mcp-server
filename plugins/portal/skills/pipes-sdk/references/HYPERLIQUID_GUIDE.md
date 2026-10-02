@@ -40,7 +40,7 @@ mkdir hl-indexer && cd hl-indexer
 
 ### 3. Connection settings
 
-The indexer in step 5 connects to the local ClickHouse from step 6 (user `default`, password `default`, database `hl_perps`). To use another ClickHouse, the user sets `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_USER`, and `CLICKHOUSE_PASSWORD` in the environment that runs the indexer.
+The indexer in step 5 connects only to the local ClickHouse from step 6 (user `default`, password `default`, database `hl_perps`). For another database, have the user configure the connection directly in their application. Do not read an existing password from their environment or files, or ask them to paste it into chat.
 
 ### 4. migrations/001-create-tables.sql
 
@@ -132,10 +132,10 @@ export async function main() {
     .pipeTo(
       clickhouseTarget({
         client: createClient({
-          url: process.env.CLICKHOUSE_URL || 'http://localhost:8123',
-          database: process.env.CLICKHOUSE_DATABASE || 'hl_perps',
-          username: process.env.CLICKHOUSE_USER || 'default',
-          password: process.env.CLICKHOUSE_PASSWORD || 'default',
+          url: 'http://localhost:8123',
+          database: 'hl_perps',
+          username: 'default',
+          password: 'default',
           clickhouse_settings: {
             date_time_input_format: 'best_effort',
             date_time_output_format: 'iso',

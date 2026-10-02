@@ -252,13 +252,16 @@ This lets the frontend display query performance and row counts — useful for d
 
 ## ClickHouse Client Setup
 
+This example connects only to a local development ClickHouse with user `default` and password `default`. For another database, have the user configure the connection directly in their application. Do not read an existing password from their environment or files, or ask them to paste it into chat.
+
 ```typescript
 import { createClient } from '@clickhouse/client'
 
 const client = createClient({
-  url: process.env.CLICKHOUSE_URL || 'http://localhost:8123',
-  database: process.env.CLICKHOUSE_DB || 'my_dashboard',
-  password: process.env.CLICKHOUSE_PASSWORD || 'default',
+  url: 'http://localhost:8123',
+  database: 'my_dashboard',
+  username: 'default',
+  password: 'default',
   clickhouse_settings: {
     date_time_output_format: 'iso',  // returns ISO strings, not Unix timestamps
   },
