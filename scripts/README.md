@@ -34,6 +34,7 @@ Unit tests sit next to the code as `src/**/*.test.ts` and run with the built-in 
 | `test:release-reporting` | offline | publication evidence, exact-version reporting, dry-run safety, and private-output handling |
 | `test:lean` | offline | one registry, instrumented registrations, no legacy surfaces, bounded source |
 | `test:distribution` | offline | distribution and submission manifests share the release version |
+| `test:claude-plugin:offline` | offline | Claude package rules, inherited skill permissions, credential handling, and static assets |
 | `test:fetch-reliability` | offline | Portal fetch timeouts, malformed bodies, cancellation, retry budget |
 | `test:stdio-backpressure` | offline | large results over stdio without stalls |
 | `test:performance-harness` | offline | repeated EVM candle requests reuse one snapshot |
@@ -201,6 +202,12 @@ Validates the Claude Code plugin wrapper and repo-local marketplace. It:
 - checks `.claude-plugin/marketplace.json`
 - confirms the hosted MCP endpoint initializes and lists the expected SQD Portal tools
 - rejects committed local paths or secret-like markers in plugin manifests
+- rejects skill tool pre-approvals and existing credential reads, including environment reads with fallback values
+- checks that bundled images are non-executable and SVGs are static
+- runs regression cases for skill permissions and credential reads
+- validates with the installed Claude CLI, allowing listing fields separately on versions before 2.1.281
+
+`npm run test:claude-plugin:offline` runs the same static package checks without contacting the hosted MCP or requiring a Claude CLI. It is part of the required offline gate.
 
 ### `npm run test:timestamps`
 Runs focused timestamp resolver QA. It:

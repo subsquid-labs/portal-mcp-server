@@ -4,6 +4,7 @@
 
 ### Improvements
 
+- **Plugin permissions.** Bundled skills follow the user's existing tool permissions, and ClickHouse examples use explicit local development settings. The offline gate now checks plugin permissions, credential handling, and static assets.
 - **Release reporting.** Added optional publication tracking with a read-only connection preview.
 - **Claude plugin directory listing.** The plugin manifest declares the SQD logo as its icon and links the SQD privacy policy, and the plugin README states what the plugin sends and where. The directory listing notes moved to `distribution/DIRECTORY_SUBMISSION.md`, outside the installed package, and `npm run test:claude-plugin` checks the plugin files against the directory's file rules.
 - **Readable squid-perf report.** The report template is plain HTML that draws its own charts instead of a packed bundle with Chart.js. Reports stay self-contained, work offline, and are about half their previous size.
