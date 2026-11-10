@@ -156,6 +156,7 @@
     "gpt-tokenizer": "^4.0.0",
     "lightweight-charts": "^5.2.1",
     "playwright": "^1.62.1",
+    "terser": "^5.51.2",
     "tsx": "^4.23.12",
     "typescript": "^5.7.0",
     "yaml": "^2.9.0"
