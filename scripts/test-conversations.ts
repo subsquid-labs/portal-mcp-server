@@ -56,12 +56,12 @@ const SCENARIOS: ConversationScenario[] = [
         },
       },
       {
-        user: 'make me a simple activity chart for the last hour',
+        user: 'make me a simple activity chart',
         tool: 'portal_get_time_series',
-        args: () => ({ network: 'base', metric: 'transaction_count', duration: '1h', interval: '5m' }),
+        args: () => ({ network: 'base', metric: 'transaction_count', interval: '5m' }),
         validate: (data) => {
           assert(
-            Array.isArray(data.time_series) && data.time_series.length >= 12,
+            Array.isArray(data.time_series) && data.time_series.length >= 3,
             'Time series should return chart buckets',
           )
           assert(

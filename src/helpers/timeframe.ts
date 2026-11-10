@@ -36,6 +36,7 @@ const BLOCK_TIME_ESTIMATES: Record<string, number> = {
  * Checked by dataset name prefix before falling back to chain-type defaults.
  */
 const DATASET_BLOCK_TIMES: Record<string, number> = {
+  'base-mainnet': 0.2, // Current canonical block cadence since Denim.
   'base-': 2,
   'monad-': 0.4,
   'optimism-': 2,

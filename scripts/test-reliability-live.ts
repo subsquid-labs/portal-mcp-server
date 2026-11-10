@@ -183,7 +183,7 @@ async function main() {
       `PASS  cross-VM wallet summaries: ${successfulCrossVmWallets.length}/3 succeeded without retries; ${3 - successfulCrossVmWallets.length} bounded upstream errors`,
     )
 
-    const durations = ['30m', '45m', '1h']
+    const durations = ['5m', '10m', '15m']
     const highErrorOutcomes: ToolCallResult[] = []
     for (let index = 0; index < 3; index += 1) {
       const baseFrom = baseHead - 200 - index * 50

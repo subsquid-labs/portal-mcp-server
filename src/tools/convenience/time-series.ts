@@ -132,6 +132,7 @@ type BucketAccumulator = {
 }
 
 const DEFAULT_TIME_SERIES_DURATION = '6h'
+const DEFAULT_BASE_TIME_SERIES_DURATION = '15m'
 const INTERACTIVE_TIME_SERIES_WINDOW_SECONDS = 6 * 60 * 60
 const SOLANA_GENERIC_TIME_SERIES_CHUNK_SIZE: Partial<Record<TimeSeriesMetric, number>> = {
   transaction_count: 5000,
@@ -155,22 +156,9 @@ const FAST_EVM_TIME_SERIES_BLOCK_CAP = 1500
  *
  * The cost of this tool is linear in blocks, not in buckets: every block in the
  * window is streamed and folded into its bucket, so a coarser interval reads
- * exactly as much as a fine one. Measured on Base at two seconds a block:
- * 10,800 blocks took 12.8s, 21,600 took 25.8s, and 43,200 took 112s and 428MB
- * on the way. Seven days is 302,400 blocks; that call never answered inside
- * four minutes and the process reached 1.9GB and was still climbing.
- *
- * A block ceiling is the right unit precisely because it is not a duration.
- * Twenty-four hours is 144 blocks on Bitcoin, 7,200 on Ethereum and 43,200 on
- * Base, so the same number lets the request through where it is cheap and
- * stops it where it is not, without a per-chain table to maintain. Twenty
- * thousand blocks is where the worst case lands near thirty seconds, inside
- * the sixty seconds most MCP clients wait: 10,800 blocks measured at 26.6s, so
- * the ceiling is set just above the largest window that finishes comfortably
- * rather than at the largest that finishes at all.
- *
- * Refusing is the point. A tool that hangs past the client's timeout has not
- * given a slow answer, it has given none, and it has spent a gigabyte doing it.
+ * exactly as much as a fine one. A previous Base benchmark took up to 26.6s
+ * for 10,800 blocks and 112s for 43,200. Keep the ceiling just above the scan
+ * that finished comfortably within the client's timeout.
  */
 export const MAX_SERIES_SCAN_BLOCKS = 12_000
 
@@ -217,6 +205,10 @@ function seriesWindowTooLargeError(params: {
   const { blocks } = params
   const secondsPerBlock = estimateBlockTime(params.dataset, params.chainType)
   const affordableSeconds = MAX_SERIES_SCAN_BLOCKS * secondsPerBlock
+  const affordableWindow =
+    affordableSeconds >= 3600
+      ? `${Math.floor(affordableSeconds / 3600)} hours`
+      : `${Math.floor(affordableSeconds / 60)} minutes`
   /* Suggest a real preset rather than a computed number nobody can type. */
   const presets: [string, number][] = [
     ['30d', 2_592_000],
@@ -236,9 +228,9 @@ function seriesWindowTooLargeError(params: {
     `A ${params.duration} window is ${params.estimated ? 'about ' : ''}${blocks.toLocaleString()} blocks on ${params.dataset}${params.estimated ? ' by its typical block time' : ''}, and portal_get_time_series reads every block in the window. It stops at ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()} blocks so a call cannot outlast the client waiting for it.`,
     [
       largest
-        ? `Ask for duration '${largest[0]}' or less on ${params.dataset}: about ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()} blocks is roughly ${Math.floor(affordableSeconds / 3600)} hours here.`
+        ? `Try duration '${largest[0]}' or less on ${params.dataset}. At its typical block rate, the limit covers roughly ${affordableWindow}.`
         : `Ask for a window under ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()} blocks on ${params.dataset}.`,
-      'Use from_block and to_block for an exact window inside that bound.',
+      'Use from_timestamp and to_timestamp to specify a narrower interval.',
       'The same duration costs less on a slower chain: the limit is blocks, not time.',
       'Use the analytics tool for this chain if you want one aggregate over a wider window instead of a series.',
     ],
@@ -816,9 +808,8 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       duration: z
         .string()
         .optional()
-        .default(DEFAULT_TIME_SERIES_DURATION)
         .describe(
-          'Total time period to analyze. Defaults to "6h" for interactive use. The bound is in blocks, not time: this tool reads every block in the window and stops at 12,000, so "24h" is fine on Bitcoin or Ethereum and refused on a 2-second chain like Base (43,200 blocks). A window over the bound is refused at once and the error names a duration that fits. Accepts compact durations like "30m" or natural phrases like "past 30 minutes".',
+          'Total time period to analyze. Defaults to "15m" on Base mainnet and "6h" elsewhere. This tool reads every block and refuses windows over 12,000 blocks. Accepts compact durations like "30m" or natural phrases like "past 30 minutes".',
         ),
       address: z
         .string()
@@ -863,7 +854,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       network,
       metric,
       interval,
-      duration,
+      duration: requestedDuration,
       address,
       from_timestamp,
       to_timestamp,
@@ -875,6 +866,12 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const queryStartTime = Date.now()
       let dataset = await resolveDataset(network)
       const chainType = detectChainType(dataset)
+      const hasTimestamps = from_timestamp !== undefined || to_timestamp !== undefined
+      const duration =
+        requestedDuration ??
+        (dataset === 'base-mainnet' && !hasTimestamps
+          ? DEFAULT_BASE_TIME_SERIES_DURATION
+          : DEFAULT_TIME_SERIES_DURATION)
       const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
       const notices: string[] = []
       const pipesRecipe = buildTimeSeriesPipesRecipe({
@@ -886,8 +883,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         compare_previous,
         group_by,
       })
-      const longWindowNotice =
-        from_timestamp === undefined && to_timestamp === undefined ? buildLongWindowNotice(duration) : undefined
+      const longWindowNotice = hasTimestamps ? undefined : buildLongWindowNotice(duration)
       if (longWindowNotice) {
         notices.push(longWindowNotice)
       }

@@ -135,7 +135,7 @@ The hosted endpoint has the Explorer off, so a new user opts their own connectio
 3. Ask a data question. Any of these lands on a tool that carries the Explorer:
    - `What has this wallet been doing on Base lately?` with an address (wallet summary)
    - `Show me recent activity on Ethereum` (recent activity)
-   - `Chart hourly transaction counts on Base for the last day` (time series)
+   - `Chart transaction counts on Base for the last 15 minutes in five-minute buckets` (time series)
 
 The result renders as an inline card instead of a block of text; open the card for the full-screen workspace. Only the 21 data tools carry the Explorer. A catalogue question such as `Which networks do you support?` calls `portal_list_networks` and answers in plain text, which is expected rather than a failure.
 

@@ -735,11 +735,11 @@ export const TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: 'portal_get_time_series',
-    prompt: 'make me a simple Base activity chart for the last hour',
-    args: () => ({ network: 'base', metric: 'transaction_count', interval: '5m', duration: '1h' }),
+    prompt: 'make me a simple Base activity chart for the last 15 minutes',
+    args: () => ({ network: 'base', metric: 'transaction_count', interval: '5m', duration: '15m' }),
     validate: (text) => {
       const data = extractJson(text)
-      expectItems(text, 'portal_get_time_series base', 12)
+      expectItems(text, 'portal_get_time_series base', 3)
       expectWindowMetadata(data, 'portal_get_time_series base')
       expectGapDiagnostics(data, 'portal_get_time_series base')
       assert(data.chart?.kind === 'time_series', 'Expected time-series chart metadata')
@@ -753,14 +753,14 @@ export const TOOL_SPECS: ToolSpec[] = [
         network: 'base',
         metric: 'transaction_count',
         interval: '5m',
-        duration: '1h',
+        duration: '15m',
         compare_previous: true,
       })
       const groupedResult = await callToolWithRetry(client, 'portal_get_time_series', {
         network: 'base',
         metric: 'transaction_count',
         interval: '5m',
-        duration: '1h',
+        duration: '15m',
         group_by: 'contract',
         group_limit: 3,
       })

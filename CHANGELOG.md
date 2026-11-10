@@ -14,6 +14,7 @@
 
 ### Fixes
 
+- **Base time windows.** Updated the block estimate for Denim's 200 ms blocks. Base mainnet charts default to 15 minutes and suggest a shorter window when a request exceeds the scan limit.
 - **Interrupted streams.** Solana and Hyperliquid analytics fail explicitly when a stream breaks after delivering records, instead of replaying those records and inflating totals. Stream byte limits apply before processing records, and failed readers release the upstream response.
 - **Hyperliquid analytics.** Position flips are no longer labelled as liquidations. Liquidation metrics are explicitly unavailable because Portal fills do not expose the required marker. Long-only activity has a long-biased interpretation and an undefined ratio, and PnL rankings include only traders with the matching profit or loss sign. Volume is identified as per-account fill notional rather than deduplicated market volume.
 - **Cached analytics windows.** Hyperliquid and Solana analytics cache entries use the resolved block window, so an older result cannot be presented with newer coverage or freshness bounds.
