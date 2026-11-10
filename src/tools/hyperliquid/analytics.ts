@@ -203,7 +203,7 @@ type PendingHyperliquidAnalyticsResult = {
     response: Record<string, any>
     summary: string
     shortSummary: string
-    notices: string[] | undefined
+    notices: string[]
     effectiveFrom: number
     hasMoreSections: boolean
   }>

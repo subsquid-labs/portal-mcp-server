@@ -335,8 +335,8 @@ FROM `proj.ds.transfers`
 WHERE block_number BETWEEN @from_block AND @to_block
 ```
 
-If that count is non-zero, aggregate from `amount_raw` instead. It is exact.
-and accept the cast cost, or exclude the sentinel rows deliberately. ERC-20
+If that count is non-zero, aggregate from the exact `amount_raw` value and
+accept the cast cost, or exclude the sentinel rows deliberately. ERC-20
 "infinite approval" values are the usual source and are rarely economically
 meaningful, but that is a judgement for the query to make explicitly, not for
 the write path to make silently. This mirrors the ClickHouse rule of storing
