@@ -3,7 +3,6 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { build } from 'esbuild'
-import { minify } from 'terser'
 
 import { compactStylesheet } from './compact-stylesheet-plugin.mjs'
 import { zodEnglishLocaleOnly } from './zod-locale-plugin.mjs'
@@ -37,8 +36,7 @@ const result = await build({
   },
 })
 
-// Compress the embedded script further without changing the App wire protocol or CSP.
-const { code: bundle } = await minify(result.outputFiles[0].text, { ecma: 2022, compress: { passes: 2 } })
+const bundle = result.outputFiles[0]?.text ?? ''
 if (!bundle) throw new Error('SQD Activity Explorer bundle is empty')
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>SQD Explorer</title></head><body><div id="app"></div><script>${bundle}</script></body></html>`
 const hash = createHash('sha256').update(html).digest('hex').slice(0, 12)
