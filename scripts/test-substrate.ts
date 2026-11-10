@@ -3,6 +3,8 @@
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
+import { callToolWithRetry, sleep } from './test-helpers.ts'
+
 const POLKADOT_OLD_TIMESTAMP_ISO = '2022-04-23T12:03:06Z'
 const POLKADOT_OLD_TIMESTAMP_SECONDS = 1650715386
 const POLKADOT_RECENT_TIMESTAMP_MS = 1775790360000
@@ -40,20 +42,15 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 async function callExactTimestampLookup(client: Client, timestamp: string | number) {
-  let lookup = await callTool(client, 'portal_debug_resolve_time_to_block', {
-    network: 'polkadot',
-    timestamp,
+  const args = { network: 'polkadot', timestamp }
+  const lookup = await callToolWithRetry(client, 'portal_debug_resolve_time_to_block', args, {
+    retries: 2,
+    totalBudgetMs: 45_000,
   })
+  if (lookup.isError || lookup.data?.resolution !== 'estimated') return lookup
 
-  if (!lookup.isError && extractJson(lookup.text).resolution !== 'verified_boundary') {
-    await new Promise((resolve) => setTimeout(resolve, 500))
-    lookup = await callTool(client, 'portal_debug_resolve_time_to_block', {
-      network: 'polkadot',
-      timestamp,
-    })
-  }
-
-  return lookup
+  await sleep(500)
+  return callToolWithRetry(client, 'portal_debug_resolve_time_to_block', args, { retries: 1, totalBudgetMs: 30_000 })
 }
 
 async function fetchPortalWithRetry(url: string, options?: RequestInit) {
@@ -187,11 +184,11 @@ async function main() {
     console.log(`PASS  portal_get_head -> head ${headData.number}`)
 
     const olderLookup = await callExactTimestampLookup(client, POLKADOT_OLD_TIMESTAMP_ISO)
-    assert(!olderLookup.isError, 'older Substrate timestamp lookup should succeed')
-    const olderLookupData = extractJson(olderLookup.text)
+    assert(!olderLookup.isError, `older Substrate timestamp lookup failed: ${olderLookup.text.slice(0, 320)}`)
+    const olderLookupData = olderLookup.data
     assert(
       olderLookupData.resolution === 'verified_boundary',
-      'older Substrate timestamp lookup should be a verified boundary',
+      `older Substrate timestamp lookup should be verified, got ${olderLookupData.resolution}`,
     )
     assert(
       olderLookupData.block_number === 10000000,
@@ -204,11 +201,11 @@ async function main() {
     console.log('PASS  portal_debug_resolve_time_to_block -> older ISO timestamp resolves exactly')
 
     const millisLookup = await callExactTimestampLookup(client, POLKADOT_RECENT_TIMESTAMP_MS)
-    assert(!millisLookup.isError, 'millisecond Substrate timestamp lookup should succeed')
-    const millisLookupData = extractJson(millisLookup.text)
+    assert(!millisLookup.isError, `millisecond Substrate timestamp lookup failed: ${millisLookup.text.slice(0, 320)}`)
+    const millisLookupData = millisLookup.data
     assert(
       millisLookupData.resolution === 'verified_boundary',
-      'millisecond Substrate timestamp lookup should stay verified after normalization',
+      `millisecond Substrate timestamp lookup should stay verified, got ${millisLookupData.resolution}`,
     )
     assert(millisLookupData.timestamp === 1775790360, 'millisecond timestamp input should normalize to seconds')
     console.log('PASS  portal_debug_resolve_time_to_block -> millisecond input is normalized correctly')
