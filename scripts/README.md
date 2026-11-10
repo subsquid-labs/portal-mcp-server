@@ -124,7 +124,7 @@ Runs an automated response-quality audit over the full manifest. It:
 Exercises the shared upstream boundary without depending on live Portal state. It covers queued cancellation, bounded overload, retry jitter, `Retry-After`, malformed JSON, truncated NDJSON, premature body termination, and structured oversized-result recovery.
 
 ### `npm run test:stdio-backpressure`
-Forces 32 large concurrent MCP responses through a slow stdout fixture and verifies response writes stay serialized, listener-bounded, and fully drained.
+Forces 32 large concurrent MCP responses through a slow stdout fixture and checks that writes stay serialized and drain cleanly. It also checks that late stdout errors are safe after shutdown and that reusing stdout does not accumulate error listeners.
 
 ### `npm run test:performance-harness`
 Validates the open-loop measurement code itself. It checks intended-start queue delay, a no-change A/A comparison, detection of an injected 20 percent regression, and the five-millisecond practical-effect floor for very fast calls.

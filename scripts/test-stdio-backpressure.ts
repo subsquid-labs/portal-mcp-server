@@ -22,6 +22,8 @@ async function main() {
   const input = new Readable({ read() {} })
   const output = new SlowWritable()
   const transport = new SerializedStdioServerTransport(input, output)
+  const errors: Error[] = []
+  transport.onerror = (error) => errors.push(error)
   await transport.start()
 
   let maxErrorListeners = 0
@@ -48,9 +50,18 @@ async function main() {
 
   assert(maxErrorListeners <= 2, `serialized writes should keep error listeners bounded, observed ${maxErrorListeners}`)
   assert(maxDrainListeners <= 1, `serialized writes should keep drain listeners bounded, observed ${maxDrainListeners}`)
-  assert(output.listenerCount('error') === 0, 'transport close should remove its stdout error listener')
   assert(output.listenerCount('drain') === 0, 'completed writes should remove every drain listener')
-  console.log('PASS  stdio responses remain serialized and listener-bounded under backpressure')
+
+  output.emit('error', new Error('late stdout write failure'))
+  assert(errors.length === 0, 'a late stdout error should not reach a closed transport')
+  const replacement = new SerializedStdioServerTransport(new Readable({ read() {} }), output)
+  await replacement.start()
+  try {
+    assert(output.listenerCount('error') === 1, 'reusing stdout should leave only the active error listener')
+  } finally {
+    await replacement.close()
+  }
+  console.log('PASS  stdio writes stay serialized and listener-bounded through backpressure and shutdown')
 }
 
 main().catch((error) => {
