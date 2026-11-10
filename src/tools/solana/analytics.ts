@@ -544,7 +544,7 @@ export function registerSolanaAnalyticsTool(server: McpServer) {
           : SOLANA_ANALYTICS_FAST_SLOT_BUDGET[analyticsBudgetKey]
       const slotsAnalyzed = Math.min(requestedSlots, maxSlotsForTimeframe, MAX_ANALYTICS_SLOTS)
       const effectiveFrom = requestedSlots > slotsAnalyzed ? endBlock - slotsAnalyzed + 1 : fromBlock
-      const cacheKey = `${dataset}:${mode}:${requestedTimeframe}:${String(from_timestamp ?? '')}:${String(to_timestamp ?? '')}:${include_compute_units}:${include_programs}:${response_format}:${program_limit}`
+      const cacheKey = `${dataset}:${fromBlock}:${endBlock}:${mode}:${requestedTimeframe}:${String(from_timestamp ?? '')}:${String(to_timestamp ?? '')}:${include_compute_units}:${include_programs}:${response_format}:${program_limit}`
       const cached = !cursor && !include_programs ? getCachedAnalyticsResult(cacheKey) : undefined
 
       if (cached) {

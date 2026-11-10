@@ -1,5 +1,6 @@
 import { validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
+import { ActionableError } from '../../helpers/errors.js'
 import { portalFetchStream, portalFetchStreamVisit } from '../../helpers/fetch.js'
 import { formatDuration, formatNumber, formatTimestamp } from '../../helpers/format.js'
 import { hashString53 } from '../../helpers/hash.js'
@@ -482,6 +483,7 @@ async function visitSolanaTimeSeriesRange({
         continue
       }
 
+      if (err instanceof ActionableError) throw err
       throw new Error(`Failed to fetch Solana time-series chunk: ${message}`)
     }
   }

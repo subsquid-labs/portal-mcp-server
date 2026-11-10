@@ -15,23 +15,23 @@
   "packets": {
     "smithery": {
       "name": "SQD",
-      "tagline": "Query blockchain data across 130+ networks",
-      "description": "Connect AI agents to live blockchain data across 130+ SQD Portal datasets. Query Ethereum-compatible, Solana, Bitcoin, Substrate, Hyperliquid, and Tron records without an API key."
+      "tagline": "Query blockchain data across supported networks",
+      "description": "Connect AI agents to live blockchain data across SQD Portal datasets. Query Ethereum-compatible, Solana, Bitcoin, Substrate, Hyperliquid, and Tron records without an API key."
     },
     "mcp-so": {
       "name": "SQD",
       "tagline": "Blockchain data for AI agents",
-      "description": "Explore blockchain activity across 130+ SQD Portal datasets. Ask for Ethereum-compatible, Solana, Bitcoin, Substrate, Hyperliquid, and Tron records through one hosted MCP server."
+      "description": "Explore blockchain activity across SQD Portal datasets. Ask for Ethereum-compatible, Solana, Bitcoin, Substrate, Hyperliquid, and Tron records through one hosted MCP server."
     },
     "pulse-mcp": {
       "name": "SQD",
       "tagline": "Explore blockchain data from any MCP client",
-      "description": "SQD gives Claude, Codex, Cursor, Gemini, Grok, Perplexity, and other MCP clients access to 130+ Portal datasets. Investigate wallets and contracts, retrieve Ethereum-compatible, Solana, Bitcoin, Substrate, and Tron records, and analyze Hyperliquid fills. No account or API key is required."
+      "description": "SQD gives Claude, Codex, Cursor, Gemini, Grok, Perplexity, and other MCP clients access to Portal datasets. Investigate wallets and contracts, retrieve Ethereum-compatible, Solana, Bitcoin, Substrate, and Tron records, and analyze Hyperliquid fills. No account or API key is required."
     },
     "api-tracker": {
       "name": "SQD",
-      "tagline": "One MCP server for blockchain data across 130+ networks",
-      "description": "SQD is a hosted, read-only MCP server for 130+ Portal datasets. Query Ethereum-compatible, Solana, Bitcoin, Substrate, Hyperliquid, and Tron activity without an account or API key."
+      "tagline": "One MCP server for blockchain data across supported networks",
+      "description": "SQD is a hosted, read-only MCP server for Portal datasets. Query Ethereum-compatible, Solana, Bitcoin, Substrate, Hyperliquid, and Tron activity without an account or API key."
     }
   }
 }

@@ -1,6 +1,6 @@
 # SDK 1.0 Features & Testing
 
-Reference for SDK 1.0+ APIs: time-based ranges, `defineAbi`, query builders, typed errors, decode-error hooks, the testing library, Tron/Bitcoin streams, BigQuery/Parquet/Pub/Sub targets, finality, and cursor keying. Examples target `@subsquid/pipes@1.0.0-beta.4`; on 2026-08-26 npm `latest` was beta.3 and the `beta` tag was beta.4.
+Reference for SDK 1.0+ APIs: time-based ranges, `defineAbi`, query builders, typed errors, decode-error hooks, the testing library, Tron/Bitcoin streams, BigQuery/Parquet/Pub/Sub targets, finality, and cursor keying. The original examples target beta.4; the Pub/Sub section and current release changes are checked against beta.11. Read [COMPATIBILITY.md](COMPATIBILITY.md) before upgrading, especially for Pub/Sub and RPC latency monitoring.
 
 ## Renamed in the Beta Line
 
@@ -458,9 +458,11 @@ stream.pipeTo(bigqueryTarget({
 }))
 ```
 
-Key facts: tables auto-create with `PARTITION BY RANGE_BUCKET(block_number, …)` (partition column forced `INT64 NOT NULL`); declared schema is enforced against existing tables (fails fast on mismatch); reorgs run bounded `DELETE`s per tracked table, resumed idempotently after crashes. An optional `onBeforeRollback: async ({ cursor }) => ...` fires after the safe cursor resolves, before the per-table `DELETE`s. Gotchas: `TIMESTAMP` wire format is INT64 **microseconds** (`date.getTime() * 1000` — ISO strings are NOT parsed); uint256 overflows BIGNUMERIC (38 integer digits) — clamp and keep the exact decimal in a STRING column.
+Key facts: tables auto-create with `PARTITION BY RANGE_BUCKET(block_number, …)` (partition column forced `INT64 NOT NULL`); declared schema is enforced against existing tables (fails fast on mismatch); reorgs run bounded `DELETE`s per tracked table, resumed idempotently after crashes. An optional `onBeforeRollback: async ({ cursor }) => ...` fires after the safe cursor resolves, before the per-table `DELETE`s. Gotchas: `TIMESTAMP` wire format is INT64 **microseconds** (`date.getTime() * 1000`; a JS `Date` also works, a raw milliseconds number lands in 1970, see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md#the-timestamp-microseconds-rule)); uint256 overflows BIGNUMERIC (max ≈ 5.79e38), clamp and keep the exact decimal in a STRING column.
 
-### Google Pub/Sub (beta.2+, current protocol in beta.4)
+Deep reference, the full `bigqueryTarget` option set, GCP prerequisites, the `sync` WAL table, fork and crash recovery, the `E2201`-`E2213` codes, and query-cost rules: [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md).
+
+### Google Pub/Sub (current beta.11 protocol)
 
 ```typescript
 import { PubSub } from '@google-cloud/pubsub'
@@ -470,6 +472,7 @@ stream.pipeTo(pubsubTarget({
   pubsub: new PubSub({ projectId: process.env.GOOGLE_CLOUD_PROJECT }),
   state: { path: './state/transfers.sqlite' }, // cursor, rollback manifest, outbox, sequence
   namespace: 'base-erc20',
+  // For a new feed, review allowColdStart below before starting.
   topics: {
     transfers: {
       topic: 'evm.base.erc20-transfers',
@@ -493,7 +496,7 @@ stream.pipeTo(pubsubTarget({
 
 `topics` routes emit BigQuery CDC-compatible JSON rows with `_id`, `_CHANGE_TYPE`, and `_CHANGE_SEQUENCE_NUMBER`; fork repair emits a later `DELETE` or restoring `UPSERT`. `bigint` encodes as a decimal string and `Date` as RFC 3339, so choose destination column types accordingly. The SQLite state file is load-bearing: keep it on durable storage and run one producer per path. Losing its sequence counter can cause BigQuery to ignore lower replacement sequence numbers.
 
-Beta.4 also supports `signals` routes for application-defined payloads. A signal route must choose `fork: { mode: 'boundary', map }` (consumer unwinds after an epoch/boundary message) or `fork: { mode: 'finalized-only' }`; do not attach a BigQuery subscription to a signal topic because signals omit the CDC fields. Pub/Sub delivery is at-least-once. When upgrading from the initial Pub/Sub state/protocol, drain the old outbox and use fresh state plus a fresh namespace; there is no in-place state-v2 migration.
+Beta.5 removed `signals` routes. Every CDC message carries finality in `_finalized`; consume its maximum watermark. `sequenceBarrier` defaults to true and enforces one topic per producer with ordered block operations. A new empty state is refused unless `allowColdStart: true` explicitly bootstraps a namespace that has never published. Never enable it to recover a previously published namespace. For pre-schema-4 state or lost state, use a fresh namespace/state path and re-bootstrap the consumer. See [COMPATIBILITY.md](COMPATIBILITY.md) for the migration and beta.11 downgrade check.
 
 ### Parquet
 

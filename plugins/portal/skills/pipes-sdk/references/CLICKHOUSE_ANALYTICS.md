@@ -1,5 +1,7 @@
 # ClickHouse Analytics Query Patterns
 
+For database commands and configuration, use [CREDENTIALS.md](CREDENTIALS.md): inject secrets through the environment or protected client files, and never print them or pass their values as command arguments.
+
 Query patterns for building real-time dashboards on top of ClickHouse tables populated by Pipes SDK indexers. Covers time bucketing, conditional aggregation, parameterized queries, and performance.
 
 ## CollapsingMergeTree Basics
@@ -157,7 +159,7 @@ SELECT
     AND dir IN ('Close Long', 'Close Short')
     AND start_position != 0
     AND abs(closed_pnl) > notional * 0.1
-  ) AS liquidation_count
+  ) AS large_losing_close_count
 FROM hl_fills FINAL
 ```
 
@@ -192,9 +194,9 @@ GROUP BY t, coin
 ORDER BY t, large_volume DESC
 ```
 
-### Liquidation Heuristic
+### Large losing closes
 
-Hyperliquid doesn't flag liquidations explicitly. This heuristic detects them:
+The Portal fill fields do not identify liquidations. A voluntary close can have the same direction and loss as a liquidated position, so this query selects large losing closes only. Do not report its rows or totals as liquidations. Hyperliquid's own API has a separate liquidation marker; confirming liquidations requires a source that exposes it.
 
 ```sql
 SELECT
@@ -214,13 +216,13 @@ Logic:
 - `start_position != 0` — had an open position
 - `abs(closed_pnl) > notional * 0.1` — loss is >10% of trade size (not just fees)
 
-### Liquidation Timeline (Aggregated)
+### Large losing closes over time
 
 ```sql
 SELECT
   toStartOfInterval(timestamp, INTERVAL 1 HOUR) AS t,
-  count() AS liquidations,
-  sum(notional) AS liquidation_volume,
+  count() AS large_losing_closes,
+  sum(notional) AS losing_close_notional,
   sum(abs(closed_pnl)) AS total_loss
 FROM hl_fills FINAL
 WHERE closed_pnl < -1000

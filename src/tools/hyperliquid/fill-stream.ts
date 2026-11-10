@@ -1,4 +1,5 @@
 import { PORTAL_URL } from '../../constants/index.js'
+import { ActionableError } from '../../helpers/errors.js'
 import { portalFetchStreamRange, portalFetchStreamVisit } from '../../helpers/fetch.js'
 
 export type HyperliquidFillBlock = {
@@ -217,6 +218,7 @@ export async function visitHyperliquidFillBlocks({
           continue
         }
 
+        if (err instanceof ActionableError) throw err
         throw new Error(`Failed to fetch Hyperliquid fills chunk: ${message}`)
       }
     }

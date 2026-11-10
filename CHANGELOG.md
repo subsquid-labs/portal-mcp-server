@@ -4,10 +4,19 @@
 
 ### Improvements
 
+- **Current MCP dependencies.** Updated the MCP runtime and Explorer SDKs, HTTP routing, and input validation dependencies. Local Explorer builds also rebuild when the dependency lockfile changes.
+- **Current network catalog.** Refreshed the Explorer's chain metadata from Portal and removed fixed network-count claims from plugin descriptions. Use `portal_list_networks` for current availability.
+- **SQD guidance.** Refreshed the bundled skills from the official SQD source, including Portal setup, current Pipes SDK compatibility, and the BigQuery target. Existing tool-permission and credential-handling rules remain in place.
 - **Plugin permissions.** Bundled skills follow the user's existing tool permissions, and ClickHouse examples use explicit local development settings. The offline gate now checks plugin permissions, credential handling, and static assets.
 - **Release reporting.** Added optional publication tracking with a read-only connection preview.
 - **Claude plugin directory listing.** The plugin manifest declares the SQD logo as its icon and links the SQD privacy policy, and the plugin README states what the plugin sends and where. The directory listing notes moved to `distribution/DIRECTORY_SUBMISSION.md`, outside the installed package, and `npm run test:claude-plugin` checks the plugin files against the directory's file rules.
 - **Readable squid-perf report.** The report template is plain HTML that draws its own charts instead of a packed bundle with Chart.js. Reports stay self-contained, work offline, and are about half their previous size.
+
+### Fixes
+
+- **Interrupted streams.** Solana and Hyperliquid analytics fail explicitly when a stream breaks after delivering records, instead of replaying those records and inflating totals. Stream byte limits apply before processing records, and failed readers release the upstream response.
+- **Hyperliquid analytics.** Position flips are no longer labelled as liquidations. Liquidation metrics are explicitly unavailable because Portal fills do not expose the required marker. Long-only activity has a long-biased interpretation and an undefined ratio, and PnL rankings include only traders with the matching profit or loss sign. Volume is identified as per-account fill notional rather than deduplicated market volume.
+- **Cached analytics windows.** Hyperliquid and Solana analytics cache entries use the resolved block window, so an older result cannot be presented with newer coverage or freshness bounds.
 
 ### Documentation
 

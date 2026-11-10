@@ -373,6 +373,10 @@ Transaction: User calls Uniswap Router.swap()
 
 ---
 
+## MCP Tool
+
+`portal_evm_query_traces` covers bounded trace questions without a raw request: the internal calls of one transaction (`transaction_hash` plus its block, or a window of at most 1,000 blocks), recent calls into a contract (`type: ["call"]`, `call_to`, `method`), or contracts deployed by an address (`type: ["create"]`, `create_from`). Keep filtered windows under 5,000 blocks. `field_preset: "full"` adds call input, output, and creation code. State diffs are Stream API only.
+
 ## Performance Tips
 
 **Traces are high-volume data** - complex DeFi transactions can generate 100+ traces.

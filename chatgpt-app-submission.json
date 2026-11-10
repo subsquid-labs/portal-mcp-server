@@ -4,7 +4,7 @@
   "app_info": {
     "display_name": "SQD",
     "subtitle": "Explore blockchain data",
-    "description": "Explore blockchain data across 130+ SQD Portal datasets. Query Ethereum, Base, Solana, Polkadot, Bitcoin, and Hyperliquid. Discover Tron datasets and inspect their heads, freshness, and timestamps. Includes Pipes SDK and Squid SDK guidance.",
+    "description": "Explore blockchain data across SQD Portal datasets. Query Ethereum, Base, Solana, Polkadot, Bitcoin, and Hyperliquid. Discover Tron datasets and inspect their heads, freshness, and timestamps. Includes Pipes SDK and Squid SDK guidance.",
     "category": "DEVELOPER_TOOLS"
   },
   "tools": {

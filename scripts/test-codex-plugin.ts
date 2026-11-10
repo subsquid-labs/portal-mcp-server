@@ -217,7 +217,7 @@ function assertManifest() {
   assertRecord(manifest.interface, 'plugin interface must be an object')
   assert(manifest.interface.displayName === 'SQD', 'plugin display name should be SQD')
   assert(
-    manifest.interface.shortDescription === 'Query blockchain data across 130+ networks.',
+    manifest.interface.shortDescription === 'Query blockchain data across supported networks.',
     'plugin short description should lead with broad network coverage',
   )
   const publicCopy = [
@@ -228,7 +228,7 @@ function assertManifest() {
   ].join(' ')
   for (const phrase of [
     'blockchain',
-    '130+ networks',
+    'supported networks',
     'Ethereum',
     'Base',
     'Solana',
@@ -266,7 +266,7 @@ function assertManifest() {
   }
   const skillsSource = readFileSync(SKILLS_SOURCE_PATH, 'utf8')
   assert(
-    skillsSource.includes('66aebe851af0258bf9d38c0bc43fcbb33ae7e47d'),
+    skillsSource.includes('c51e993d74c06d2d6eda798a7e1283ae93001320'),
     'bundled skills should record the verified upstream commit',
   )
   const portalSkill = readFileSync(resolve(PLUGIN_ROOT, 'skills/portal/SKILL.md'), 'utf8')
@@ -356,7 +356,7 @@ function assertChatgptSubmission() {
   const publicCopy = `${submission.app_info.subtitle} ${submission.app_info.description}`
   for (const phrase of [
     'blockchain',
-    '130+',
+    'Portal datasets',
     'Ethereum',
     'Base',
     'Solana',

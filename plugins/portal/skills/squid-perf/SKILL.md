@@ -1,9 +1,10 @@
 ---
 name: squid-perf
-description: Compare sync-time performance across one or more Squid SDK deployments. Fetches logs via sqd CLI, parses per-service progress, and generates a self-contained HTML report plus a Markdown summary with wall-clock/active-time/downtime breakdowns at percentage-based block breakpoints. Supports single-indexer mode (metrics only, no comparison). Use when the user invokes "/squid-perf", asks to compare Squid deployment sync times, or references squid performance profiling.
+description: Compare sync-time performance across one or more Squid SDK deployments from their sqd logs output, or profile a single deployment, as an HTML report plus a Markdown summary. Use when the user invokes /squid-perf, asks how long a squid took to sync or whether one deployment synced faster than another, or wants sync-time, downtime, or restart metrics for an SQD Cloud deployment.
+license: Apache-2.0
 metadata:
   author: subsquid
-  version: "1.1.13"
+  version: "1.1.14"
   category: core
 ---
 

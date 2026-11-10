@@ -1,12 +1,14 @@
 # Troubleshooting: Error Patterns
 
+For database commands and configuration, use [CREDENTIALS.md](CREDENTIALS.md): inject secrets through the environment or protected client files, and never print them or pass their values as command arguments.
+
 Reference for diagnosing and fixing runtime errors in Pipes SDK indexers. Match the user's error to a pattern and follow the diagnostic + fix steps.
 
 ## Diagnostic Workflow
 
 1. **Read the error message** — get exact text
 2. **Match to a pattern below** — most common issues are catalogued
-3. **Read context** — `src/index.ts`, `package.json`, `.env`, stack trace
+3. **Read context**, `src/index.ts`, `package.json`, non-secret configuration, redacted stack trace
 4. **Verify environment** — database running, Node version, dependencies installed
 5. **Apply fix** — edit files or run commands
 6. **Restart and verify** — confirm logs show expected behavior
@@ -69,12 +71,14 @@ Error: Database 'pipes' does not exist
 
 **Fix:**
 1. Check database is running: `docker ps | grep clickhouse` (or postgres)
-2. Verify `.env` connection string
+2. Verify the configured endpoint and authentication without displaying the connection secret
 3. Start if needed: `docker start clickhouse` or `docker-compose up -d`
 4. Create database if missing:
    ```bash
    docker exec clickhouse clickhouse-client --query "CREATE DATABASE IF NOT EXISTS pipes"
    ```
+
+**BigQuery sink:** failures look nothing like this, there is no local process and no connection string. Credentials come from Google application-default credentials, and the dataset must already exist (the target creates tables, never datasets). Configuration failures surface as `E2201`-`E2213` codes; see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md).
 
 ### Harmless: `Unknown table 'pipes.sync'` on First Run
 
@@ -97,7 +101,8 @@ TypeError: Cannot read property 'from' of undefined
    ```
 4. For custom contracts, regenerate ABI:
    ```bash
-   npx @subsquid/evm-typegen@latest src/contracts 0x... --chain-id 1
+   # First save and validate the local ABI following ABI_GUIDE.md
+   npx @subsquid/evm-typegen@4.6.0 src/contracts ./abi/contract.json
    ```
 
 ## Error Pattern 4b: Proxy Contract ABI — Crash on Startup
@@ -118,9 +123,10 @@ grep "export const events" src/contracts/*.ts
 
 **Fix:**
 1. Find implementation address on Etherscan → "Read as Proxy" tab
-2. Regenerate types from implementation:
+2. Save and validate `abi/implementation.json` following [ABI_GUIDE.md](ABI_GUIDE.md), then regenerate types:
    ```bash
-   npx @subsquid/evm-typegen@latest src/contracts <IMPL_ADDRESS> --chain-id <CHAIN_ID>
+   # First save and validate the local ABI following ABI_GUIDE.md
+   npx @subsquid/evm-typegen@4.6.0 src/contracts ./abi/implementation.json
    ```
 3. Update import in `src/index.ts` to the implementation file
 4. **Keep the proxy address** in `contracts:` — events emit from the proxy
@@ -138,7 +144,7 @@ See [ABI_GUIDE.md](ABI_GUIDE.md) for the full proxy handling guide, including no
 4. **Filter logic is not over-restrictive**
 5. **Sync table conflict** — if another indexer used this database, yours may resume from the wrong block:
    ```bash
-   docker exec <container> clickhouse-client --password <pw> \
+   docker exec <container> clickhouse-client \
      --query "SELECT * FROM <database>.sync FORMAT Vertical"
    ```
    Fix: use a separate database per indexer. If sharing is deliberate, confirm the pipe id and delete only that cursor row; never drop a shared `sync` table.
@@ -162,7 +168,7 @@ See [ABI_GUIDE.md](ABI_GUIDE.md) for the full proxy handling guide, including no
 
 **Diagnosis:** The JS value's precision doesn't match the column's — and this fails in **both** directions, so "1970" alone doesn't tell you which way. Check the column type first:
 ```bash
-docker exec clickhouse clickhouse-client --password <pw> \
+docker exec clickhouse clickhouse-client \
   --query "DESCRIBE TABLE <db>.<table>" | grep timestamp
 ```
 ClickHouse parses `DateTime(3)` as `DateTime64(3)` (millisecond precision). A **seconds** value in that column lands in 1970 just as badly as a **milliseconds** value in a plain `DateTime` (verified: `1782669669` → `1970-01-21`).
@@ -207,13 +213,13 @@ Error: Cannot insert NULL into NOT NULL column
 **Fix:**
 1. Drop and recreate:
    ```bash
-   docker exec clickhouse clickhouse-client --password=default \
+   docker exec clickhouse clickhouse-client \
      --query "DROP TABLE IF EXISTS pipes.table_name"
    ```
 2. Verify schema matches data types (addresses = String, amounts = Float64, block numbers = UInt64, timestamps = DateTime(3))
 3. Clear the affected pipe's data and confirmed cursor row for a fresh start:
    ```bash
-   docker exec clickhouse clickhouse-client --password=default \
+   docker exec clickhouse clickhouse-client \
      --query "ALTER TABLE pipes.sync DELETE WHERE id = '<confirmed-pipe-id>' SETTINGS mutations_sync=1"
    ```
 
@@ -307,7 +313,7 @@ TypeError: evmDecoder is not a function
 SyntaxError: The requested module '@subsquid/pipes/evm' does not provide an export named 'evmPortalSource'
 ```
 
-**Diagnosis:** the project pins the floating `"alpha"` dist-tag (the old alpha CLI's default), which resolves to `1.0.0-alpha.22` as of 2026-08-26. That version already carries the beta-line renames: `evmDecoder` → `evmEventDecoder`, the `evmPortalSource`/`solanaPortalSource`/`hyperliquidFillsPortalSource` aliases removed (only `*PortalStream` remain), `evmPortalMockStream` → `mockEvmPortalStream`, `batchForInsert`/`chunk` → `chunkForInsert`, and query methods such as `addLog` → `addLogRequest`. Confirm with:
+**Diagnosis:** the project pins the floating `"alpha"` dist-tag (the old alpha CLI's default), which resolves to `1.0.0-alpha.25` as of 2026-09-10. That version already carries the beta-line renames: `evmDecoder` → `evmEventDecoder`, the `evmPortalSource`/`solanaPortalSource`/`hyperliquidFillsPortalSource` aliases removed (only `*PortalStream` remain), `evmPortalMockStream` → `mockEvmPortalStream`, `batchForInsert`/`chunk` → `chunkForInsert`, and query methods such as `addLog` → `addLogRequest`. Confirm with:
 ```bash
 npm ls @subsquid/pipes        # installed version
 grep '"@subsquid/pipes"' package.json   # "alpha" = floating tag

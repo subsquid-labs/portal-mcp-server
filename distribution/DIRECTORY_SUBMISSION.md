@@ -20,11 +20,11 @@ Category: `Data & Analytics`
 
 Short description:
 
-> Query blockchain data across 130+ networks with SQD Portal.
+> Query blockchain data across supported networks with SQD Portal.
 
 Long description:
 
-> Query blockchain data across 130+ networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The SQD plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.
+> Query blockchain data across supported networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The SQD plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.
 
 Starter prompts:
 
@@ -61,8 +61,8 @@ Listing values:
 - Connection model: one URL for every user
 - Authentication: none
 - Name: `SQD`
-- Tagline: `Query blockchain data across 130+ networks`
-- Description: `Query blockchain data across 130+ networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid.`
+- Tagline: `Query blockchain data across supported networks`
+- Description: `Query blockchain data across supported networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid.`
 - Documentation: `https://docs.sqd.dev/en/ai/claude-connector`
 - Privacy: `https://sqd.dev/imprint/`
 - Support: `https://sqd.dev/contact/`
@@ -120,7 +120,7 @@ After scanning, every tool shows `readOnlyHint: true`, `destructiveHint: false`,
 
 Release note for the listing:
 
-> Query blockchain data across 130+ networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.
+> Query blockchain data across supported networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.
 
 ### Positive review tests
 
@@ -147,7 +147,7 @@ xAI accepts third-party plugins through a pull request to `xai-org/plugin-market
 ```json
 {
   "name": "sqd",
-  "description": "Query blockchain data across 130+ networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The SQD plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.",
+  "description": "Query blockchain data across supported networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The SQD plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.",
   "category": "development",
   "source": {
     "source": "url",
@@ -211,7 +211,7 @@ Listing values:
 - Logo: `plugins/portal/assets/sqd-logo.svg`
 - Authentication: none
 - Components: one read-only MCP server and four skills
-- Short description: `Query blockchain data across 130+ networks with SQD Portal.`
-- Long description: `Query blockchain data across 130+ networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The SQD plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.`
+- Short description: `Query blockchain data across supported networks with SQD Portal.`
+- Long description: `Query blockchain data across supported networks with SQD Portal, including Ethereum, Base, Solana, Polkadot, Bitcoin, Tron, and Hyperliquid. The SQD plugin also includes Pipes SDK and Squid SDK skills for building, migrating, troubleshooting, and improving blockchain data projects.`
 
 `npm run test:cursor-plugin` validates the package before it is submitted at `https://cursor.com/marketplace/publish`.

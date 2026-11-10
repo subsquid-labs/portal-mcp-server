@@ -484,7 +484,7 @@ Dataset-agnostic tools also work with `tron-mainnet`: `portal_list_networks`, `p
 For durable Tron indexers, the Pipes SDK ships a native Tron module:
 
 ```typescript
-import { TronQueryBuilder, tronPortalStream } from '@subsquid/pipes/tron'
+import { tronPortalStream, tronQuery } from '@subsquid/pipes/tron'
 ```
 
 See the **pipes-sdk** skill for the full pattern.

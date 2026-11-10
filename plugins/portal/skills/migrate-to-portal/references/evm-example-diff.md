@@ -213,7 +213,7 @@ npm i @subsquid/evm-processor@^1.30.0
 
 The user then creates a key at <https://portal.sqd.dev/app> and adds it to the squid as SQD's guide describes. Don't ask for the key, read it, or write it into the project. The `apiKey` gateway setting was added in `@subsquid/evm-processor@1.30.0`; earlier versions reject it.
 
-Reference docs: <https://docs.sqd.dev/changelog/gateway-api-keys> · <https://docs.sqd.dev/en/data/api-keys>
+Reference docs: <https://docs.sqd.dev/announcements/gateway-api-keys> · <https://docs.sqd.dev/en/sdk/squid-sdk/evm/guides/migration/gateway-api-key>
 
 ## Reference templates
 

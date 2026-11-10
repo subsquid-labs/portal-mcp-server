@@ -1,6 +1,8 @@
 # Pipes: Deploy
 
-Deploy Subsquid Pipes indexers to ClickHouse — locally via Docker for development and testing, or to ClickHouse Cloud for production.
+The local examples use development credentials on loopback. For another database, the user configures credentials directly; see [CREDENTIALS.md](CREDENTIALS.md).
+
+Deploy Subsquid Pipes indexers to ClickHouse, locally via Docker for development and testing, or to ClickHouse Cloud for production.
 
 ---
 
@@ -17,8 +19,8 @@ docker ps | grep clickhouse
 # If none exists, create one:
 docker run -d \
   --name clickhouse \
-  -p 8123:8123 \
-  -p 9000:9000 \
+  -p 127.0.0.1:8123:8123 \
+  -p 127.0.0.1:9000:9000 \
   -v clickhouse-data:/var/lib/clickhouse \
   -e CLICKHOUSE_PASSWORD=default \
   -e CLICKHOUSE_USER=default \
@@ -80,8 +82,8 @@ EOF
 ```bash
 docker run -d \
   --name clickhouse \
-  -p 8123:8123 \
-  -p 9000:9000 \
+  -p 127.0.0.1:8123:8123 \
+  -p 127.0.0.1:9000:9000 \
   -v clickhouse-data:/var/lib/clickhouse \
   -v $(pwd)/clickhouse-config/cors.xml:/etc/clickhouse-server/config.d/cors.xml \
   -e CLICKHOUSE_PASSWORD=default \
@@ -111,7 +113,7 @@ EXISTING=$(docker ps --filter "name=clickhouse" --format "{{.Names}}" | head -n 
 if [ -z "$EXISTING" ]; then
   docker run -d \
     --name clickhouse \
-    -p 8123:8123 -p 9000:9000 \
+    -p 127.0.0.1:8123:8123 -p 127.0.0.1:9000:9000 \
     -e CLICKHOUSE_PASSWORD=default \
     -e CLICKHOUSE_USER=default \
     clickhouse/clickhouse-server:latest
@@ -121,7 +123,7 @@ else
 fi
 ```
 
-`clickhouse-client` inside the container signs in with the `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD` the container was started with, so the `docker exec` commands below pass no password. A container started here uses the local development password `default`. For a container that already existed, ask the user for its password when you configure `.env` in Step 5; don't read it out of the container.
+`clickhouse-client` inside the container signs in with the `CLICKHOUSE_USER` and `CLICKHOUSE_PASSWORD` the container was started with, so the `docker exec` commands below pass no password. A container started here uses the local development password `default`. For an existing container, have the user configure the connection directly; do not ask for or recover its password.
 
 **Step 2: Verify container health**
 
@@ -156,12 +158,10 @@ CLICKHOUSE_USER=default
 CLICKHOUSE_PASSWORD=<password>
 ```
 
-**Password Convention Warning:**
-- The CLI-generated `docker-compose.yml` and `.env` both use `password`
-- Standalone `docker run` commands (in this doc and ENVIRONMENT_SETUP.md) use `default`
-- If using the generated `docker-compose.yml`, keep `password` — it is internally consistent
-- If connecting to an existing standalone container, ask the user which password it was started with
-- Mismatched passwords cause: `ClickHouseError: Authentication failed: password is incorrect`
+Use the same injected secret for the indexer and container, following
+[CREDENTIALS.md](CREDENTIALS.md). Replace generated demo passwords before shared
+or hosted use. Validate authentication with `SELECT 1`; do not print `.env` or
+container secrets to compare values.
 
 **Step 6: Start indexer**
 
@@ -198,18 +198,7 @@ docker exec $CONTAINER_NAME clickhouse-client \
 
 ### MCP Setup (Local)
 
-Adding an MCP server changes the user's Claude Code configuration, so ask the user to run this themselves, with the container's password in place of `<password>` (`default` for a container started in Step 1).
-
-```bash
-claude mcp add -t stdio \
-  -e CLICKHOUSE_HOST=localhost \
-  -e CLICKHOUSE_PORT=8123 \
-  -e CLICKHOUSE_USER=default \
-  -e CLICKHOUSE_PASSWORD=<password> \
-  -e CLICKHOUSE_SECURE=false \
-  -e CLICKHOUSE_DATABASE="$DATABASE_NAME" \
-  -- clickhouse /path/to/.local/bin/mcp-clickhouse
-```
+Have the user configure a new MCP server through their client's supported secret store or launch-time environment. Configure host `localhost`, port `8123`, the intended database, and the database user as non-secret settings. The user supplies the password directly through the secret provider. See [CREDENTIALS.md](CREDENTIALS.md#mcp-and-hosted-applications).
 
 ### Local Deployment Summary Template
 
@@ -244,7 +233,7 @@ For production deployments using [ClickHouse Cloud](https://clickhouse.cloud/).
 SERVICE_URL:   https://[service-id].[region].aws.clickhouse.cloud:8443
 DATABASE_NAME: [e.g., "pipes"]
 USERNAME:      default
-PASSWORD:      [actual cloud password — NOT "default"]
+CREDENTIALS:   [configured secret provider / protected netrc file]
 ```
 
 If the user doesn't have a Cloud service yet, direct them to https://clickhouse.cloud/.
@@ -253,9 +242,11 @@ If the user doesn't have a Cloud service yet, direct them to https://clickhouse.
 
 **Step 1: Validate connection (MANDATORY)**
 
+Provision the protected netrc file described in [CREDENTIALS.md](CREDENTIALS.md#clickhouse-cloud-over-http), and set `CLICKHOUSE_NETRC` to its path. The hostname must match the intended Cloud service.
+
 ```bash
 curl -X POST "https://[service-id].[region].aws.clickhouse.cloud:8443/" \
-  --user "default:[password]" \
+  --netrc-file "$CLICKHOUSE_NETRC" \
   -d "SELECT 1" \
   --max-time 10
 # Expected: 1
@@ -270,7 +261,7 @@ Common errors:
 
 ```bash
 curl -X POST "https://[service-id].[region].aws.clickhouse.cloud:8443/" \
-  --user "default:[password]" \
+  --netrc-file "$CLICKHOUSE_NETRC" \
   -d "CREATE DATABASE IF NOT EXISTS [database-name]"
 ```
 
@@ -287,10 +278,10 @@ CLICKHOUSE_PASSWORD=<actual-cloud-password>
 
 ```bash
 curl -X POST "https://[service-id].[region].aws.clickhouse.cloud:8443/" \
-  --user "default:[password]" \
+  --netrc-file "$CLICKHOUSE_NETRC" \
   -d "SELECT id, current, finalized FROM [database-name].sync"
 curl -X POST "https://[service-id].[region].aws.clickhouse.cloud:8443/" \
-  --user "default:[password]" \
+  --netrc-file "$CLICKHOUSE_NETRC" \
   -d "ALTER TABLE [database-name].sync DELETE WHERE id = '<confirmed-pipe-id>' SETTINGS mutations_sync=1"
 ```
 
@@ -307,7 +298,7 @@ Check the first log line — same rule as local: `"Start indexing from X"` is co
 
 ```bash
 curl -X POST "https://[service-id].[region].aws.clickhouse.cloud:8443/" \
-  --user "default:[password]" \
+  --netrc-file "$CLICKHOUSE_NETRC" \
   -d "SELECT COUNT(*) FROM [database-name].[main-table]"
 # Expected: > 0
 ```
@@ -316,7 +307,7 @@ Sample data:
 
 ```bash
 curl -X POST "https://[service-id].[region].aws.clickhouse.cloud:8443/" \
-  --user "default:[password]" \
+  --netrc-file "$CLICKHOUSE_NETRC" \
   -d "SELECT * FROM [database-name].[main-table] LIMIT 5 FORMAT Vertical"
 ```
 
@@ -324,7 +315,7 @@ Sync progress:
 
 ```bash
 curl -X POST "https://[service-id].[region].aws.clickhouse.cloud:8443/" \
-  --user "default:[password]" \
+  --netrc-file "$CLICKHOUSE_NETRC" \
   -d "
 SELECT
     COUNT(*) as total_events,
@@ -337,18 +328,7 @@ FORMAT Vertical"
 
 ### MCP Setup (Cloud)
 
-As with the local setup, ask the user to run this themselves with their Cloud password in place of `[password]`.
-
-```bash
-claude mcp add -t stdio \
-  -e CLICKHOUSE_HOST=[service-id].[region].aws.clickhouse.cloud \
-  -e CLICKHOUSE_PORT=8443 \
-  -e CLICKHOUSE_USER=default \
-  -e CLICKHOUSE_PASSWORD=[password] \
-  -e CLICKHOUSE_SECURE=true \
-  -e CLICKHOUSE_DATABASE=[database-name] \
-  -- clickhouse-cloud /path/to/.local/bin/mcp-clickhouse
-```
+Have the user configure the MCP server with the Cloud hostname, port `8443`, TLS enabled, and the intended database/user. The user supplies the password directly through the client's supported secret store or launch-time environment. See [CREDENTIALS.md](CREDENTIALS.md#mcp-and-hosted-applications).
 
 ### Deploying the Indexer Application (Cloud Options)
 
@@ -363,16 +343,7 @@ ClickHouse Cloud is the database. The indexer process itself can run anywhere:
 
 **Railway quick reference:**
 
-```bash
-npm i -g @railway/cli
-railway login && railway init
-```
-
-Ask the user to set `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_USER`, and `CLICKHOUSE_PASSWORD` on the Railway service with their own values, in the Railway dashboard or with `railway variables set`. Don't copy them out of the local `.env`. Then deploy:
-
-```bash
-railway up
-```
+For an authorized deployment, configure `CLICKHOUSE_URL`, `CLICKHOUSE_DATABASE`, and `CLICKHOUSE_USER` for the target service. Have the user supply `CLICKHOUSE_PASSWORD` through Railway's secret-variable interface or an approved secret manager. Deploy only when the user has authorized that deployment. Keep secret values out of CLI arguments and deployment summaries.
 
 ### Cloud Deployment Summary Template
 
@@ -400,8 +371,8 @@ FROM [database-name].[main-table];
 **Error**: `Code: 516. DB::Exception: Authentication failed` or `password is incorrect`
 
 **Fix**:
-- Local: a container started in Step 1 uses `default`; for another container, ask the user which password it was started with
-- Cloud: Verify password in ClickHouse Cloud console
+- Local: verify the configured credential source with `SELECT 1`; do not inspect or print container secrets
+- Cloud: have the credential provider verify the configured secret for this service
 - Update `.env` with the correct password
 
 ### Container Port Conflict (Local only)
