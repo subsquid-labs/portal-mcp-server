@@ -1608,6 +1608,7 @@ export const TOOL_SPECS: ToolSpec[] = [
         network: 'hyperliquid-fills',
         timeframe: '1h',
         coin: ['BTC'],
+        fee_token: ['USDC'],
         response_format: 'summary',
         limit: 25,
       })
@@ -1621,6 +1622,17 @@ export const TOOL_SPECS: ToolSpec[] = [
           `Expected a finite ${key} in the Hyperliquid fill summary`,
         )
       }
+      assert(summary.fees_status === 'available', 'USDC-only fill summaries should have a known USD fee total')
+      assert(
+        Array.isArray(summary.fees_by_token) &&
+          summary.fees_by_token.length === 1 &&
+          summary.fees_by_token[0].fee_token === 'USDC',
+        'Expected only verified USDC fees in the summary fixture',
+      )
+      assert(
+        summary.unknown_fee_token_fills === 0 && summary.invalid_fee_fills === 0,
+        'USDC fee fixture should have no missing units or invalid amounts',
+      )
       assert(
         typeof summary.direction_breakdown === 'object' && summary.direction_breakdown !== null,
         'Expected a direction breakdown in the Hyperliquid fill summary',
