@@ -187,11 +187,11 @@ Grok chat accepts SQD as a Custom connector using `https://portal.sqd.dev/mcp` w
 
 ## Gemini CLI extension gallery
 
-Gemini CLI installs the `sqd.tar.gz` release asset. The archive keeps `gemini-extension.json` at its root and includes the same four official SQD skills from `plugins/portal/skills`.
+Gemini CLI installs the release archive for the user's platform: `darwin.sqd.tar.gz`, `linux.sqd.tar.gz`, or `win32.sqd.tar.gz`. All three are copies of `sqd.tar.gz`. Gemini only downloads an asset named for the platform or a release's only asset, and every release also carries `sqd.mcpb`, so without the platform names `gemini extensions install https://github.com/subsquid-labs/portal-mcp-server` clones the repository root and fails. The archive keeps `gemini-extension.json` at its root and includes the same four official SQD skills from `plugins/portal/skills`.
 
 1. `npm run test:gemini-extension` validates the manifest.
-2. `npm run package:gemini` builds `dist/gemini/sqd.tar.gz`.
-3. The archive is uploaded to the matching GitHub release; the release workflow does this on every `v*` tag.
+2. `npm run package:gemini` builds `dist/gemini/sqd.tar.gz` and its three platform copies.
+3. The archives are uploaded to the matching GitHub release; the release workflow does this on every `v*` tag.
 4. The repository carries the `gemini-cli-extension` GitHub topic, which the gallery indexes daily. No separate submission is required.
 
 The extension identifier is `sqd` because Gemini requires lowercase names. The public product name remains `SQD` in the repository, description, documentation, and MCP server name.

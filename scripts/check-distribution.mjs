@@ -2,6 +2,8 @@
 
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
 
+import { geminiReleaseAssetNames } from './gemini-release-assets.mjs'
+
 const SERVER_NAME = 'io.github.subsquid-labs/portal-mcp-server'
 const REPOSITORY = 'https://github.com/subsquid-labs/portal-mcp-server'
 const SERVER_URL = 'https://portal.sqd.dev/mcp'
@@ -303,8 +305,9 @@ async function checkGeminiPrerequisites(version) {
   if (!repository.topics?.includes('gemini-cli-extension')) {
     return result('Gemini discovery prerequisites', 'fail', 'repository topic gemini-cli-extension is missing')
   }
-  if (!release.assets?.some((asset) => asset.name === 'sqd.tar.gz')) {
-    return result('Gemini discovery prerequisites', 'fail', `release v${version} is missing sqd.tar.gz`)
+  const missing = geminiReleaseAssetNames().filter((name) => !release.assets?.some((asset) => asset.name === name))
+  if (missing.length > 0) {
+    return result('Gemini discovery prerequisites', 'fail', `release v${version} is missing ${missing.join(', ')}`)
   }
   return result('Gemini discovery prerequisites', 'pass', `topic and v${version} release archive are present`)
 }

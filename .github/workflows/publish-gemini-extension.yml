@@ -68,17 +68,19 @@ jobs:
             --jq '.names | index("gemini-cli-extension")' \
             | grep -qv '^null$'
 
-      - name: Upload canonical Gemini archive
+      - name: Upload Gemini archives
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
-        run: gh release upload "$RELEASE_TAG" dist/gemini/sqd.tar.gz --clobber
+        run: gh release upload "$RELEASE_TAG" dist/gemini/*sqd.tar.gz --clobber
 
       - name: Verify release asset
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: |
-          gh release view "$RELEASE_TAG" --json assets \
-            --jq '.assets[] | select(.name == "sqd.tar.gz") | .url' \
-            | grep -q '^https://'
+          for name in sqd.tar.gz darwin.sqd.tar.gz linux.sqd.tar.gz win32.sqd.tar.gz; do
+            gh release view "$RELEASE_TAG" --json assets \
+              --jq ".assets[] | select(.name == \"$name\") | .url" \
+              | grep -q '^https://'
+          done

@@ -3,8 +3,10 @@
 import { spawnSync } from 'node:child_process'
 import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { GEMINI_PLATFORMS } from './gemini-release-assets.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const pluginRoot = join(repoRoot, 'plugins', 'portal')
@@ -29,6 +31,11 @@ try {
     throw new Error(`tar failed: ${archive.stderr || archive.stdout}`)
   }
   console.log(outputPath)
+  for (const platform of GEMINI_PLATFORMS) {
+    const platformPath = join(dirname(outputPath), `${platform}.${basename(outputPath)}`)
+    copyFileSync(outputPath, platformPath)
+    console.log(platformPath)
+  }
 } finally {
   rmSync(stageRoot, { recursive: true, force: true })
 }

@@ -10,6 +10,8 @@
 
 - **Time series timestamp windows.** `from_timestamp` and `to_timestamp` now set the chart's span. The span used to come from `duration`, 6 hours by default, so a 2-hour window was backfilled with 4 hours of earlier blocks and counted them, and a 24-hour window dropped everything older than 6 hours. The answer names the window's start and end instead of "last 6h", and `duration` is ignored when `from_timestamp` is set.
 
+- **Gemini install.** `gemini extensions install https://github.com/subsquid-labs/portal-mcp-server` failed with "Configuration file not found" since v0.8.5, because Gemini CLI only picks a release asset named for the platform or a release's only asset, and releases also carry `sqd.mcpb`. Releases now include `darwin.`, `linux.`, and `win32.` copies of the Gemini archive.
+
 ### Documentation
 
 - The README installs the Codex plugin from the GitHub marketplace, so it works without a clone.

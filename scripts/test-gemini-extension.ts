@@ -5,6 +5,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import {
+  GEMINI_ARCHIVE,
+  GEMINI_PLATFORMS,
+  geminiReleaseAssetNames,
+  geminiSelectsAsset,
+} from './gemini-release-assets.mjs'
+
 type JsonObject = Record<string, unknown>
 
 const PLUGIN_ROOT = 'plugins/portal'
@@ -87,11 +94,39 @@ function assertArchive() {
     for (const prefix of ['.claude-plugin', '.codex-plugin', '.cursor-plugin']) {
       assert(!files.some((file) => file.startsWith(prefix)), `Gemini archive should not duplicate ${prefix}`)
     }
+    const archive = readFileSync(archivePath)
+    for (const platform of GEMINI_PLATFORMS) {
+      const copy = join(tempRoot, `${platform}.${GEMINI_ARCHIVE}`)
+      assert(existsSync(copy), `Gemini packaging should write ${platform}.${GEMINI_ARCHIVE}`)
+      assert(readFileSync(copy).equals(archive), `${platform}.${GEMINI_ARCHIVE} should match ${GEMINI_ARCHIVE}`)
+    }
   } finally {
     rmSync(tempRoot, { recursive: true, force: true })
   }
 }
 
+/*
+ * `gemini extensions install <repo>` installs a release asset only when it can
+ * pick one. With sqd.mcpb beside the generic archive it picked none and cloned
+ * the repository root, which has no manifest.
+ */
+function assertGitHubInstallPicksArchive() {
+  const release = ['sqd.mcpb', ...geminiReleaseAssetNames()]
+  for (const [platform, arch] of [
+    ['darwin', 'arm64'],
+    ['darwin', 'x64'],
+    ['linux', 'x64'],
+    ['linux', 'arm64'],
+    ['win32', 'x64'],
+  ]) {
+    assert(
+      geminiSelectsAsset(release, platform, arch) === `${platform}.${GEMINI_ARCHIVE}`,
+      `Gemini CLI on ${platform}/${arch} should install ${platform}.${GEMINI_ARCHIVE} from the release`,
+    )
+  }
+}
+
 assertManifest()
 assertArchive()
+assertGitHubInstallPicksArchive()
 console.log('Gemini extension release gate passed')
