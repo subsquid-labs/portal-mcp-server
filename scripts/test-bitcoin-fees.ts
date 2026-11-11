@@ -10,6 +10,7 @@
 
 import { btcToSats, computeBitcoinBlockFees, satsToBtcString, totalBitcoinFees } from '../src/helpers/bitcoin-fees.ts'
 import { buildAnalysisCoverage, buildAnalysisSectionCoverage } from '../src/helpers/result-metadata.ts'
+import { fetchPortalText } from './live-portal-probe.ts'
 import { callToolWithRetry, closeTestClient, connectTestClient, isBoundedUpstreamToolError } from './test-helpers.ts'
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -194,16 +195,11 @@ type DirectBlock = {
 
 /* Independent float-free recomputation straight from Portal rows: integer
    satoshis per value via toFixed(8), so a drift in the helper would show. */
-/* Paging the reference means several requests in a row, and Portal answers an
-   overloaded moment with 429, 502, 503 or 529. Backing off is the difference
-   between a busy minute and a failed release gate. */
-const OVERLOADED = new Set([429, 502, 503, 529])
-
-async function directStreamRequest(fromBlock: number, toBlock: number): Promise<Response> {
-  let lastStatus = 0
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1_000 * 2 ** (attempt - 1)))
-    const response = await fetch('https://portal.sqd.dev/datasets/bitcoin-mainnet/stream', {
+async function directStreamRequest(fromBlock: number, toBlock: number): Promise<string> {
+  return fetchPortalText(
+    `Bitcoin fee reference blocks ${fromBlock}-${toBlock}`,
+    'https://portal.sqd.dev/datasets/bitcoin-mainnet/stream',
+    {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -219,13 +215,8 @@ async function directStreamRequest(fromBlock: number, toBlock: number): Promise<
         inputs: [{}],
         outputs: [{}],
       }),
-    })
-    if (response.ok) return response
-    lastStatus = response.status
-    if (!OVERLOADED.has(response.status)) break
-  }
-  assert(false, `direct Portal stream failed: HTTP ${lastStatus}`)
-  throw new Error('unreachable')
+    },
+  )
 }
 
 /*
@@ -246,8 +237,8 @@ async function directFeeSats(
   let nextBlock = fromBlock
   for (let request = 0; nextBlock <= toBlock; request += 1) {
     assert(request < 200, `direct Portal stream did not reach block ${toBlock} in 200 requests`)
-    const response = await directStreamRequest(nextBlock, toBlock)
-    const lines = (await response.text()).split('\n').filter((line) => line.trim().length > 0)
+    const text = await directStreamRequest(nextBlock, toBlock)
+    const lines = text.split('\n').filter((line) => line.trim().length > 0)
     assert(lines.length > 0, `direct Portal stream returned nothing for blocks ${nextBlock}-${toBlock}`)
     let highest = nextBlock - 1
     for (const line of lines) {

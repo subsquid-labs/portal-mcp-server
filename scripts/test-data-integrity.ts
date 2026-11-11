@@ -17,12 +17,11 @@ import {
   buildEvmLogFields,
   buildEvmTransactionFields,
   buildSolanaTransactionFields,
-  buildSubstrateBlockFields,
-  buildSubstrateEventFields,
   buildTronBlockFields,
   buildTronLogFields,
   buildTronTransactionFields,
 } from '../src/helpers/fields.ts'
+import { fetchPortalText } from './live-portal-probe.ts'
 import { assert, assertChatSurface, callToolWithRetry, closeTestClient, connectTestClient } from './test-helpers.ts'
 
 const PORTAL = 'https://portal.sqd.dev'
@@ -43,44 +42,20 @@ const TRON_TRX_SENDER_BASE58 = 'TQhpXvhSbXWgdYg8qmK7kQeL3rsfxxojNc'
 type JsonRecord = Record<string, any>
 
 async function fetchNdjson(dataset: string, body: JsonRecord): Promise<JsonRecord[]> {
-  let lastError: Error | undefined
-  const maxAttempts = 4
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const response = await fetch(`${PORTAL}/datasets/${dataset}/stream`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const text = await response.text()
-      if (!response.ok) {
-        const error = new Error(`Portal HTTP ${response.status}: ${text.slice(0, 300)}`)
-        const retryable = response.status === 429 || response.status === 529 || response.status >= 500
-        if (!retryable) {
-          Object.assign(error, { retryable: false })
-          throw error
-        }
-        if (attempt === maxAttempts) throw error
-
-        lastError = error
-        const retryAfterSeconds = Number(response.headers.get('retry-after') ?? '')
-        const retryDelayMs =
-          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1_000 : attempt * 1_500
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
-        continue
-      }
-      return text
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as JsonRecord)
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      if ((error as { retryable?: boolean }).retryable === false) throw lastError
-      if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1_500))
-    }
-  }
-  throw lastError ?? new Error(`Portal request failed for ${dataset}`)
+  const text = await fetchPortalText(
+    `${dataset} integrity reference blocks ${body.fromBlock}-${body.toBlock}`,
+    `${PORTAL}/datasets/${dataset}/stream`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as JsonRecord)
 }
 
 function flatten(blocks: JsonRecord[], key: string): JsonRecord[] {
@@ -511,15 +486,21 @@ async function main() {
       `PASS  Ethereum block ${ETH_TYPE_ONE_BLOCK}: all ${directTraces.length} traces of the pinned transaction match Portal with flattened action and result fields`,
     )
 
+    const eventIdentity = (event: JsonRecord) => `${event.block_number}:${event.index}`
     const directEvents = flatten(
       await fetchNdjson('polkadot', {
         type: 'substrate',
         fromBlock: POLKADOT_FROM,
         toBlock: POLKADOT_TO,
-        fields: { block: buildSubstrateBlockFields(), event: buildSubstrateEventFields() },
+        includeAllBlocks: true,
+        fields: { block: { number: true }, event: { index: true, name: true } },
         events: [{}],
       }),
       'events',
+    )
+    assert(
+      directEvents.length === 180 && new Set(directEvents.map(eventIdentity)).size === 180,
+      'The three pinned Polkadot blocks should return all 180 unique events',
     )
     const pagedEvents: JsonRecord[] = []
     let substrateCursor: string | undefined
@@ -547,11 +528,11 @@ async function main() {
     } while (substrateCursor)
     assertEqualSet(
       pagedEvents.map((item: JsonRecord) => item.primary_id),
-      directEvents.map((item) => `${item.block_number}:${item.index}`),
+      directEvents.map(eventIdentity),
       'Polkadot events',
     )
     for (const item of pagedEvents) {
-      const source = directEvents.find((row) => `${row.block_number}:${row.index}` === item.primary_id)
+      const source = directEvents.find((row) => eventIdentity(row) === item.primary_id)
       assert(source?.name === item.event_name, 'Polkadot event name should match Portal')
     }
     assert(
@@ -563,7 +544,21 @@ async function main() {
     for (const event of directEvents) eventCounts.set(event.name, (eventCounts.get(event.name) ?? 0) + 1)
     const rareEventName = [...eventCounts.entries()].sort((left, right) => left[1] - right[1])[0]?.[0]
     assert(typeof rareEventName === 'string', 'Polkadot fixture should expose an event name')
-    const directEventSample = directEvents.filter((event) => event.name === rareEventName)
+    const directEventSample = flatten(
+      await fetchNdjson('polkadot', {
+        type: 'substrate',
+        fromBlock: POLKADOT_FROM,
+        toBlock: POLKADOT_TO,
+        fields: { block: { number: true }, event: { index: true, name: true, args: true } },
+        events: [{ name: [rareEventName] }],
+      }),
+      'events',
+    )
+    assertEqualSet(
+      directEventSample.map(eventIdentity),
+      directEvents.filter((event) => event.name === rareEventName).map(eventIdentity),
+      'Direct Polkadot event payload sample',
+    )
     const substrateSample = await call('portal_substrate_query_events', {
       network: 'polkadot',
       from_block: POLKADOT_FROM,
@@ -574,11 +569,11 @@ async function main() {
     })
     assertEqualSet(
       substrateSample.items.map((item: JsonRecord) => item.primary_id),
-      directEventSample.map((item) => `${item.block_number}:${item.index}`),
+      directEventSample.map(eventIdentity),
       'Polkadot event payload sample',
     )
     for (const item of substrateSample.items as JsonRecord[]) {
-      const source = directEventSample.find((row) => `${row.block_number}:${row.index}` === item.primary_id)
+      const source = directEventSample.find((row) => eventIdentity(row) === item.primary_id)
       assert(source?.name === item.name, 'Polkadot sampled event name should match Portal')
       assert(stable(source?.args) === stable(item.args), 'Polkadot sampled event arguments should match Portal')
     }

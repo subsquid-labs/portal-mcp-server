@@ -2,12 +2,31 @@
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-11
+
+Portal scans recover from interruptions without replaying records, and analytics disclose unavailable evidence and fee conversions. This release updates MCP compatibility and bundled SQD guidance, and gives live tests bounded rate-limit recovery.
+
 ### Improvements
 
+- **Rate-aware live tests.** Direct Portal reference checks share bounded retries that honor rate-limit delays, including overloads and HTTP `Retry-After` dates. Timestamp verification retries transient failures and limits concurrent probes. Exhausted retries and data mismatches still fail, and the offline gate verifies recovery and failure behavior without network access.
+- **Current MCP Apps SDK.** Upgraded the Explorer to MCP Apps SDK 2.1.0. Removed the fixed bundle-size budgets from the build and App contract gate; resource byte counts and integrity checks remain available.
+- **Current MCP dependencies.** Updated the MCP runtime SDK, HTTP routing, and input validation dependencies. Local Explorer builds also rebuild when the dependency lockfile changes.
+- **Current network catalog.** Refreshed the Explorer's chain metadata from Portal and removed fixed network-count claims from plugin descriptions. Use `portal_list_networks` for current availability.
+- **SQD guidance.** Refreshed the bundled skills from the official SQD source, including Portal setup, current Pipes SDK compatibility, and the BigQuery target. Existing tool-permission and credential-handling rules remain in place.
 - **Plugin permissions.** Bundled skills follow the user's existing tool permissions, and ClickHouse examples use explicit local development settings. The offline gate now checks plugin permissions, credential handling, and static assets.
 - **Release reporting.** Added optional publication tracking with a read-only connection preview.
 - **Claude plugin directory listing.** The plugin manifest declares the SQD logo as its icon and links the SQD privacy policy, and the plugin README states what the plugin sends and where. The directory listing notes moved to `distribution/DIRECTORY_SUBMISSION.md`, outside the installed package, and `npm run test:claude-plugin` checks the plugin files against the directory's file rules.
 - **Readable squid-perf report.** The report template is plain HTML that draws its own charts instead of a packed bundle with Chart.js. Reports stay self-contained, work offline, and are about half their previous size.
+
+### Fixes
+
+- **Wallet counterparty evidence.** EVM wallet results expose the exact asset-movement counterparty table in the Explorer alongside the ranking.
+- **Base time windows.** Updated the block estimate for Denim's 200 ms blocks. Base mainnet and Sepolia charts default to 15 minutes and suggest a shorter window when a request exceeds the scan limit. Estimated windows require an indexed head timestamp and refuse ranges crossing the Denim cadence change; verified historical timestamp queries remain available.
+- **Interrupted streams.** Adaptive scans resume after the last completed block when a size limit or timeout interrupts delivery. Buffered scans can discard an attempt and split safely. Grouped contract charts retain their reduced chunk size between passes within the shared recovery budget. Failures without a safe checkpoint return an explicit error instead of replaying records and inflating totals. Errors retain their cause and delivery metadata. Stream byte limits apply before processing records, and failed readers release the upstream response.
+- **Hyperliquid analytics.** Position flips are no longer labelled as liquidations. Liquidation metrics are explicitly unavailable because Portal fills do not expose the required marker. Long-only activity has a long-biased interpretation and an undefined ratio, and PnL rankings include only traders with the matching profit or loss sign. Volume is identified as per-account fill notional rather than deduplicated market volume.
+- **Hyperliquid fee units.** Analytics, fill summaries, and wallet summaries request fee tokens and keep signed fees grouped by token. USD totals are unavailable when amounts or units are missing, invalid, or require conversion. Wallet cards and answer guidance use the explicit USD total and fee status. Realized PnL is labelled in the quote asset independently of the fee token. The Explorer no longer shows an always-unavailable liquidation card.
+- **Solana program counts.** A failed optional instruction scan discards its partial counts and marks program rankings unavailable in every response format. Transaction analytics remain available.
+- **Cached analytics windows.** Hyperliquid and Solana analytics cache entries use the resolved block window, so an older result cannot be presented with newer coverage or freshness bounds.
 
 ### Documentation
 

@@ -1,5 +1,7 @@
 import { PORTAL_URL } from '../../constants/index.js'
+import { ActionableError } from '../../helpers/errors.js'
 import { portalFetchStreamRange, portalFetchStreamVisit } from '../../helpers/fetch.js'
+import { StreamRecoveryBudget, getStreamRangeRecovery } from '../../helpers/stream-progress.js'
 
 export type HyperliquidFillBlock = {
   header?: {
@@ -156,6 +158,7 @@ export async function visitHyperliquidFillBlocks({
     return ranges
   }
 
+  const recoveryBudget = new StreamRecoveryBudget()
   const visitRange = async (rangeFrom: number, rangeTo: number) => {
     let currentFrom = rangeFrom
     let chunkSize = Math.min(initialChunkSize, Math.max(1, rangeTo - rangeFrom + 1))
@@ -211,12 +214,19 @@ export async function visitHyperliquidFillBlocks({
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
 
-        if (message.includes('Response too large') && chunkSize > minChunkSize) {
+        const recovery = getStreamRangeRecovery(err, currentFrom, chunkTo, {
+          budget: recoveryBudget,
+          allowTimeout: true,
+        })
+        if (recovery && (recovery.fromBlock > currentFrom || chunkSize > minChunkSize)) {
+          if (recovery.deliveredRecords > 0) chunksFetched++
+          currentFrom = recovery.fromBlock
           chunkSize = Math.max(minChunkSize, Math.floor(chunkSize / 2))
           chunkSizeReduced = true
           continue
         }
 
+        if (err instanceof ActionableError) throw err
         throw new Error(`Failed to fetch Hyperliquid fills chunk: ${message}`)
       }
     }

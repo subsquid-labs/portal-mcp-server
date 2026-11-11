@@ -2,6 +2,7 @@
 
 import { EVENT_SIGNATURES } from '../src/constants/index.js'
 import { decodeLog } from '../src/tools/utilities/decode-logs.js'
+import { fetchPortalText } from './live-portal-probe.ts'
 import {
   assert,
   callToolWithRetry,
@@ -521,22 +522,24 @@ async function main() {
           )
 
           const parityBlock = context.baseHead - 10
-          const directResponse = await fetch('https://portal.sqd.dev/datasets/base-mainnet/stream', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              type: 'evm',
-              fromBlock: parityBlock,
-              toBlock: parityBlock,
-              fields: {
-                block: { number: true },
-                transaction: { from: true, to: true },
-              },
-              transactions: [{}],
-            }),
-          })
-          assert(directResponse.ok, `Expected direct Portal aggregate fixture (${directResponse.status})`)
-          const directText = await directResponse.text()
+          const directText = await fetchPortalText(
+            'Base aggregate parity',
+            'https://portal.sqd.dev/datasets/base-mainnet/stream',
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                type: 'evm',
+                fromBlock: parityBlock,
+                toBlock: parityBlock,
+                fields: {
+                  block: { number: true },
+                  transaction: { from: true, to: true },
+                },
+                transactions: [{}],
+              }),
+            },
+          )
           const directTransactions = directText
             .trim()
             .split('\n')

@@ -8,13 +8,13 @@ Portal API streams over HTTP. Long-running syncs (millions of blocks) will inevi
 
 - Connection errors: `ETIMEDOUT`, `ECONNRESET`, `TypeError: terminated`, `fetch failed`
 - HTTP timeouts
-- Retryable statuses: `429`, `502`, `503`, `504`, `521`–`524` — including Portal's structured `overloaded` (`rate_limit_error`) and `availability_error` responses
+- Retryable statuses: `429`, `502`, `503`, `504`, `521`-`524`, `529`. including Portal's structured `overloaded` (`rate_limit_error`) and `availability_error` responses
 
 It honors the `Retry-After` header when Portal sends one (mandatory on `overloaded`), otherwise backs off on a fixed schedule (10ms → 100ms → 500ms → 2s → 10s → 20s, then 20s repeating). A network blip therefore does *not* kill the process — it shows up as a stalled sync with retry warnings.
 
 What still kills the process (and what supervisors are for):
 - **Decode errors** — an undecodable record is fatal by default (see the `onError` hook in [SDK_FEATURES.md](SDK_FEATURES.md#decode-error-hook-onerror))
-- **Sink failures** — ClickHouse/Postgres down or misconfigured, schema drift
+- **Sink failures**, ClickHouse/Postgres down or misconfigured, schema drift; for BigQuery, a missing dataset or a declared schema that no longer matches the live table (see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md))
 - **Non-retryable Portal errors** — `invalid_request_error` (`malformed_request`, `unknown_dataset`): the request is wrong and retrying can't help
 - **Process-level faults** — OOM kills, unhandled exceptions in your `.pipe()` transforms, host reboots
 

@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+
 import { DEFAULT_RETRIES, DEFAULT_TIMEOUT, STREAM_TIMEOUT } from '../constants/index.js'
 import { portalRequestsTotal } from '../metrics.js'
 import { type UpstreamSpan, startUpstreamSpan } from '../tracing.js'
@@ -10,6 +12,7 @@ import {
   getPortalRequestSignal,
   isAbortLike,
 } from './request-context.js'
+import { PortalStreamError, StreamDelivery } from './stream-progress.js'
 
 // ============================================================================
 
@@ -135,6 +138,17 @@ function humanBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)}MB`
   if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`
   return `${bytes} bytes`
+}
+
+function enforceStreamByteLimit(bytes: number, maxBytes: number): void {
+  if (bytes > maxBytes) {
+    throw new ActionableError(
+      `Response too large (>${humanBytes(maxBytes)}). Add filters or reduce block range.`,
+      ['Add filters or reduce the block range'],
+      { max_bytes: maxBytes },
+      { code: 'response_too_large', origin: 'client_input', retryable: false },
+    )
+  }
 }
 
 function normalizePortalFetchStreamOptions(
@@ -416,6 +430,7 @@ export async function portalFetchStream(
         const results: unknown[] = []
         let matchedItems = 0
         const text = await response.text()
+        enforceStreamByteLimit(Buffer.byteLength(text, 'utf8'), options.maxBytes)
 
         for (const line of text.split('\n')) {
           const trimmed = line.trim()
@@ -448,9 +463,9 @@ export async function portalFetchStream(
           const { done, value } = await reader.read()
           if (done) break
 
-          const chunk = decoder.decode(value, { stream: true })
           totalBytes += value.byteLength
-          buffer += chunk
+          enforceStreamByteLimit(totalBytes, options.maxBytes)
+          buffer += decoder.decode(value, { stream: true })
 
           let newlineIdx: number
           while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
@@ -473,11 +488,6 @@ export async function portalFetchStream(
               return results
             }
           }
-
-          if (totalBytes > options.maxBytes) {
-            await reader.cancel()
-            throw new Error(`Response too large (>${humanBytes(options.maxBytes)}). Add filters or reduce block range.`)
-          }
         }
 
         buffer += decoder.decode()
@@ -494,6 +504,8 @@ export async function portalFetchStream(
       } finally {
         /* Once, on the way out, rather than on every chunk. */
         upstream?.setAttribute('mcp.upstream.bytes', totalBytes)
+        // An errored stream rejects cancellation; preserve the original failure.
+        await reader.cancel().catch(() => undefined)
         reader.releaseLock()
       }
 
@@ -526,6 +538,9 @@ export async function portalFetchStream(
  * without materializing the full response in memory.
  *
  * Returns the number of processed NDJSON records.
+ * A failed response is never replayed after a record reaches the visitor.
+ * Adaptive callers may resume only from a validated completed-block checkpoint;
+ * all other callers must discard accumulated state on failure.
  */
 export async function portalFetchStreamVisit(
   url: string,
@@ -543,6 +558,8 @@ export async function portalFetchStreamVisit(
     const abortContext = createRequestAbortContext(attemptTimeout)
     let releaseAdmission: (() => void) | undefined
     let upstream: UpstreamSpan | undefined
+    let processedRecords = 0
+    const delivery = new StreamDelivery()
 
     try {
       releaseAdmission = await portalAdmission.acquire(abortContext.signal)
@@ -603,11 +620,11 @@ export async function portalFetchStreamVisit(
         throw parsePortalError(response.status, errorText, { url, query: body })
       }
 
-      let processedRecords = 0
       let matchedItems = 0
 
       if (!response.body) {
         const text = await response.text()
+        enforceStreamByteLimit(Buffer.byteLength(text, 'utf8'), normalizedOptions.maxBytes)
 
         for (const line of text.split('\n')) {
           const trimmed = line.trim()
@@ -616,7 +633,7 @@ export async function portalFetchStreamVisit(
           const parsed = JSON.parse(trimmed)
           processedRecords++
           matchedItems += countMatchingItems(parsed, stopAfterItems)
-          await options.onRecord(parsed)
+          await delivery.deliver(parsed, options.onRecord, getRecordBlockNumber)
 
           if (normalizedOptions.maxBlocks > 0 && processedRecords >= normalizedOptions.maxBlocks) {
             return processedRecords
@@ -639,9 +656,9 @@ export async function portalFetchStreamVisit(
           const { done, value } = await reader.read()
           if (done) break
 
-          const chunk = decoder.decode(value, { stream: true })
           totalBytes += value.byteLength
-          buffer += chunk
+          enforceStreamByteLimit(totalBytes, normalizedOptions.maxBytes)
+          buffer += decoder.decode(value, { stream: true })
 
           let newlineIdx: number
           while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
@@ -653,7 +670,7 @@ export async function portalFetchStreamVisit(
             const parsed = JSON.parse(line)
             processedRecords++
             matchedItems += countMatchingItems(parsed, stopAfterItems)
-            await options.onRecord(parsed)
+            await delivery.deliver(parsed, options.onRecord, getRecordBlockNumber)
 
             if (normalizedOptions.maxBlocks > 0 && processedRecords >= normalizedOptions.maxBlocks) {
               await reader.cancel()
@@ -665,13 +682,6 @@ export async function portalFetchStreamVisit(
               return processedRecords
             }
           }
-
-          if (totalBytes > normalizedOptions.maxBytes) {
-            await reader.cancel()
-            throw new Error(
-              `Response too large (>${humanBytes(normalizedOptions.maxBytes)}). Add filters or reduce block range.`,
-            )
-          }
         }
 
         buffer += decoder.decode()
@@ -680,19 +690,30 @@ export async function portalFetchStreamVisit(
           const parsed = JSON.parse(remaining)
           processedRecords++
           matchedItems += countMatchingItems(parsed, stopAfterItems)
-          await options.onRecord(parsed)
+          await delivery.deliver(parsed, options.onRecord, getRecordBlockNumber)
         }
       } finally {
         /* Once, on the way out, rather than on every chunk. */
         upstream?.setAttribute('mcp.upstream.bytes', totalBytes)
+        // An errored stream rejects cancellation; preserve the original failure.
+        await reader.cancel().catch(() => undefined)
         reader.releaseLock()
       }
 
       return processedRecords
     } catch (error) {
-      rethrowAbort(error, abortContext, attemptTimeout, { url, query: body })
+      if (error instanceof RequestCancelledError || abortContext.wasCancelled()) throw new RequestCancelledError()
+      let cause = error
+      if (!delivery.visitorFailed) {
+        try {
+          rethrowAbort(error, abortContext, attemptTimeout, { url, query: body })
+        } catch (abortError) {
+          cause = abortError
+        }
+      }
+      if (delivery.deliveredRecords > 0) throw new PortalStreamError(cause, delivery)
 
-      lastError = wrapError(error, { url, query: body }) as Error
+      lastError = wrapError(cause, { url, query: body }) as Error
       if (lastError instanceof ActionableError && !lastError.retryable) throw lastError
 
       releaseAdmission?.()
@@ -830,6 +851,7 @@ export async function portalFetchStreamRangeVisit(
   let processedRecords = 0
   let currentFrom = requestedFrom
   let remainingBlockBudget = options.maxBlocks ?? 0
+  const delivery = new StreamDelivery()
 
   while (currentFrom <= requestedTo) {
     let lastReturnedBlock: number | undefined
@@ -841,30 +863,36 @@ export async function portalFetchStreamRangeVisit(
           }
         : undefined
 
-    const chunkProcessed = await portalFetchStreamVisit(
-      url,
-      {
-        ...typedBody,
-        fromBlock: currentFrom,
-        toBlock: requestedTo,
-      },
-      {
-        ...options,
-        maxBlocks: remainingBlockBudget > 0 ? remainingBlockBudget : 0,
-        stopAfterItems,
-        onRecord: async (record) => {
-          processedRecords++
-          matchedItems += countMatchingItems(record, options.stopAfterItems)
-
-          const recordBlock = getBlockNumber(record)
-          if (recordBlock !== undefined) {
-            lastReturnedBlock = recordBlock
-          }
-
-          await options.onRecord(record)
+    let chunkProcessed: number
+    try {
+      chunkProcessed = await portalFetchStreamVisit(
+        url,
+        {
+          ...typedBody,
+          fromBlock: currentFrom,
+          toBlock: requestedTo,
         },
-      },
-    )
+        {
+          ...options,
+          maxBlocks: remainingBlockBudget > 0 ? remainingBlockBudget : 0,
+          stopAfterItems,
+          onRecord: async (record) => {
+            await delivery.deliver(record, options.onRecord, getBlockNumber)
+            processedRecords++
+            matchedItems += countMatchingItems(record, options.stopAfterItems)
+
+            const recordBlock = getBlockNumber(record)
+            if (recordBlock !== undefined) {
+              lastReturnedBlock = recordBlock
+            }
+          },
+        },
+      )
+    } catch (error) {
+      if (error instanceof RequestCancelledError) throw error
+      if (delivery.deliveredRecords > 0) throw new PortalStreamError(error, delivery)
+      throw error
+    }
 
     if (chunkProcessed === 0) {
       break

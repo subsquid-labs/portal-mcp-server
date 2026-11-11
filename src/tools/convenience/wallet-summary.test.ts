@@ -5,6 +5,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
+import type { McpServer } from '@modelcontextprotocol/server'
+import type { z } from 'zod'
+
 import { RECORDED_FIXTURES } from '../../app-ui/fixtures.recorded.js'
 import {
   applyWalletSummaryResponseFormat,
@@ -13,9 +16,87 @@ import {
   formatDecimalAmountExact,
   formatSatsAsBtc,
   parseNumericAmount,
+  registerGetWalletSummaryTool,
 } from './wallet-summary.js'
 
 const recorded = RECORDED_FIXTURES.wallet as Record<string, unknown>
+
+it('EVM wallet movement tables have visible panels alongside the counterparty ranking', async (t) => {
+  const address = '0xaaaa000000000000000000000000000000000001'
+  const counterparty = '0xbbbb000000000000000000000000000000000002'
+  type Payload = {
+    tables: Array<{ id: string }>
+    _ui: { panels: Array<{ kind: string; table_id?: string; data_key?: string }> }
+  }
+  let callTool: ((args: Record<string, unknown>) => Promise<{ structuredContent: Payload }>) | undefined
+  const server = {
+    registerTool: (
+      _name: string,
+      config: { inputSchema: z.ZodType<Record<string, unknown>> },
+      handler: (args: Record<string, unknown>, context: unknown) => Promise<{ structuredContent: Payload }>,
+    ) => {
+      callTool = (args) => handler(config.inputSchema.parse(args), {})
+    },
+  } as unknown as McpServer
+  registerGetWalletSummaryTool(server)
+  assert.ok(callTool)
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input))
+    if (url.pathname === '/datasets')
+      return Response.json([{ dataset: 'base-mainnet', aliases: ['base'], metadata: { kind: 'evm' } }])
+    if (url.pathname.endsWith('/head') || url.pathname.endsWith('/finalized-head'))
+      return Response.json({ number: 100_000 })
+    if (url.pathname.endsWith('/metadata')) return Response.json({ start_block: 0 })
+    assert.ok(url.pathname.endsWith('/stream'), `Unexpected fixture request: ${url.pathname}`)
+    const query = JSON.parse(String(init?.body))
+    const filters = query.transactions ?? []
+    const matches =
+      query.fromBlock <= 100_000 &&
+      query.toBlock >= 100_000 &&
+      filters.some(
+        (filter: { from?: string[]; to?: string[] }) =>
+          (!filter.from || filter.from.includes(address)) && (!filter.to || filter.to.includes(counterparty)),
+      )
+    return Response.json({
+      header: { number: query.toBlock, timestamp: 1_800_000_000 },
+      transactions: matches
+        ? [
+            {
+              transactionIndex: 0,
+              hash: `0x${'1'.repeat(64)}`,
+              from: address,
+              to: counterparty,
+              value: '0xde0b6b3a7640000',
+              gasUsed: '0x5208',
+              gasPrice: '0x1',
+              status: 1,
+            },
+          ]
+        : [],
+    })
+  })
+  const payload = (
+    await callTool({
+      network: 'base',
+      address,
+      timeframe: '10',
+      include_tokens: false,
+      include_nfts: false,
+      limit_per_type: 5,
+      response_format: 'full',
+    })
+  ).structuredContent
+  assert.ok(payload.tables.some((table) => table.id === 'flow_counterparties'))
+  const panelIds = new Set(
+    payload._ui.panels.filter((panel) => panel.kind === 'table_panel').map((panel) => panel.table_id),
+  )
+  for (const table of payload.tables) assert.ok(panelIds.has(table.id), `Missing panel for ${table.id}`)
+  assert.ok(
+    payload._ui.panels.some(
+      (panel) => panel.kind === 'ranked_bars_panel' && panel.data_key === 'fund_flow.movement_counterparties',
+    ),
+  )
+})
 
 describe('buildWalletCompleteness', () => {
   it('derives one state from window, sections, and cursor', () => {

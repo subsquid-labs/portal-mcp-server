@@ -18,6 +18,7 @@ const inputFiles = [
   'scripts/compact-stylesheet-plugin.mjs',
   'scripts/generate-app-compat-manifest.mjs',
   'package.json',
+  'package-lock.json',
 ].map((file) => path.join(root, file))
 
 function mtime(file) {

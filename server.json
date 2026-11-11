@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.subsquid-labs/portal-mcp-server",
   "title": "SQD",
-  "description": "Query 130+ SQD Portal datasets across blockchains, including native Tron transactions and events.",
-  "version": "0.8.5",
+  "description": "Query SQD Portal datasets across blockchains, including native Tron transactions and events.",
+  "version": "0.8.6",
   "repository": {
     "url": "https://github.com/subsquid-labs/portal-mcp-server",
     "source": "github"

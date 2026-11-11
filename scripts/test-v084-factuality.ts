@@ -39,6 +39,7 @@ import {
 } from '../dist/tools/convenience/wallet-summary.js'
 import { formatTokenUnitsExact } from '../dist/tools/evm/ohlc.js'
 import { compareHyperliquidOhlcFillOrder, sortHyperliquidFillsForOhlc } from '../dist/tools/hyperliquid/ohlc.js'
+import { fetchPortalText } from './live-portal-probe.ts'
 import { callToolWithRetry, closeTestClient, connectTestClient } from './test-helpers.js'
 
 function assert(condition: boolean, message: string) {
@@ -750,19 +751,21 @@ async function assertLiveAggregateAndOhlcParity() {
     const analyticsData = analytics.data as any
     const fromBlock = analyticsData.overview.from_block
     const toBlock = analyticsData.overview.to_block
-    const directResponse = await fetch('https://portal.sqd.dev/datasets/base-mainnet/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'evm',
-        fromBlock,
-        toBlock,
-        fields: { block: { number: true }, transaction: { to: true, hash: true } },
-        transactions: [{}],
-      }),
-    })
-    assert(directResponse.ok, `direct Portal EVM parity request must succeed (${directResponse.status})`)
-    const directText = await directResponse.text()
+    const directText = await fetchPortalText(
+      'Base analytics parity',
+      'https://portal.sqd.dev/datasets/base-mainnet/stream',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'evm',
+          fromBlock,
+          toBlock,
+          fields: { block: { number: true }, transaction: { to: true, hash: true } },
+          transactions: [{}],
+        }),
+      },
+    )
     const directRows = directText
       .trim()
       .split('\n')
@@ -895,22 +898,22 @@ async function assertLiveAggregateAndOhlcParity() {
       )
     }
 
-    const directHyperliquidResponse = await fetch('https://portal.sqd.dev/datasets/hyperliquid-fills/stream', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        type: 'hyperliquidFills',
-        fromBlock: fixedData.summary.from_block,
-        toBlock: fixedData.summary.to_block,
-        fields: { block: { number: true, timestamp: true }, fill: { time: true, px: true, sz: true } },
-        fills: [{ coin: ['BTC'] }],
-      }),
-    })
-    assert(
-      directHyperliquidResponse.ok,
-      `direct Portal Hyperliquid parity request must succeed (${directHyperliquidResponse.status})`,
+    const directHyperliquidText = await fetchPortalText(
+      'Hyperliquid candle parity',
+      'https://portal.sqd.dev/datasets/hyperliquid-fills/stream',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type: 'hyperliquidFills',
+          fromBlock: fixedData.summary.from_block,
+          toBlock: fixedData.summary.to_block,
+          fields: { block: { number: true, timestamp: true }, fill: { time: true, px: true, sz: true } },
+          fills: [{ coin: ['BTC'] }],
+        }),
+      },
     )
-    const directHyperliquidRows = (await directHyperliquidResponse.text())
+    const directHyperliquidRows = directHyperliquidText
       .trim()
       .split('\n')
       .filter(Boolean)

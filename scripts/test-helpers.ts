@@ -65,7 +65,8 @@ export function isBoundedUpstreamToolError(result: ToolCallResult): boolean {
   if (!result.isError) return false
 
   const error = result.structuredContent?.error
-  if (error && typeof error === 'object' && error.retryable === true && typeof error.code === 'string') {
+  if (error && typeof error === 'object') {
+    if (error.retryable !== true || typeof error.code !== 'string') return false
     if (error.origin === 'upstream' && BOUNDED_RETRYABLE_UPSTREAM_CODES.has(error.code)) return true
     if (error.origin === 'server' && error.code === 'overloaded') return true
     return false

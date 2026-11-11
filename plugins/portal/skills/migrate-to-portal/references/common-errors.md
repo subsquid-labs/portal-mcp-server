@@ -6,7 +6,7 @@ Each entry maps back to a step in `SKILL.md`.
 
 ## Both chains (v2-with-`apiKey`)
 
-> The v2 gateway requires authentication as of **May 19, 2026 12:00 UTC** for self-hosted setups (Cloud is unaffected). Migrating to Portal is the recommended path. The public Portal is shared capacity; authenticated and dedicated Portal endpoints accept `x-api-key`. The v2-with-`apiKey` config below is the alternative for squids that must stay on v2 a bit longer. See <https://docs.sqd.dev/changelog/gateway-api-keys>.
+> The v2 gateway requires authentication as of **May 19, 2026 12:00 UTC** for self-hosted setups (Cloud is unaffected). Migrating to Portal is the recommended path. The public Portal is shared capacity; authenticated and dedicated Portal endpoints accept `x-api-key`. The v2-with-`apiKey` config below is the alternative for squids that must stay on v2 a bit longer. See <https://docs.sqd.dev/announcements/gateway-api-keys>.
 
 ### `TS2353: 'apiKey' does not exist in type 'GatewaySettings'`
 
@@ -32,7 +32,7 @@ npm i @subsquid/solana-stream@^0.5.0
 
 Going to `latest` instead lands on the Portal stack (`@subsquid/evm-stream` for EVM, `@subsquid/solana-stream@^1.x.x` for Solana) where `.setGateway` is gone.
 
-Get a key at <https://portal.sqd.dev/app>. The full setup guide is at <https://docs.sqd.dev/en/data/api-keys>.
+Get a key at <https://portal.sqd.dev/app>. The full setup guide is at <https://docs.sqd.dev/en/sdk/squid-sdk/evm/guides/migration/gateway-api-key>.
 
 ### Anonymous v2 archive requests start 401-ing after 2026-05-19 12:00 UTC
 
@@ -447,7 +447,7 @@ const database = new TypeormDatabase({ supportHotBlocks: true })
 
 The `from` value is still a block height; Portal expects a slot. Heights and slots are different sequences on Solana — slots have gaps for skipped slots, heights don't.
 
-**Fix:** use the bisection converter embedded at <https://docs.sqd.dev/en/sdk/migration/height-to-slot> to translate height → slot.
+**Fix:** use the bisection converter embedded at <https://docs.sqd.dev/en/sdk/squid-sdk/solana/guides/migration/height-to-slot> to translate height → slot.
 
 ### Need RPC fallback after the migration?
 

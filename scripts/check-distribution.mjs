@@ -47,10 +47,7 @@ function validateMetadata() {
     server.remotes?.some((remote) => remote.url === SERVER_URL),
     'server.json must publish the hosted MCP URL',
   )
-  assert(
-    /130\+ SQD Portal datasets/.test(server.description),
-    'server.json description must state the conservative dataset coverage',
-  )
+  assert(/SQD Portal datasets/.test(server.description), 'server.json description must name the live Portal catalog')
   assert(/Tron/.test(server.description), 'server.json description must include Tron')
   assert(
     /Tron (?:transactions|records|activity)/.test(server.description),
@@ -125,6 +122,12 @@ function validateMetadata() {
       `${targetId} submission must not use en or em dashes`,
     )
   }
+
+  const descriptions = [server, gemini, codex, claude, cursor, submissions]
+  assert(
+    !/\b\d+\+ (?:SQD )?(?:Portal )?(?:networks|datasets)\b/.test(JSON.stringify(descriptions)),
+    'public descriptions must use live catalog discovery instead of a fixed network or dataset count',
+  )
 
   if (errors.length > 0) fail(errors.join('\n'))
   return { version: packageJson.version, targets }

@@ -5,7 +5,7 @@ import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { buildTableDescriptor } from '../../helpers/chart-metadata.js'
-import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
+import { ActionableError, RequestCancelledError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { divideExactDecimals, formatIntegerUnitsExact } from '../../helpers/exact-decimal.js'
 import { portalFetchStream, portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
 import { formatDuration, formatNumber, formatPct, formatResult, shortenAddress } from '../../helpers/format.js'
@@ -26,6 +26,7 @@ import {
 import type { ResponseFormat } from '../../helpers/response-modes.js'
 import { buildAnalysisCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { buildPercentileSummary } from '../../helpers/statistics.js'
+import { StreamRecoveryBudget, getStreamRangeRecovery } from '../../helpers/stream-progress.js'
 import { type TimestampInput, parseTimeframeToSeconds, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { buildMetricCard, buildPortalUi, buildRankedBarsPanel, buildTablePanel } from '../../helpers/ui-metadata.js'
@@ -193,6 +194,7 @@ function formatSolanaAnalyticsResponse(response: Record<string, any>, responseFo
             top_program: response.top_programs.programs[0],
           }
         : {}),
+      ...(response.top_programs?.status === 'unavailable' ? { top_programs: response.top_programs } : {}),
     }
   }
 
@@ -351,6 +353,7 @@ async function visitAdaptiveSolanaRange(
   from: number,
   to: number,
   minChunkSize: number,
+  recoveryBudget: StreamRecoveryBudget,
   onRecord: (record: unknown) => void | Promise<void>,
 ): Promise<number> {
   try {
@@ -359,16 +362,25 @@ async function visitAdaptiveSolanaRange(
       onRecord,
     })
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    const rangeSize = to - from + 1
-
-    if (message.includes('Response too large') && rangeSize > minChunkSize && to > from) {
-      const mid = from + Math.floor((to - from) / 2)
-      const [left, right] = await Promise.all([
-        visitAdaptiveSolanaRange(url, buildQuery, from, mid, minChunkSize, onRecord),
-        visitAdaptiveSolanaRange(url, buildQuery, mid + 1, to, minChunkSize, onRecord),
-      ])
-      return left + right
+    const recovery = getStreamRangeRecovery(err, from, to, { budget: recoveryBudget, allowTimeout: true })
+    if (recovery && (recovery.fromBlock > from || to - from + 1 > minChunkSize)) {
+      const nextFrom = recovery.fromBlock
+      if (nextFrom > to) return recovery.deliveredRecords
+      const mid = nextFrom + Math.floor((to - nextFrom) / 2)
+      const left = await visitAdaptiveSolanaRange(
+        url,
+        buildQuery,
+        nextFrom,
+        mid,
+        minChunkSize,
+        recoveryBudget,
+        onRecord,
+      )
+      const right =
+        mid < to
+          ? await visitAdaptiveSolanaRange(url, buildQuery, mid + 1, to, minChunkSize, recoveryBudget, onRecord)
+          : 0
+      return recovery.deliveredRecords + left + right
     }
 
     throw err
@@ -544,7 +556,7 @@ export function registerSolanaAnalyticsTool(server: McpServer) {
           : SOLANA_ANALYTICS_FAST_SLOT_BUDGET[analyticsBudgetKey]
       const slotsAnalyzed = Math.min(requestedSlots, maxSlotsForTimeframe, MAX_ANALYTICS_SLOTS)
       const effectiveFrom = requestedSlots > slotsAnalyzed ? endBlock - slotsAnalyzed + 1 : fromBlock
-      const cacheKey = `${dataset}:${mode}:${requestedTimeframe}:${String(from_timestamp ?? '')}:${String(to_timestamp ?? '')}:${include_compute_units}:${include_programs}:${response_format}:${program_limit}`
+      const cacheKey = `${dataset}:${fromBlock}:${endBlock}:${mode}:${requestedTimeframe}:${String(from_timestamp ?? '')}:${String(to_timestamp ?? '')}:${include_compute_units}:${include_programs}:${response_format}:${program_limit}`
       const cached = !cursor && !include_programs ? getCachedAnalyticsResult(cacheKey) : undefined
 
       if (cached) {
@@ -629,6 +641,7 @@ export function registerSolanaAnalyticsTool(server: McpServer) {
         const feeSamples: number[] = []
         const computeUnitSamples: number[] = []
 
+        const recoveryBudget = new StreamRecoveryBudget()
         const txUrl = `${PORTAL_URL}/datasets/${dataset}/stream`
         const txQueryForRange = (chunkFrom: number, chunkTo: number) => ({
           type: 'solana',
@@ -660,6 +673,7 @@ export function registerSolanaAnalyticsTool(server: McpServer) {
                 range.from,
                 range.to,
                 MIN_SOLANA_ANALYTICS_CHUNK_SIZE,
+                recoveryBudget,
                 (record) => {
                   const typedBlock = record as { transactions?: Record<string, unknown>[] }
                   const txs = typedBlock.transactions || []
@@ -779,35 +793,46 @@ export function registerSolanaAnalyticsTool(server: McpServer) {
 
             for (let index = 0; index < programRanges.length; index += SOLANA_PROGRAM_CONCURRENCY) {
               const rangeBatch = programRanges.slice(index, index + SOLANA_PROGRAM_CONCURRENCY)
-              await Promise.all(
+              const samples = await Promise.all(
                 rangeBatch.map(async (range) => {
-                  try {
-                    return await visitAdaptiveSolanaRange(
-                      programUrl,
-                      instructionQueryForRange,
-                      range.from,
-                      range.to,
-                      MIN_SOLANA_PROGRAM_CHUNK_SIZE,
-                      (record) => {
-                        const block = record as {
-                          instructions?: Array<{ programId?: string; computeUnitsConsumed?: number | string }>
-                        }
-                        programSlotsAnalyzed++
-                        ;(block.instructions || []).forEach((instr) => {
-                          totalInstructions++
-                          const pid = instr.programId || 'unknown'
-                          const existing = programCounts.get(pid) || { calls: 0, computeUnits: 0 }
-                          existing.calls++
-                          existing.computeUnits += Number(instr.computeUnitsConsumed) || 0
-                          programCounts.set(pid, existing)
-                        })
-                      },
-                    )
-                  } catch {
-                    return 0
-                  }
+                  const counts = new Map<string, { calls: number; computeUnits: number }>()
+                  let instructions = 0
+                  let slots = 0
+                  await visitAdaptiveSolanaRange(
+                    programUrl,
+                    instructionQueryForRange,
+                    range.from,
+                    range.to,
+                    MIN_SOLANA_PROGRAM_CHUNK_SIZE,
+                    recoveryBudget,
+                    (record) => {
+                      const block = record as {
+                        instructions?: Array<{ programId?: string; computeUnitsConsumed?: number | string }>
+                      }
+                      slots++
+                      for (const instr of block.instructions || []) {
+                        instructions++
+                        const pid = instr.programId || 'unknown'
+                        const existing = counts.get(pid) || { calls: 0, computeUnits: 0 }
+                        existing.calls++
+                        existing.computeUnits += Number(instr.computeUnitsConsumed) || 0
+                        counts.set(pid, existing)
+                      }
+                    },
+                  )
+                  return { counts, instructions, slots }
                 }),
               )
+              for (const sample of samples) {
+                totalInstructions += sample.instructions
+                programSlotsAnalyzed += sample.slots
+                for (const [pid, count] of sample.counts) {
+                  const existing = programCounts.get(pid) || { calls: 0, computeUnits: 0 }
+                  existing.calls += count.calls
+                  existing.computeUnits += count.computeUnits
+                  programCounts.set(pid, existing)
+                }
+              }
             }
 
             const topPrograms = Array.from(programCounts.entries())
@@ -858,8 +883,9 @@ export function registerSolanaAnalyticsTool(server: McpServer) {
               has_more: hasMore,
               ...(nextCursor ? { next_cursor: nextCursor } : {}),
             }
-          } catch {
-            response.top_programs = { error: 'Failed to fetch instruction data' }
+          } catch (error) {
+            if (error instanceof RequestCancelledError) throw error
+            response.top_programs = { status: 'unavailable', error: 'Failed to fetch instruction data' }
           }
         }
 
@@ -870,7 +896,12 @@ export function registerSolanaAnalyticsTool(server: McpServer) {
               ]
             : mode === 'fast' && !timeframe
               ? ['Bounded preview requests default to a 5-minute Solana window.']
-              : undefined
+              : []
+        if (response.top_programs?.status === 'unavailable') {
+          notices.push(
+            'Top-program results are unavailable because the instruction sample could not be completed. Partial instruction counts were discarded.',
+          )
+        }
         if (chunksFetched > 1) {
           response._chunks_fetched = chunksFetched
         }

@@ -1,6 +1,7 @@
 import type { Client } from '@modelcontextprotocol/client'
 
 import { EVENT_SIGNATURES } from '../src/constants/index.js'
+import { fetchPortalText } from './live-portal-probe.ts'
 import { assert, callToolWithRetry, extractJson, getText, isBoundedUpstreamToolError, sleep } from './test-helpers.ts'
 
 const POLKADOT_SAMPLE_FROM_BLOCK = 30_736_840
@@ -123,31 +124,20 @@ function encodeUint(value: number) {
 }
 
 async function baseRpcCall(method: string, params: unknown[]) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const response = await fetch(BASE_RPC_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method,
-        params,
-      }),
-    })
-
-    if (response.status === 429 && attempt < 4) {
-      await sleep(500 * (attempt + 1))
-      continue
-    }
-
-    assert(response.ok, `Base RPC ${method} failed with HTTP ${response.status}`)
-    const data = (await response.json()) as { result?: unknown; error?: { message?: string } }
-    assert(!data.error, `Base RPC ${method} error: ${data.error?.message || 'unknown error'}`)
-    assert(data.result !== undefined, `Base RPC ${method} returned no result`)
-    return data.result
-  }
-
-  throw new Error(`Base RPC ${method} failed after retries`)
+  const text = await fetchPortalText(`Base RPC ${method}`, BASE_RPC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method,
+      params,
+    }),
+  })
+  const data = JSON.parse(text) as { result?: unknown; error?: { message?: string } }
+  assert(!data.error, `Base RPC ${method} error: ${data.error?.message || 'unknown error'}`)
+  assert(data.result !== undefined, `Base RPC ${method} returned no result`)
+  return data.result
 }
 
 function decodeAddressWord(value: string) {
@@ -161,17 +151,15 @@ function isZeroAddress(value: string) {
 }
 
 async function portalStream(dataset: string, body: Record<string, unknown>) {
-  const response = await fetch(`${PORTAL_API_URL}/datasets/${dataset}/stream`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-
-  if (response.status === 204) return []
-  if (!response.ok) {
-    throw new Error(`Portal stream fixture query failed with HTTP ${response.status}: ${await response.text()}`)
-  }
-  const text = await response.text()
+  const text = await fetchPortalText(
+    `${dataset} tool fixture blocks ${body.fromBlock}-${body.toBlock}`,
+    `${PORTAL_API_URL}/datasets/${dataset}/stream`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
   return text
     .split('\n')
     .map((line) => line.trim())
@@ -735,11 +723,11 @@ export const TOOL_SPECS: ToolSpec[] = [
   },
   {
     name: 'portal_get_time_series',
-    prompt: 'make me a simple Base activity chart for the last hour',
-    args: () => ({ network: 'base', metric: 'transaction_count', interval: '5m', duration: '1h' }),
+    prompt: 'make me a simple Base activity chart for the last 15 minutes',
+    args: () => ({ network: 'base', metric: 'transaction_count', interval: '5m', duration: '15m' }),
     validate: (text) => {
       const data = extractJson(text)
-      expectItems(text, 'portal_get_time_series base', 12)
+      expectItems(text, 'portal_get_time_series base', 3)
       expectWindowMetadata(data, 'portal_get_time_series base')
       expectGapDiagnostics(data, 'portal_get_time_series base')
       assert(data.chart?.kind === 'time_series', 'Expected time-series chart metadata')
@@ -753,14 +741,14 @@ export const TOOL_SPECS: ToolSpec[] = [
         network: 'base',
         metric: 'transaction_count',
         interval: '5m',
-        duration: '1h',
+        duration: '15m',
         compare_previous: true,
       })
       const groupedResult = await callToolWithRetry(client, 'portal_get_time_series', {
         network: 'base',
         metric: 'transaction_count',
         interval: '5m',
-        duration: '1h',
+        duration: '15m',
         group_by: 'contract',
         group_limit: 3,
       })
@@ -1459,20 +1447,28 @@ export const TOOL_SPECS: ToolSpec[] = [
         const nextCursor = walletData._pagination?.next_cursor
         if (typeof nextCursor === 'string') {
           const continuedWallet = await callToolWithRetry(client, 'portal_get_wallet_summary', { cursor: nextCursor })
-          assert(!continuedWallet.isError, 'Expected Bitcoin wallet continuation to succeed')
-          const continuedData = continuedWallet.data
-          const rowKey = (item: any, indexKey: 'inputIndex' | 'outputIndex') =>
-            `${String(item.block_number)}:${String(item.transactionIndex)}:${String(item[indexKey])}`
-          for (const [section, indexKey] of [
-            ['recent_inputs', 'inputIndex'],
-            ['recent_outputs', 'outputIndex'],
-          ] as const) {
-            const firstKeys = new Set((walletData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey)))
-            const continuedKeys = (continuedData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey))
+          if (continuedWallet.isError) {
             assert(
-              continuedKeys.every((key: string) => !firstKeys.has(key)),
-              `Bitcoin wallet ${section} continuation should not repeat rows`,
+              isBoundedUpstreamToolError(continuedWallet),
+              `Expected only a bounded upstream Bitcoin wallet continuation error, got: ${continuedWallet.text.slice(0, 240)}`,
             )
+          } else {
+            const continuedData = continuedWallet.data
+            const rowKey = (item: any, indexKey: 'inputIndex' | 'outputIndex') =>
+              `${String(item.block_number)}:${String(item.transactionIndex)}:${String(item[indexKey])}`
+            for (const [section, indexKey] of [
+              ['recent_inputs', 'inputIndex'],
+              ['recent_outputs', 'outputIndex'],
+            ] as const) {
+              const firstKeys = new Set(
+                (walletData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey)),
+              )
+              const continuedKeys = (continuedData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey))
+              assert(
+                continuedKeys.every((key: string) => !firstKeys.has(key)),
+                `Bitcoin wallet ${section} continuation should not repeat rows`,
+              )
+            }
           }
         }
       }
@@ -1608,6 +1604,7 @@ export const TOOL_SPECS: ToolSpec[] = [
         network: 'hyperliquid-fills',
         timeframe: '1h',
         coin: ['BTC'],
+        fee_token: ['USDC'],
         response_format: 'summary',
         limit: 25,
       })
@@ -1621,6 +1618,17 @@ export const TOOL_SPECS: ToolSpec[] = [
           `Expected a finite ${key} in the Hyperliquid fill summary`,
         )
       }
+      assert(summary.fees_status === 'available', 'USDC-only fill summaries should have a known USD fee total')
+      assert(
+        Array.isArray(summary.fees_by_token) &&
+          summary.fees_by_token.length === 1 &&
+          summary.fees_by_token[0].fee_token === 'USDC',
+        'Expected only verified USDC fees in the summary fixture',
+      )
+      assert(
+        summary.unknown_fee_token_fills === 0 && summary.invalid_fee_fills === 0,
+        'USDC fee fixture should have no missing units or invalid amounts',
+      )
       assert(
         typeof summary.direction_breakdown === 'object' && summary.direction_breakdown !== null,
         'Expected a direction breakdown in the Hyperliquid fill summary',

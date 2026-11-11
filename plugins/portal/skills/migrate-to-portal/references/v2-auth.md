@@ -23,5 +23,5 @@ Going to `latest` instead skips this intermediate configuration: the current EVM
 
 References:
 
-- <https://docs.sqd.dev/changelog/gateway-api-keys>
-- <https://docs.sqd.dev/en/data/api-keys>
+- <https://docs.sqd.dev/announcements/gateway-api-keys>
+- <https://docs.sqd.dev/en/sdk/squid-sdk/evm/guides/migration/gateway-api-key>

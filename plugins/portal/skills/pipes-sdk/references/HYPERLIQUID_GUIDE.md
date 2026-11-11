@@ -1,5 +1,7 @@
 # Hyperliquid Fills Indexer Guide
 
+For database commands and configuration, use [CREDENTIALS.md](CREDENTIALS.md): inject secrets through the environment or protected client files, and never print them or pass their values as command arguments.
+
 Build Pipes SDK indexers for Hyperliquid perpetual futures trade fills.
 
 ## Overview
@@ -178,8 +180,8 @@ services:
     image: clickhouse/clickhouse-server
     container_name: clickhouse
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "127.0.0.1:8123:8123"
+      - "127.0.0.1:9000:9000"
     environment:
       CLICKHOUSE_PASSWORD: default
     volumes:
@@ -199,7 +201,7 @@ If you already have a ClickHouse container, skip this step and reuse it — just
 ```bash
 bun install
 # Create database
-docker exec clickhouse clickhouse-client --password=default \
+docker exec clickhouse clickhouse-client \
   --query "CREATE DATABASE IF NOT EXISTS hl_perps"
 npm run dev
 ```

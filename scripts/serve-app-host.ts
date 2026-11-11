@@ -52,9 +52,9 @@ const PRESETS: Array<{ label: string; name: string; arguments: Record<string, un
     arguments: { network: 'base-mainnet', timeframe: '1h', limit: 50 },
   },
   {
-    label: 'Transactions 6h · Base',
+    label: 'Transactions 15m · Base',
     name: 'portal_get_time_series',
-    arguments: { network: 'base-mainnet', metric: 'transaction_count', duration: '6h', interval: '15m' },
+    arguments: { network: 'base-mainnet', metric: 'transaction_count', duration: '15m', interval: '5m' },
   },
   {
     label: 'BTC candles · Hyperliquid',

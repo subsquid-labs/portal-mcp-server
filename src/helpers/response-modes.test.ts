@@ -24,6 +24,7 @@ const NORMALIZED_FILLS = [
     side: 'A',
     dir: 'Close Long',
     fee: '0.95',
+    feeToken: 'USDC',
     closedPnl: '12.5',
     block_number: 750000007,
   },
@@ -37,6 +38,7 @@ const NORMALIZED_FILLS = [
     side: 'B',
     dir: 'Open Long',
     fee: '-1.9',
+    feeToken: 'USDC',
     closedPnl: '-2.5',
     block_number: 750000007,
   },
@@ -50,6 +52,7 @@ const NORMALIZED_FILLS = [
     side: 'A',
     dir: 'Close Long',
     fee: '3',
+    feeToken: 'USDC',
     block_number: 750000007,
   },
 ]
@@ -74,17 +77,40 @@ describe('summarizeHyperliquidFills', () => {
     ])
   })
 
-  it('returns finite aggregates when amounts are missing or unparseable', () => {
+  it('keeps volume and PnL available when fee data is missing or unparseable', () => {
     const summary = summarizeHyperliquidFills([
       { coin: 'BTC', px: 'n/a', sz: '1.0', fee: undefined, closedPnl: '' },
       { coin: 'BTC', px: '100', sz: '2', fee: '0.5', closedPnl: '1.25' },
     ])
 
     assert.equal(summary.total_volume_usd, 200)
-    assert.equal(summary.total_fees_usd, 0.5)
+    assert.equal(summary.total_fees_usd, null)
     assert.equal(summary.total_realized_pnl, 1.25)
     assert.equal(Number.isFinite(summary.total_realized_pnl), true)
   })
+
+  it('keeps signed fee totals in their source tokens when USD conversion is unavailable', () => {
+    const summary = summarizeHyperliquidFills([
+      { ...NORMALIZED_FILLS[0], fee: '0.1', feeToken: 'USDC' },
+      { ...NORMALIZED_FILLS[0], fee: '0.2', feeToken: 'USDC' },
+      { ...NORMALIZED_FILLS[0], fee: '-0.25', feeToken: 'HYPE' },
+    ])
+    assert.equal(summary.total_fees_usd, null)
+    assert.equal(summary.fees_status, 'unavailable')
+    assert.deepEqual(summary.fees_by_token, [
+      { fee_token: 'HYPE', total_fees: '-0.25' },
+      { fee_token: 'USDC', total_fees: '0.3' },
+    ])
+  })
+
+  for (const feeToken of [undefined, null, true, {}, '', ' ']) {
+    it(`leaves USD fees unavailable for feeToken ${JSON.stringify(feeToken)}`, () => {
+      const summary = summarizeHyperliquidFills([{ ...NORMALIZED_FILLS[0], feeToken }])
+      assert.equal(summary.total_fees_usd, null)
+      assert.equal(summary.fees_status, 'unavailable')
+      assert.equal(summary.unknown_fee_token_fills, 1)
+    })
+  }
 
   it('reports an empty page instead of aggregates', () => {
     assert.deepEqual(summarizeHyperliquidFills([]), { count: 0, summary: 'No fills found' })

@@ -1,5 +1,7 @@
 # Blockchain Indexing Patterns & Best Practices
 
+For database commands and configuration, use [CREDENTIALS.md](CREDENTIALS.md): inject secrets through the environment or protected client files, and never print them or pass their values as command arguments.
+
 Advanced patterns, performance optimization, and troubleshooting for building production-grade blockchain indexers with Subsquid Pipes SDK.
 
 ## Overview
@@ -166,9 +168,9 @@ evmEventDecoder({
 CLICKHOUSE_DATABASE=my_unique_db npm run dev
 
 # If sharing is deliberate, inspect ids and reset only the confirmed row
-docker exec clickhouse clickhouse-client --password=default \
+docker exec clickhouse clickhouse-client \
   --query "SELECT id, current, finalized FROM pipes.sync"
-docker exec clickhouse clickhouse-client --password=default \
+docker exec clickhouse clickhouse-client \
   --query "ALTER TABLE pipes.sync DELETE WHERE id = '<confirmed-pipe-id>' SETTINGS mutations_sync=1"
 ```
 
@@ -249,7 +251,7 @@ The indexer reads the sync table and resumes from the last committed block. Veri
 
 **If you want a clean restart instead**:
 ```bash
-docker exec <container> clickhouse-client --password <pw> \
+docker exec <container> clickhouse-client \
   --query "ALTER TABLE pipes.sync DELETE WHERE id = '<confirmed-pipe-id>' SETTINGS mutations_sync=1; DROP TABLE IF EXISTS pipes.<your_table>"
 npm run dev
 ```
@@ -427,10 +429,8 @@ for await (const { data } of stream) {
 
 **Solution**:
 ```bash
-# Regenerate ABI from contract
-npx @subsquid/evm-typegen@latest src/contracts \
-  0xYourContractAddress \
-  --chain-id 1
+# Save and validate abi/contract.json following ABI_GUIDE.md, then regenerate
+npx @subsquid/evm-typegen@4.6.0 src/contracts ./abi/contract.json
 ```
 
 ### Issue 8: Sync Table Conflict Between Indexers
@@ -442,17 +442,17 @@ npx @subsquid/evm-typegen@latest src/contracts \
 **Solution**: Use a dedicated database per indexer project:
 ```bash
 # Create separate databases
-docker exec <container> clickhouse-client --password <pw> \
+docker exec <container> clickhouse-client \
   --query "CREATE DATABASE IF NOT EXISTS usdc_transfers"
-docker exec <container> clickhouse-client --password <pw> \
+docker exec <container> clickhouse-client \
   --query "CREATE DATABASE IF NOT EXISTS uniswap_swaps"
 ```
 
 If you must share a database, pin a unique id per pipe. Before a reset, inspect the table and delete only the confirmed cursor row:
 ```bash
-docker exec <container> clickhouse-client --password <pw> \
+docker exec <container> clickhouse-client \
   --query "SELECT id, current, finalized FROM <database>.sync"
-docker exec <container> clickhouse-client --password <pw> \
+docker exec <container> clickhouse-client \
   --query "ALTER TABLE <database>.sync DELETE WHERE id = '<confirmed-pipe-id>' SETTINGS mutations_sync=1"
 ```
 
@@ -462,7 +462,7 @@ Do not drop or truncate a shared `sync` table; that resets every pipe using it.
 
 **Symptoms**: Querying `{contractName}_events` returns "table not found"
 
-**Cause**: The custom template creates **one table per event**, named `{contractName}_{eventName}` in snake_case. There is no combined events table.
+**Cause**: The custom template creates **one table per event**, not a combined events table. Contract-specific decoders use `{contractName}_{eventName}` in snake_case; shared decoders across compatible contracts use `{eventName}` and add a `contractAddress`/`contract_address` column.
 
 **Example**: Contract "WETH" with events "Deposit" and "Withdrawal" creates:
 - `weth_deposit` (not `weth_events`)
@@ -500,7 +500,7 @@ timestamp: d.timestamp.getTime(),  // do NOT divide
 **Recovery**: If you've already inserted bad timestamps:
 ```bash
 # Inspect the cursor ids, then remove only this pipe's row and affected table
-docker exec <container> clickhouse-client --password <pw> \
+docker exec <container> clickhouse-client \
   --query "ALTER TABLE <db>.sync DELETE WHERE id = '<confirmed-pipe-id>' SETTINGS mutations_sync=1; DROP TABLE IF EXISTS <db>.<table>"
 # If using factory pattern, also delete the SQLite file
 rm <project>/*.sqlite
@@ -525,7 +525,8 @@ grep "export const events" src/contracts/*.ts
 1. Find implementation address: Go to `https://etherscan.io/address/<proxy>` → "Read as Proxy" tab → copy implementation address
 2. Generate types from implementation:
    ```bash
-   npx @subsquid/evm-typegen@latest src/contracts <IMPLEMENTATION_ADDRESS> --chain-id <CHAIN_ID>
+   # First save and validate the local ABI following ABI_GUIDE.md
+   npx @subsquid/evm-typegen@4.6.0 src/contracts ./abi/implementation.json
    ```
 3. Update import in `src/index.ts` to point to the implementation file
 4. Keep the proxy address in `contracts:` array (events are emitted from the proxy)
@@ -738,7 +739,7 @@ range: { from: DEPLOYMENT_BLOCK }
 
 ```bash
 # Check within 30 seconds of starting
-docker exec clickhouse clickhouse-client --password=default \
+docker exec clickhouse clickhouse-client \
   --query "SELECT COUNT(*) FROM pipes.my_table"
 
 # Should be > 0

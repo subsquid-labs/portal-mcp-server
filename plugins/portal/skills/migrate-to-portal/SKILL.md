@@ -1,15 +1,16 @@
 ---
 name: migrate-to-portal
-description: Migrate an existing Squid SDK indexer (EVM or Solana) off the v2 gateway and onto the Portal data source. Covers the package swap (`@subsquid/evm-processor` → `@subsquid/evm-stream` + `@subsquid/evm-objects` + `@subsquid/batch-processor` for EVM; `@subsquid/solana-stream@^0.x` → `^1.x` for Solana), the API/type shape changes, and field-selection changes. Use when the user mentions migrating, porting, upgrading, or converting a v2 squid to Portal; references `v2.archive.subsquid.io`, `setGateway`, `setDataSource`, `lookupArchive`, or `SolanaRpcClient`; or hits TS errors on `EvmBatchProcessor`, `evmLog`, or `block.header.slot` after a `@subsquid/*` bump.
+description: Migrate an existing Squid SDK indexer (EVM or Solana) off the v2 gateway and onto the Portal data source, including the package swap, the API and type changes, and the explicit field selection Portal requires. Use when the user wants to migrate, port, upgrade, or convert a v2 squid to Portal; references v2.archive.subsquid.io, setGateway, setDataSource, lookupArchive, or SolanaRpcClient; moves from @subsquid/evm-processor to @subsquid/evm-stream or bumps @subsquid/solana-stream from 0.x to 1.x; or hits TypeScript errors on EvmBatchProcessor, evmLog, block.height, or block.header.slot after a @subsquid/* bump.
+license: Apache-2.0
 metadata:
   author: subsquid
-  version: "1.2.1"
+  version: "1.2.2"
   category: documentation
 ---
 
 # Migrate a Squid to Portal
 
-Walks the migration of an existing Squid SDK indexer onto the Portal data source. EVM and Solana have different package sets; the migration shape (data source + types + field selection) is parallel. Upstream doc (unified, both chains): <https://docs.sqd.dev/en/sdk/migration/gateway-to-portal>.
+Walks the migration of an existing Squid SDK indexer onto the Portal data source. EVM and Solana have different package sets; the migration shape (data source + types + field selection) is parallel. Upstream doc (unified, both chains): <https://docs.sqd.dev/en/sdk/squid-sdk/evm/guides/migration/gateway-to-portal>.
 
 > **The v2 gateways are actively being sunset.** On 2026-08-05, 18 datasets (including `astar-mainnet`, `berachain-mainnet`, `celo-mainnet`, `linea-mainnet`, `scroll-mainnet`, `taiko-mainnet`, `unichain-mainnet`, `zksync-mainnet`, `zora-mainnet`) became **Portal-only**. A v2 squid on those chains is already broken and must migrate. On **2026-08-20**, 67 low-usage datasets retired from both v2 and Portal ([announcement](https://docs.sqd.dev/announcements/dataset-retirements-august-2026)); there is no Portal migration target for them, so move to RPC or a private Portal instead. The [July 30, 2026 Squid SDK release](https://github.com/subsquid/squid-sdk/releases/tag/2026-07-30) also introduced the `@subsquid/squid-sdk` umbrella package with an automatic Portal/RPC failover data source. Consider it for new work, though this guide's `@subsquid/evm-stream` target remains current.
 
@@ -330,7 +331,7 @@ If the handler reaches into a field not listed, TS rejects the access.
 
 After the code compiles and a local run succeeds, re-sync from genesis so the new data path is exercised across the full history (catches bugs early).
 
-If deployed to [SQD Cloud](https://docs.sqd.dev/en/cloud), use the zero-downtime procedure: deploy into a new slot, wait for it to sync, then move the production tag to the new deployment (see [slots and tags](https://docs.sqd.dev/en/cloud/resources/slots-and-tags#zero-downtime-updates)). If you can't afford a re-sync, [re-deploy the squid](https://docs.sqd.dev/en/sdk/squid-sdk/squid-cli/deploy) **without resetting its database** (Cloud) or just restart it with its code updated (self-hosted).
+If deployed to [SQD Cloud](https://docs.sqd.dev/en/cloud/overview), use the zero-downtime procedure: deploy into a new slot, wait for it to sync, then move the production tag to the new deployment (see [slots and tags](https://docs.sqd.dev/en/cloud/resources/slots-and-tags#zero-downtime-updates)). If you can't afford a re-sync, [re-deploy the squid](https://docs.sqd.dev/en/cloud/reference/cli/deploy) **without resetting its database** (Cloud) or just restart it with its code updated (self-hosted).
 
 ---
 
@@ -386,7 +387,7 @@ const dataSource = new DataSourceBuilder()
 Structural changes:
 
 1. Replace `.setGateway(...)` (and `.setRpc({...})` if present) with `.setPortal({ url, http })`. `http: { retryAttempts: Infinity }` is recommended for production — without it the indexer exits on transient non-2xx Portal responses.
-2. Convert the block-range `from` from a block height to a slot number. Solana exposes both; the v2 archive used heights, Portal uses slots. Use the interactive bisection converter embedded at <https://docs.sqd.dev/en/sdk/migration/height-to-slot> (binary-searches the public Portal).
+2. Convert the block-range `from` from a block height to a slot number. Solana exposes both; the v2 archive used heights, Portal uses slots. Use the interactive bisection converter embedded at <https://docs.sqd.dev/en/sdk/squid-sdk/solana/guides/migration/height-to-slot> (binary-searches the public Portal).
 
 Selectors inside `.addInstruction({ where, include })` and field selection in `.setFields({...})` keep the same shape.
 
@@ -462,9 +463,9 @@ Typical minimum for a swap-style instruction handler:
 
 After the code compiles and a local run succeeds, re-sync from genesis so the new data path is exercised across the full history (catches bugs early).
 
-If deployed to [SQD Cloud](https://docs.sqd.dev/en/cloud), use the zero-downtime procedure: deploy into a new slot, wait for it to sync, then move the production tag to the new deployment (see [slots and tags](https://docs.sqd.dev/en/cloud/resources/slots-and-tags#zero-downtime-updates)).
+If deployed to [SQD Cloud](https://docs.sqd.dev/en/cloud/overview), use the zero-downtime procedure: deploy into a new slot, wait for it to sync, then move the production tag to the new deployment (see [slots and tags](https://docs.sqd.dev/en/cloud/resources/slots-and-tags#zero-downtime-updates)).
 
-If you can't afford a re-sync, [re-deploy the squid](https://docs.sqd.dev/en/sdk/squid-sdk/squid-cli/deploy) **without resetting its database** (Cloud) or just restart it (self-hosted). On Solana, if the existing DB stores block heights and the new code expects slots in the status row, see <https://docs.sqd.dev/en/sdk/migration/solana-resync-workaround>.
+If you can't afford a re-sync, [re-deploy the squid](https://docs.sqd.dev/en/cloud/reference/cli/deploy) **without resetting its database** (Cloud) or just restart it (self-hosted). On Solana, if the existing DB stores block heights and the new code expects slots in the status row, see <https://docs.sqd.dev/en/sdk/squid-sdk/solana/guides/migration/solana-resync-workaround>.
 
 ---
 

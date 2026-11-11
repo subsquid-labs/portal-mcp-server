@@ -33,6 +33,7 @@ import {
   buildChronologicalPageOrdering,
   buildQueryFreshness,
 } from '../../helpers/result-metadata.js'
+import { StreamRecoveryBudget, getStreamRangeRecovery } from '../../helpers/stream-progress.js'
 import {
   describeTimeWindowInput,
   estimateBlockTime,
@@ -910,6 +911,7 @@ async function visitAdaptiveEvmLogRange(
   body: Record<string, unknown>,
   rangeFrom: number,
   rangeTo: number,
+  recoveryBudget: StreamRecoveryBudget,
   onRecord: (record: unknown) => void | Promise<void>,
 ): Promise<number> {
   try {
@@ -928,14 +930,15 @@ async function visitAdaptiveEvmLogRange(
       },
     )
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (message.includes('Response too large') && rangeTo > rangeFrom && rangeTo - rangeFrom + 1 > MIN_LOG_CHUNK_SIZE) {
-      const mid = rangeFrom + Math.floor((rangeTo - rangeFrom) / 2)
-      const [left, right] = await Promise.all([
-        visitAdaptiveEvmLogRange(dataset, body, rangeFrom, mid, onRecord),
-        visitAdaptiveEvmLogRange(dataset, body, mid + 1, rangeTo, onRecord),
-      ])
-      return left + right
+    const recovery = getStreamRangeRecovery(error, rangeFrom, rangeTo, { budget: recoveryBudget, allowTimeout: true })
+    if (recovery && (recovery.fromBlock > rangeFrom || rangeTo - rangeFrom + 1 > MIN_LOG_CHUNK_SIZE)) {
+      const nextFrom = recovery.fromBlock
+      if (nextFrom > rangeTo) return recovery.deliveredRecords
+      const mid = nextFrom + Math.floor((rangeTo - nextFrom) / 2)
+      const left = await visitAdaptiveEvmLogRange(dataset, body, nextFrom, mid, recoveryBudget, onRecord)
+      const right =
+        mid < rangeTo ? await visitAdaptiveEvmLogRange(dataset, body, mid + 1, rangeTo, recoveryBudget, onRecord) : 0
+      return recovery.deliveredRecords + left + right
     }
 
     throw error
@@ -1462,78 +1465,86 @@ export function registerEvmOhlcTool(server: McpServer) {
         }
       }
 
+      const recoveryBudget = new StreamRecoveryBudget()
       const accumulateRange = async (
         rangeFrom: number,
         rangeTo: number,
         options?: { pageStartTimestamp?: number; pageEndExclusive?: number },
       ) => {
-        const rangeProcessed = await visitAdaptiveEvmLogRange(dataset, logBody, rangeFrom, rangeTo, async (record) => {
-          const block = record as {
-            number?: number
-            timestamp?: number
-            header?: { number?: number; timestamp?: number }
-            logs?: EvmLogRecord[]
-          }
-          const blockNumber = block.number ?? block.header?.number
-          const timestamp = block.timestamp ?? block.header?.timestamp
-          if (typeof timestamp !== 'number' || timestamp <= 0) return
-
-          for (const log of sortLogs(block.logs || [])) {
-            if (options?.pageEndExclusive !== undefined && timestamp >= options.pageEndExclusive) continue
-
-            earliestObservedBelowPageEnd = Math.min(earliestObservedBelowPageEnd, timestamp)
-            if (typeof blockNumber === 'number') {
-              earliestObservedBlock = Math.min(earliestObservedBlock, blockNumber)
+        const rangeProcessed = await visitAdaptiveEvmLogRange(
+          dataset,
+          logBody,
+          rangeFrom,
+          rangeTo,
+          recoveryBudget,
+          async (record) => {
+            const block = record as {
+              number?: number
+              timestamp?: number
+              header?: { number?: number; timestamp?: number }
+              logs?: EvmLogRecord[]
             }
+            const blockNumber = block.number ?? block.header?.number
+            const timestamp = block.timestamp ?? block.header?.timestamp
+            if (typeof timestamp !== 'number' || timestamp <= 0) return
 
-            if (options?.pageStartTimestamp !== undefined && timestamp < options.pageStartTimestamp) continue
+            for (const log of sortLogs(block.logs || [])) {
+              if (options?.pageEndExclusive !== undefined && timestamp >= options.pageEndExclusive) continue
 
-            const sample = decodePriceSample({
-              source: source as EvmOhlcSource,
-              log,
-              token0Decimals: resolvedToken0Decimals,
-              token1Decimals: resolvedToken1Decimals,
-            })
-            if (!sample) continue
+              earliestObservedBelowPageEnd = Math.min(earliestObservedBelowPageEnd, timestamp)
+              if (typeof blockNumber === 'number') {
+                earliestObservedBlock = Math.min(earliestObservedBlock, blockNumber)
+              }
 
-            latestTimestamp = Math.max(latestTimestamp, timestamp)
-            earliestObservedTimestamp = Math.min(earliestObservedTimestamp, timestamp)
-            totalSamples += 1
+              if (options?.pageStartTimestamp !== undefined && timestamp < options.pageStartTimestamp) continue
 
-            const bucketTimestamp = Math.floor(timestamp / intervalSeconds) * intervalSeconds
-
-            for (const baseSide of ['token0', 'token1'] as BaseTokenSide[]) {
-              const projected = projectPriceSample(sample, baseSide)
-              if (!projected) continue
-
-              const bucket = getOrCreateBucket(bucketsByBase[baseSide], bucketTimestamp)
-              if (bucket.open === null) bucket.open = projected.price
-              bucket.high = bucket.high === null ? projected.price : Math.max(bucket.high, projected.price)
-              bucket.low = bucket.low === null ? projected.price : Math.min(bucket.low, projected.price)
-              bucket.close = projected.price
-              bucket.base_volume_raw += projected.baseVolumeRaw
-              bucket.quote_volume_raw += projected.quoteVolumeRaw
-              bucket.sample_count += 1
-            }
-
-            if (sample.kind === 'swap') {
-              const counterparties = getTradeCounterparties(source as EvmOhlcSource, log)
-              pushRecentTradeCandidate({
-                timestamp,
-                timestamp_human: formatTimestamp(timestamp),
-                tx_hash: log.transactionHash,
-                log_index: log.logIndex,
-                sender: counterparties.sender,
-                recipient: counterparties.recipient,
-                priceToken1PerToken0: sample.priceToken1PerToken0,
-                token0Volume: sample.token0Volume,
-                token1Volume: sample.token1Volume,
-                token0Delta: sample.token0Delta,
-                token1Delta: sample.token1Delta,
+              const sample = decodePriceSample({
+                source: source as EvmOhlcSource,
+                log,
+                token0Decimals: resolvedToken0Decimals,
+                token1Decimals: resolvedToken1Decimals,
               })
+              if (!sample) continue
+
+              latestTimestamp = Math.max(latestTimestamp, timestamp)
+              earliestObservedTimestamp = Math.min(earliestObservedTimestamp, timestamp)
+              totalSamples += 1
+
+              const bucketTimestamp = Math.floor(timestamp / intervalSeconds) * intervalSeconds
+
+              for (const baseSide of ['token0', 'token1'] as BaseTokenSide[]) {
+                const projected = projectPriceSample(sample, baseSide)
+                if (!projected) continue
+
+                const bucket = getOrCreateBucket(bucketsByBase[baseSide], bucketTimestamp)
+                if (bucket.open === null) bucket.open = projected.price
+                bucket.high = bucket.high === null ? projected.price : Math.max(bucket.high, projected.price)
+                bucket.low = bucket.low === null ? projected.price : Math.min(bucket.low, projected.price)
+                bucket.close = projected.price
+                bucket.base_volume_raw += projected.baseVolumeRaw
+                bucket.quote_volume_raw += projected.quoteVolumeRaw
+                bucket.sample_count += 1
+              }
+
+              if (sample.kind === 'swap') {
+                const counterparties = getTradeCounterparties(source as EvmOhlcSource, log)
+                pushRecentTradeCandidate({
+                  timestamp,
+                  timestamp_human: formatTimestamp(timestamp),
+                  tx_hash: log.transactionHash,
+                  log_index: log.logIndex,
+                  sender: counterparties.sender,
+                  recipient: counterparties.recipient,
+                  priceToken1PerToken0: sample.priceToken1PerToken0,
+                  token0Volume: sample.token0Volume,
+                  token1Volume: sample.token1Volume,
+                  token0Delta: sample.token0Delta,
+                  token1Delta: sample.token1Delta,
+                })
+              }
             }
-          }
-        })
+          },
+        )
 
         if (rangeProcessed > 0) chunksFetched += 1
       }

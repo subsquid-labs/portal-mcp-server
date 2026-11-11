@@ -1,5 +1,7 @@
 # Environment Setup Guide
 
+The local examples use development credentials on loopback. For another database, the user configures credentials directly; see [CREDENTIALS.md](CREDENTIALS.md).
+
 Verify your development environment is correctly configured for building Subsquid Pipes indexers.
 
 ## Overview
@@ -81,7 +83,7 @@ pnpx --version
 bun --version
 ```
 
-**Install bun** (optional but faster): follow the official guide at https://bun.sh/docs/installation.
+**Install bun** (optional): use its official package-manager instructions at https://bun.sh/docs/installation. Do not pipe a downloaded script into a shell.
 
 **Note**: npm comes with Node.js. Install pnpm with Corepack or the official pnpm installer before running `pnpx @subsquid/pipes-cli@...` commands.
 
@@ -129,11 +131,11 @@ sudo usermod -aG docker $USER
 docker ps | grep clickhouse
 ```
 
-**Start ClickHouse**:
+**Start ClickHouse** (local development only):
 ```bash
 docker run -d \
   --name clickhouse \
-  -p 8123:8123 \
+  -p 127.0.0.1:8123:8123 \
   -e CLICKHOUSE_PASSWORD=default \
   clickhouse/clickhouse-server
 ```
@@ -141,7 +143,6 @@ docker run -d \
 **Verify connection**:
 ```bash
 docker exec clickhouse clickhouse-client \
-  --password=default \
   --query "SELECT 1"
 ```
 
@@ -156,12 +157,12 @@ docker exec clickhouse clickhouse-client \
 docker ps | grep postgres
 ```
 
-**Start PostgreSQL**:
+**Start PostgreSQL** (local development only):
 ```bash
 docker run -d \
   --name postgres \
-  -p 5432:5432 \
-  -e POSTGRES_PASSWORD=postgres \
+  -p 127.0.0.1:5432:5432 \
+  -e POSTGRES_PASSWORD=default \
   postgres:16
 ```
 
@@ -246,8 +247,8 @@ ls -l src/contracts/
 # Check for .env file
 ls -la .env
 
-# Example .env content
-cat .env
+# List variable names only; do not display values
+sed -nE 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1=<redacted>/p' .env
 ```
 
 **Expected .env**:
@@ -255,7 +256,7 @@ cat .env
 CLICKHOUSE_URL=http://localhost:8123
 CLICKHOUSE_DATABASE=pipes
 CLICKHOUSE_USER=default
-CLICKHOUSE_PASSWORD=default
+CLICKHOUSE_PASSWORD=<provided-by-secret-manager>
 ```
 
 ### 4. Build Test
@@ -272,12 +273,12 @@ npx tsc
 
 ```bash
 # Test CLI availability
-pnpx @subsquid/pipes-cli@1.0.0-beta.2 --version
+pnpx @subsquid/pipes-cli@1.0.0-beta.3 --version
 ```
 
 **Note**: No local SDK installation needed - CLI is used via pnpx
 
-**Manual (non-CLI) setups**: the SDK is in **1.0.0 beta**. On 2026-08-26 npm `latest` and the CLI-generated `"^1.0.0-beta.1"` range installed `1.0.0-beta.3`, while the `beta` tag pointed to `1.0.0-beta.4`. Pin beta.4 explicitly for its Pub/Sub signals and lag metrics; otherwise prefer an exact pin or the generated caret range, and recheck with `npm view @subsquid/pipes dist-tags --json`. Do **not** pin the floating `"alpha"` dist-tag: it resolved to `1.0.0-alpha.22` on that date, and floating tags make builds non-reproducible. A plain `"^1.0.0"` excludes prereleases and resolves to nothing until stable 1.0.0 ships. The CLI itself is the remaining dist-tag trap: `@subsquid/pipes-cli@latest` is the old `1.0.0-alpha.1`; always pin `@subsquid/pipes-cli@1.0.0-beta.2` (or `@beta`).
+**Manual (non-CLI) setups:** as of 2026-11-10, npm `latest` is `@subsquid/pipes@1.0.0-beta.11` and `@subsquid/pipes-cli@1.0.0-beta.3`. The `beta` tags lag at SDK beta.4 and CLI beta.2. Pin exact versions and read [COMPATIBILITY.md](COMPATIBILITY.md) before upgrading. A plain `^1.0.0` excludes prereleases; floating tags make installs change over time.
 
 ## Platform-Specific Notes
 
@@ -334,13 +335,13 @@ echo ""
 
 # Node.js
 echo -n "Node.js: "
-node --version || echo "❌ Missing (install from nodejs.org)"
+node --version || echo "Missing (install from nodejs.org)"
 
 # npm/npx
 echo -n "npm: "
-npm --version || echo "❌ Missing"
+npm --version || echo "Missing"
 echo -n "npx: "
-npx --version || echo "❌ Missing"
+npx --version || echo "Missing"
 
 # bun (optional)
 echo -n "bun: "
@@ -348,15 +349,15 @@ bun --version 2>/dev/null || echo "⚠️  Optional (install from bun.sh)"
 
 # Docker
 echo -n "Docker: "
-docker --version || echo "❌ Missing (install Docker Desktop)"
+docker --version || echo "Missing (install Docker Desktop)"
 
 # Docker running
 echo -n "Docker running: "
-docker ps > /dev/null 2>&1 && echo "✅ Yes" || echo "❌ No (start Docker)"
+docker ps > /dev/null 2>&1 && echo "Running" || echo "Not running (start Docker)"
 
 # ClickHouse
 echo -n "ClickHouse container: "
-docker ps | grep -q clickhouse && echo "✅ Running" || echo "❌ Not running"
+docker ps | grep -q clickhouse && echo "Running" || echo "Not running"
 
 # PostgreSQL
 echo -n "PostgreSQL container: "
@@ -364,18 +365,18 @@ docker ps | grep -q postgres && echo "⚠️  Optional" || echo "⚠️  Not run
 
 # TypeScript
 echo -n "TypeScript: "
-npx tsc --version || echo "❌ Missing"
+npx tsc --version || echo "Missing"
 
 # Portal API
 echo -n "Portal API: "
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST https://portal.sqd.dev/datasets/ethereum-mainnet/stream \
   -H "Content-Type: application/json" \
   -d '{"type":"evm","fromBlock":18000000,"toBlock":18000001,"fields":{"block":{"number":true}}}')
-[ "$STATUS" = "200" ] && echo "✅ Accessible" || echo "❌ Failed (HTTP $STATUS)"
+[ "$STATUS" = "200" ] && echo "Accessible" || echo "Failed (HTTP $STATUS)"
 
 # Pipes CLI
 echo -n "Pipes CLI: "
-pnpx @subsquid/pipes-cli@1.0.0-beta.2 --version > /dev/null 2>&1 && echo "✅ Available" || echo "❌ Failed"
+pnpx @subsquid/pipes-cli@1.0.0-beta.3 --version > /dev/null 2>&1 && echo "Available" || echo "Failed"
 
 echo ""
 echo "=== Setup Complete ==="
@@ -419,7 +420,7 @@ docker ps
 docker stop <container-id>
 
 # Option B: Use different port
-docker run -d --name clickhouse -p 8124:8123 clickhouse/clickhouse-server
+docker run -d --name clickhouse -p 127.0.0.1:8124:8123 -e CLICKHOUSE_PASSWORD clickhouse/clickhouse-server
 # Update CLICKHOUSE_URL to http://localhost:8124
 ```
 
@@ -468,7 +469,7 @@ docker rm -f clickhouse
 # Start fresh
 docker run -d \
   --name clickhouse \
-  -p 8123:8123 \
+  -p 127.0.0.1:8123:8123 \
   -e CLICKHOUSE_PASSWORD=default \
   clickhouse/clickhouse-server
 
@@ -505,13 +506,13 @@ Once environment is verified:
 # Download from docker.com
 
 # 3. Start ClickHouse
-docker run -d --name clickhouse -p 8123:8123 \
-  -e CLICKHOUSE_PASSWORD=default clickhouse/clickhouse-server
+docker run -d --name clickhouse -p 127.0.0.1:8123:8123 \
+  -e CLICKHOUSE_PASSWORD clickhouse/clickhouse-server
 
 # 4. Verify
 node --version
 docker ps
-pnpx @subsquid/pipes-cli@1.0.0-beta.2 --version
+pnpx @subsquid/pipes-cli@1.0.0-beta.3 --version
 
 # 5. Ready to build!
 ```

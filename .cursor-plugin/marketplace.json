@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "SQD plugins for blockchain data across 130+ networks, plus Pipes SDK and Squid SDK skills.",
-    "version": "0.8.5"
+    "version": "0.8.6"
   },
   "plugins": [
     {

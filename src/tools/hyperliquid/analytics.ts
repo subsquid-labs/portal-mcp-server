@@ -6,6 +6,13 @@ import { buildTableDescriptor } from '../../helpers/chart-metadata.js'
 import { ActionableError } from '../../helpers/errors.js'
 import { formatNumber, formatPct, formatResult, formatUSD, shortenAddress } from '../../helpers/format.js'
 import { hashString53 } from '../../helpers/hash.js'
+import {
+  HYPERLIQUID_FEE_NOTICE,
+  type HyperliquidFeeAccumulator,
+  accumulateHyperliquidFee,
+  createHyperliquidFeeAccumulator,
+  summarizeHyperliquidFees,
+} from '../../helpers/hyperliquid-fees.js'
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
 import { buildPaginationInfo, decodeCursor, encodeCursor } from '../../helpers/pagination.js'
 import {
@@ -21,6 +28,7 @@ import {
   type BlockAtTimestampResult,
   type EstimatedTimeframeResolution,
   type TimestampInput,
+  getTimestampWindowNotices,
   resolveTimeframeOrBlocks,
 } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
@@ -51,11 +59,11 @@ type HyperliquidCoinTotals = {
   volume: number
   traders: Set<number>
   pnl: number
-  fees: number
+  fees: HyperliquidFeeAccumulator
   longs: number
   shorts: number
-  liquidations: number
-  liqVolume: number
+  liquidations: null
+  liqVolume: null
 }
 
 export type HyperliquidFillTotals = {
@@ -66,10 +74,10 @@ export type HyperliquidFillTotals = {
   traderData: Map<string, { fills: number; volume: number; pnl: number; coins: Set<string> }>
   totalFills: number
   totalVolume: number
-  totalFees: number
+  fees: HyperliquidFeeAccumulator
   totalPnl: number
-  liquidationCount: number
-  liquidationVolume: number
+  liquidationCount: null
+  liquidationVolume: null
 }
 
 export function createFillAccumulator(): HyperliquidFillTotals {
@@ -81,40 +89,26 @@ export function createFillAccumulator(): HyperliquidFillTotals {
     traderData: new Map(),
     totalFills: 0,
     totalVolume: 0,
-    totalFees: 0,
+    fees: createHyperliquidFeeAccumulator(),
     totalPnl: 0,
-    liquidationCount: 0,
-    liquidationVolume: 0,
+    liquidationCount: null,
+    liquidationVolume: null,
   }
 }
 
-/*
- * One fill folded into the running totals. This lived inside the streaming
- * callback, where nothing but a live Portal window could reach it, and a
- * sign error in it went unnoticed through a release: fees were summed as
- * `Math.abs(fee)`, so a market whose makers collected rebates was reported as
- * one that paid fees. Fees and PnL are signed here for that reason, and the
- * function is exported so the arithmetic can be checked without a network.
- */
 export function accumulateFill(totals: HyperliquidFillTotals, fill: Record<string, unknown>): void {
   const userKey = typeof fill.user === 'string' ? fill.user : undefined
   const coinKey = typeof fill.coin === 'string' ? fill.coin : 'unknown'
   const notional = Number(fill.px || 0) * Number(fill.sz || 0)
-  const fee = Number(fill.fee || 0)
   const pnl = Number(fill.closedPnl || 0)
   const direction = typeof fill.dir === 'string' ? fill.dir : 'Unknown'
-  const isLiquidation = direction === 'Short > Long' || direction === 'Long > Short'
 
   totals.totalFills += 1
   if (userKey) totals.traders.add(hashString53(userKey))
   if (coinKey) totals.allCoins.add(coinKey)
   totals.totalVolume += notional
-  totals.totalFees += fee
+  accumulateHyperliquidFee(totals.fees, fill)
   totals.totalPnl += pnl
-  if (isLiquidation) {
-    totals.liquidationCount += 1
-    totals.liquidationVolume += notional
-  }
   totals.dirCounts[direction] = (totals.dirCounts[direction] || 0) + 1
 
   let cd = totals.coinData.get(coinKey)
@@ -124,11 +118,11 @@ export function accumulateFill(totals: HyperliquidFillTotals, fill: Record<strin
       volume: 0,
       traders: new Set<number>(),
       pnl: 0,
-      fees: 0,
+      fees: createHyperliquidFeeAccumulator(),
       longs: 0,
       shorts: 0,
-      liquidations: 0,
-      liqVolume: 0,
+      liquidations: null,
+      liqVolume: null,
     }
     totals.coinData.set(coinKey, cd)
   }
@@ -136,13 +130,9 @@ export function accumulateFill(totals: HyperliquidFillTotals, fill: Record<strin
   cd.volume += notional
   if (userKey) cd.traders.add(hashString53(userKey))
   cd.pnl += pnl
-  cd.fees += fee
+  accumulateHyperliquidFee(cd.fees, fill)
   if (direction === 'Open Long') cd.longs += 1
   if (direction === 'Open Short') cd.shorts += 1
-  if (isLiquidation) {
-    cd.liquidations += 1
-    cd.liqVolume += notional
-  }
 
   if (userKey) {
     let td = totals.traderData.get(userKey)
@@ -156,6 +146,11 @@ export function accumulateFill(totals: HyperliquidFillTotals, fill: Record<strin
     if (coinKey) td.coins.add(coinKey)
   }
 }
+
+const LIQUIDATION_NOTICE =
+  'Liquidation counts and volume are unavailable because Portal fills do not expose liquidation markers. Position flips are not evidence of liquidation.'
+const FILL_VOLUME_NOTICE =
+  'Volume is per-account fill notional. Both counterparties may appear, so this sum is not deduplicated market trading volume.'
 
 const HYPERLIQUID_ANALYTICS_DEEP_INITIAL_CHUNK_SIZE = 40_000
 const HYPERLIQUID_ANALYTICS_CACHE_TTL_MS = 30_000
@@ -193,6 +188,7 @@ type CachedHyperliquidAnalyticsResult = {
   key: string
   response: Record<string, any>
   summary: string
+  notices: string[]
   dataset: string
   fromBlock: number
   toBlock: number
@@ -205,7 +201,7 @@ type PendingHyperliquidAnalyticsResult = {
     response: Record<string, any>
     summary: string
     shortSummary: string
-    notices: string[] | undefined
+    notices: string[]
     effectiveFrom: number
     hasMoreSections: boolean
   }>
@@ -270,6 +266,11 @@ function formatHyperliquidAnalyticsResponse(response: Record<string, any>, respo
         unique_coins: response.overview.unique_coins,
         total_volume_usd: response.overview.total_volume_usd,
         total_fees_usd: response.overview.total_fees_usd,
+        fees_status: response.overview.fees_status,
+        fees_by_token: response.overview.fees_by_token,
+        unknown_fee_token_fills: response.overview.unknown_fee_token_fills,
+        invalid_fee_fills: response.overview.invalid_fee_fills,
+        ...(response.overview.fee_notice ? { fee_notice: response.overview.fee_notice } : {}),
         total_realized_pnl: response.overview.total_realized_pnl,
         long_short_ratio: response.overview.long_short_ratio,
         long_short_label: response.overview.long_short_label,
@@ -278,6 +279,8 @@ function formatHyperliquidAnalyticsResponse(response: Record<string, any>, respo
 
   const compactLiquidations = response.liquidations
     ? {
+        status: response.liquidations.status,
+        reason: response.liquidations.reason,
         count: response.liquidations.count,
         volume_usd: response.liquidations.volume_usd,
         percentage_of_fills: response.liquidations.percentage_of_fills,
@@ -292,6 +295,11 @@ function formatHyperliquidAnalyticsResponse(response: Record<string, any>, respo
         fill_count: item.fill_count,
         unique_traders: item.unique_traders,
         realized_pnl: item.realized_pnl,
+        fees_usd: item.fees_usd,
+        fees_status: item.fees_status,
+        fees_by_token: item.fees_by_token,
+        unknown_fee_token_fills: item.unknown_fee_token_fills,
+        invalid_fee_fills: item.invalid_fee_fills,
       }))
     : undefined
 
@@ -482,12 +490,6 @@ function decorateHyperliquidAnalyticsPresentation(response: Record<string, any>)
         format: 'currency_usd',
         unit: 'USD',
       }),
-      buildMetricCard({
-        id: 'liquidations',
-        label: 'Liquidations',
-        value_path: 'liquidations.count',
-        format: 'integer',
-      }),
     ],
     panels: [
       ...(Array.isArray(response.volume_by_coin)
@@ -673,7 +675,7 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
             ? requestedBlockRange
             : FAST_MODE_MAX_ANALYTICS_BLOCKS
       const effectiveFrom = requestedBlockRange > maxAnalyticsBlocks ? endBlock - maxAnalyticsBlocks + 1 : fromBlock
-      const cacheKey = `${dataset}:${mode}:${timeframe ?? ''}:${String(from_timestamp ?? '')}:${String(to_timestamp ?? '')}:${(coin || []).join(',')}:${response_format}:${section_limit ?? ''}`
+      const cacheKey = `${dataset}:${fromBlock}:${endBlock}:${mode}:${timeframe ?? ''}:${String(from_timestamp ?? '')}:${String(to_timestamp ?? '')}:${(coin || []).join(',')}:${response_format}:${section_limit ?? ''}`
       const cached = !cursor ? getCachedHyperliquidAnalyticsResult(cacheKey) : undefined
 
       if (cached) {
@@ -689,6 +691,7 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
         const presentation = decorateHyperliquidAnalyticsPresentation(formattedCachedResponse)
         return formatResult(presentation.response, cached.summary, {
           toolName: 'portal_hyperliquid_get_analytics',
+          notices: cached.notices,
           ordering: {
             kind: 'sections',
             volume_by_coin: { order: 'rank_ascending', sorted_by: 'volume_usd', direction: 'desc' },
@@ -759,6 +762,7 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
             sz: true,
             dir: true,
             fee: true,
+            feeToken: true,
             closedPnl: true,
           },
           initialChunkSize: Math.min(
@@ -777,24 +781,32 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
           },
         })
 
-        const { totalFills, totalVolume, totalFees, totalPnl, liquidationCount, liquidationVolume } = totals
+        const { totalFills, totalVolume, totalPnl } = totals
+        const fees = summarizeHyperliquidFees(totals.fees)
 
         if (totalFills === 0) {
           throw new Error('No Hyperliquid fills found for the specified filters')
         }
 
         const volumeByCoin = Array.from(coinData.entries())
-          .map(([c, d]) => ({
-            coin: c,
-            fill_count: d.fills,
-            volume_usd: parseFloat(d.volume.toFixed(2)),
-            unique_traders: d.traders.size,
-            realized_pnl: parseFloat(d.pnl.toFixed(2)),
-            fees_usd: parseFloat(d.fees.toFixed(2)),
-            long_short_ratio: d.shorts > 0 ? parseFloat((d.longs / d.shorts).toFixed(3)) : d.longs > 0 ? Infinity : 0,
-            liquidation_count: d.liquidations,
-            liquidation_volume_usd: parseFloat(d.liqVolume.toFixed(2)),
-          }))
+          .map(([c, d]) => {
+            const coinFees = summarizeHyperliquidFees(d.fees)
+            return {
+              coin: c,
+              fill_count: d.fills,
+              volume_usd: parseFloat(d.volume.toFixed(2)),
+              unique_traders: d.traders.size,
+              realized_pnl: parseFloat(d.pnl.toFixed(2)),
+              fees_usd: coinFees.total_fees_usd,
+              fees_status: coinFees.fees_status,
+              fees_by_token: coinFees.fees_by_token,
+              unknown_fee_token_fills: coinFees.unknown_fee_token_fills,
+              invalid_fee_fills: coinFees.invalid_fee_fills,
+              long_short_ratio: d.shorts > 0 ? parseFloat((d.longs / d.shorts).toFixed(3)) : null,
+              liquidation_count: d.liquidations,
+              liquidation_volume_usd: null,
+            }
+          })
           .sort((a, b) => b.volume_usd - a.volume_usd)
           .map((item, i) => ({
             rank: i + 1,
@@ -822,6 +834,7 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
           }))
 
         const topWinners = Array.from(traderData.entries())
+          .filter(([, trader]) => trader.pnl > 0)
           .map(([user, d]) => ({
             user,
             realized_pnl: parseFloat(d.pnl.toFixed(2)),
@@ -836,6 +849,7 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
           }))
 
         const topLosers = Array.from(traderData.entries())
+          .filter(([, trader]) => trader.pnl < 0)
           .map(([user, d]) => ({
             user,
             realized_pnl: parseFloat(d.pnl.toFixed(2)),
@@ -895,7 +909,7 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
 
         const openLongs = dirCounts['Open Long'] || 0
         const openShorts = dirCounts['Open Short'] || 0
-        const lsRatio = openShorts > 0 ? openLongs / openShorts : 0
+        const lsRatio = openShorts > 0 ? openLongs / openShorts : null
 
         const response: any = {
           overview: {
@@ -907,12 +921,19 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
             unique_coins: allCoins.size,
             total_volume_usd: parseFloat(totalVolume.toFixed(2)),
             total_volume_formatted: formatUSD(totalVolume),
-            total_fees_usd: parseFloat(totalFees.toFixed(2)),
-            total_fees_formatted: formatUSD(totalFees),
+            ...fees,
+            total_fees_formatted: fees.total_fees_usd === null ? 'Unavailable' : formatUSD(fees.total_fees_usd),
             total_realized_pnl: parseFloat(totalPnl.toFixed(2)),
             total_pnl_formatted: (totalPnl >= 0 ? '+' : '') + formatUSD(totalPnl),
-            long_short_ratio: parseFloat(lsRatio.toFixed(3)),
-            long_short_label: lsRatio > 1.05 ? 'Long-biased' : lsRatio < 0.95 ? 'Short-biased' : 'Balanced',
+            long_short_ratio: lsRatio === null ? null : parseFloat(lsRatio.toFixed(3)),
+            long_short_label:
+              openLongs === 0 && openShorts === 0
+                ? 'No opening fills'
+                : lsRatio === null || lsRatio > 1.05
+                  ? 'Long-biased'
+                  : lsRatio < 0.95
+                    ? 'Short-biased'
+                    : 'Balanced',
             direction_breakdown: dirCounts,
           },
           percentiles: {
@@ -921,11 +942,13 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
             trader_realized_pnl_usd: buildPercentileSummary(Array.from(traderData.values()).map((item) => item.pnl)),
           },
           liquidations: {
-            count: liquidationCount,
-            count_formatted: formatNumber(liquidationCount),
-            volume_usd: parseFloat(liquidationVolume.toFixed(2)),
-            volume_formatted: formatUSD(liquidationVolume),
-            percentage_of_fills: formatPct((liquidationCount / totalFills) * 100),
+            status: 'unavailable',
+            reason: LIQUIDATION_NOTICE,
+            count: null,
+            count_formatted: 'Unavailable',
+            volume_usd: null,
+            volume_formatted: 'Unavailable',
+            percentage_of_fills: null,
           },
           volume_by_coin: volumePage.pageItems,
           top_traders_by_volume: traderPage.pageItems,
@@ -933,12 +956,17 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
           top_pnl_losers: loserPage.pageItems,
         }
 
-        const notices =
-          effectiveFrom > fromBlock
+        const notices = [
+          LIQUIDATION_NOTICE,
+          FILL_VOLUME_NOTICE,
+          ...(fees.fees_status === 'unavailable' ? [HYPERLIQUID_FEE_NOTICE] : []),
+          ...getTimestampWindowNotices(resolvedWindow),
+          ...(effectiveFrom > fromBlock
             ? [
                 `Analyzed the most recent ${maxAnalyticsBlocks.toLocaleString()} blocks because the requested window exceeds the current Hyperliquid analytics scan budget.`,
               ]
-            : undefined
+            : []),
+        ]
         if (chunksFetched > 1) response._chunks_fetched = chunksFetched
         if (chunkSizeReduced) response._chunk_size_reduced = true
         response._pagination = {
@@ -959,11 +987,12 @@ export function registerHyperliquidAnalyticsTool(server: McpServer) {
         }
 
         const formattedResponse = formatHyperliquidAnalyticsResponse(response, response_format as ResponseFormat)
-        const summary = `Hyperliquid analytics${coin ? ` for ${coin.join(', ')}` : ''}: ${totalFills.toLocaleString()} fills, ${traders.size} traders, $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} volume, ${liquidationCount} liquidations`
+        const summary = `Hyperliquid analytics${coin ? ` for ${coin.join(', ')}` : ''}: ${totalFills.toLocaleString()} fills, ${traders.size} traders, $${totalVolume.toLocaleString(undefined, { maximumFractionDigits: 0 })} volume`
         if (!cursor) {
           setCachedHyperliquidAnalyticsResult(cacheKey, {
             response: JSON.parse(JSON.stringify(response)) as Record<string, any>,
             summary,
+            notices,
             dataset,
             fromBlock: effectiveFrom,
             toBlock: endBlock,

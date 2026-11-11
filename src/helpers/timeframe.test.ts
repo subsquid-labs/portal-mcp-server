@@ -1,14 +1,22 @@
 import assert from 'node:assert/strict'
-import { describe, it } from 'node:test'
+import { afterEach, describe, it } from 'node:test'
 
 import {
   describeTimeWindowInput,
+  estimateBlockTime,
   parseTimeframeToSeconds,
   parseTimestampInput,
+  resolveBlockAtTimestamp,
+  resolveTimeframeOrBlocks,
   timeframeToBlocks,
 } from './timeframe.js'
 
 const NOW = 1_700_000_000
+const originalFetch = globalThis.fetch
+
+afterEach(() => {
+  globalThis.fetch = originalFetch
+})
 
 describe('parseTimeframeToSeconds', () => {
   it('parses compact windows', () => {
@@ -69,5 +77,121 @@ describe('describeTimeWindowInput and timeframeToBlocks', () => {
     assert.equal(timeframeToBlocks('1h', 'bitcoin-mainnet'), 6)
     assert.equal(timeframeToBlocks('1h', 'ethereum-mainnet'), 300)
     assert.equal(timeframeToBlocks('2h', 'bitcoin-mainnet'), 2 * timeframeToBlocks('1h', 'bitcoin-mainnet'))
+  })
+})
+
+const BASE_DENIM_TIMESTAMP = 1_793_901_600
+const BASE_HEAD_TIMESTAMP = BASE_DENIM_TIMESTAMP + 3 * 86_400
+const BASE_HEAD_BLOCK = 100_000_000
+
+function mockBaseTimestamps(options: { exactBoundary?: number; headAvailable?: boolean } = {}) {
+  globalThis.fetch = async (input, init) => {
+    const url = String(input)
+    if (url.endsWith('/head') || url.endsWith('/finalized-head')) {
+      return Response.json({ number: BASE_HEAD_BLOCK, hash: '0x1234' })
+    }
+    if (url.endsWith('/metadata')) return Response.json({ start_block: 0 })
+    if (url.includes('/timestamps/')) {
+      return options.exactBoundary === undefined
+        ? new Response('', { status: 404 })
+        : Response.json({ block_number: 1_000 })
+    }
+    if (url.endsWith('/stream')) {
+      const query = JSON.parse(String(init?.body))
+      if (query.fromBlock === BASE_HEAD_BLOCK && options.headAvailable !== false) {
+        return new Response(
+          JSON.stringify({ header: { number: BASE_HEAD_BLOCK, timestamp: BASE_HEAD_TIMESTAMP } }) + '\n',
+        )
+      }
+      const exactBoundary = options.exactBoundary
+      if (exactBoundary !== undefined && query.fromBlock <= 1_000 && query.toBlock >= 1_000) {
+        const records = [999, 1_000, 1_001]
+          .filter((number) => number >= query.fromBlock && number <= query.toBlock)
+          .map((number) => ({ header: { number, timestamp: exactBoundary + (number - 1_000) * 2 } }))
+        return new Response(records.map((record) => JSON.stringify(record)).join('\n') + '\n')
+      }
+      return new Response('')
+    }
+    throw new Error(`Unexpected mocked Portal URL: ${url}`)
+  }
+}
+
+describe('Base cadence estimates', () => {
+  it('uses 200ms canonical blocks on both upgraded Base networks', () => {
+    assert.equal(estimateBlockTime('base-mainnet', 'evm'), 0.2)
+    assert.equal(estimateBlockTime('base-sepolia', 'evm'), 0.2)
+    assert.equal(estimateBlockTime('base-custom', 'evm'), 2)
+  })
+
+  it('keeps exact historical timestamp boundaries across Denim', async () => {
+    const target = BASE_DENIM_TIMESTAMP - 3_600
+    mockBaseTimestamps({ exactBoundary: target })
+    const result = await resolveBlockAtTimestamp('base-mainnet', target, {
+      boundary: 'from',
+      headBlock: BASE_HEAD_BLOCK,
+      headTimestamp: BASE_HEAD_TIMESTAMP,
+      verificationRetries: 0,
+    })
+    assert.equal(result.resolution, 'verified_boundary')
+    assert.equal(result.block_number, 1_000)
+  })
+
+  it('keeps verified historical timeframe windows across Denim', async () => {
+    mockBaseTimestamps({ exactBoundary: BASE_HEAD_TIMESTAMP - 30 * 86_400 })
+    const result = await resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '30d' })
+    assert.equal(result.from_block, 1_000)
+    assert.equal(result.from_lookup?.resolution, 'verified_boundary')
+    assert.equal(result.estimated_timeframe, undefined)
+  })
+
+  it('estimates recent Sepolia windows at the current cadence when exact lookup is unavailable', async () => {
+    mockBaseTimestamps()
+    const result = await resolveTimeframeOrBlocks({ dataset: 'base-sepolia', timeframe: '15m' })
+    assert.equal(result.estimated_timeframe?.estimated_block_time_seconds, 0.2)
+    assert.equal(result.to_block - result.from_block + 1, 4_500)
+  })
+
+  it('refuses estimated windows across Denim even after the timestamp failure cache activates', async () => {
+    mockBaseTimestamps()
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await assert.rejects(
+        resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '30d' }),
+        /cannot estimate.*Denim/i,
+      )
+    }
+    const recent = await resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' })
+    assert.equal(recent.to_block - recent.from_block + 1, 4_500)
+  })
+
+  it('refuses an estimated historical timestamp across the cadence upgrade', async () => {
+    mockBaseTimestamps()
+    await assert.rejects(
+      resolveBlockAtTimestamp('base-mainnet', BASE_DENIM_TIMESTAMP - 3_600, {
+        headBlock: BASE_HEAD_BLOCK,
+        headTimestamp: BASE_HEAD_TIMESTAMP,
+        verificationRetries: 0,
+      }),
+      /cannot estimate.*Denim/i,
+    )
+  })
+
+  it('refuses estimates reaching before the separate Sepolia activation', async () => {
+    mockBaseTimestamps()
+    await assert.rejects(
+      resolveBlockAtTimestamp('base-sepolia', 1_792_605_600 - 3_600, {
+        headBlock: BASE_HEAD_BLOCK,
+        headTimestamp: BASE_HEAD_TIMESTAMP,
+        verificationRetries: 0,
+      }),
+      /cannot estimate.*Denim/i,
+    )
+  })
+
+  it('does not estimate a Base timeframe without a verified indexed head timestamp', async () => {
+    mockBaseTimestamps({ headAvailable: false })
+    await assert.rejects(
+      resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' }),
+      /indexed head timestamp/i,
+    )
   })
 })

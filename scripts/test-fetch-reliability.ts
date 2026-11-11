@@ -24,6 +24,7 @@ import {
 import { formatResult } from '../src/helpers/format.js'
 import { registerPortalTool } from '../src/helpers/mcp-registration.js'
 import { runWithPortalRequestSignal } from '../src/helpers/request-context.js'
+import { PortalStreamError } from '../src/helpers/stream-progress.js'
 import { toolCallsTotal, toolErrorsTotal, toolOutcomesTotal } from '../src/metrics.js'
 import { createPortalServer } from '../src/server.js'
 import { fetchAdaptiveTransactionRange } from '../src/tools/evm/query-transactions.js'
@@ -82,6 +83,19 @@ async function main() {
     !isBoundedUpstreamToolError(boundedResult('upstream_unavailable', 'upstream', false)),
     'non-retryable upstream failures should not be treated as bounded transient errors',
   )
+  for (const [code, origin] of [
+    ['invalid_cursor', 'client_input'],
+    ['internal_error', 'server'],
+    ['upstream_timeout', 'upstream'],
+  ]) {
+    assert(
+      !isBoundedUpstreamToolError({
+        ...boundedResult(code, origin, false),
+        text: 'Portal server error (529) while using a continuation cursor',
+      }),
+      `explicit non-retryable ${code} must take precedence over transient-looking error text`,
+    )
+  }
   assert(
     !isBoundedUpstreamToolError(boundedResult('internal_error', 'server')),
     'internal server errors should not be treated as bounded upstream errors',
@@ -549,13 +563,36 @@ async function main() {
         assert(error instanceof Error && /Request timeout after 100ms/.test(error.message), 'expected timeout error'),
     )
 
+    let stalledVisitorRecords = 0
     await expectFastFailure(
-      'stream visitor times out while reading a stalled body',
+      'stream visitor preserves a timeout after delivery without allowing replay',
       () =>
-        portalFetchStreamVisit(`${baseUrl}/visit-stall`, {}, { timeout: 100, retries: 0, onRecord: () => undefined }),
-      (error) =>
-        assert(error instanceof Error && /Request timeout after 100ms/.test(error.message), 'expected timeout error'),
+        portalFetchStreamVisit(
+          `${baseUrl}/visit-stall`,
+          {},
+          {
+            timeout: 100,
+            retries: 0,
+            onRecord: () => {
+              stalledVisitorRecords++
+            },
+          },
+        ),
+      (error) => {
+        assert(error instanceof PortalStreamError, 'expected a typed partial-delivery error')
+        assert(error.code === 'incomplete_result' && !error.retryable, 'partial delivery must not retry the same range')
+        assert(error.reason === 'upstream_timeout' && error.origin === 'upstream', 'timeout attribution should survive')
+        assert(
+          error.deliveredRecords === 1 && error.lastDeliveredBlock === 1,
+          'completed block checkpoint should survive',
+        )
+        assert(
+          error.cause instanceof ActionableError && error.cause.code === 'upstream_timeout',
+          'original timeout cause should survive',
+        )
+      },
     )
+    assert(stalledVisitorRecords === 1, 'stalled visitor must receive its record exactly once')
 
     for (const path of ['/truncated-stream', '/early-eof']) {
       await expectFastFailure(
