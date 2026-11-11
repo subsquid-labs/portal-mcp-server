@@ -101,8 +101,9 @@ const stream = evmPortalStream({
 })
 
 for await (const { data } of stream) {
-  if (!data) continue
-  console.table(data.rpc) // [{ url, receivedAt, portalDelayMs }]
+  for (const sample of data) {
+    console.table(sample.rpc) // [{ url, receivedAt, hash, portalDelayMs, unresolved }]
+  }
 }
 ```
 
