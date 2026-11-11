@@ -476,7 +476,7 @@ export function normalizeHyperliquidFillResult(item: RecordLike): RecordLike {
       ...(price ? { px: price, price_unit: 'USD per base asset' } : {}),
       ...(size ? { sz: size, size_unit: coin ?? 'base asset' } : {}),
       ...(fee ? { fee, fee_unit: feeToken ?? 'quote asset' } : {}),
-      ...(closedPnl ? { closedPnl, closed_pnl_unit: feeToken ?? 'quote asset' } : {}),
+      ...(closedPnl ? { closedPnl, closed_pnl_unit: 'quote asset' } : {}),
       ...(startPosition ? { startPosition, start_position_unit: coin ?? 'base asset' } : {}),
       ...(builderFee ? { builderFee, builder_fee_unit: feeToken ?? 'quote asset' } : {}),
     },

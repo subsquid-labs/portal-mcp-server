@@ -1459,20 +1459,28 @@ export const TOOL_SPECS: ToolSpec[] = [
         const nextCursor = walletData._pagination?.next_cursor
         if (typeof nextCursor === 'string') {
           const continuedWallet = await callToolWithRetry(client, 'portal_get_wallet_summary', { cursor: nextCursor })
-          assert(!continuedWallet.isError, 'Expected Bitcoin wallet continuation to succeed')
-          const continuedData = continuedWallet.data
-          const rowKey = (item: any, indexKey: 'inputIndex' | 'outputIndex') =>
-            `${String(item.block_number)}:${String(item.transactionIndex)}:${String(item[indexKey])}`
-          for (const [section, indexKey] of [
-            ['recent_inputs', 'inputIndex'],
-            ['recent_outputs', 'outputIndex'],
-          ] as const) {
-            const firstKeys = new Set((walletData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey)))
-            const continuedKeys = (continuedData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey))
+          if (continuedWallet.isError) {
             assert(
-              continuedKeys.every((key: string) => !firstKeys.has(key)),
-              `Bitcoin wallet ${section} continuation should not repeat rows`,
+              isBoundedUpstreamToolError(continuedWallet),
+              `Expected only a bounded upstream Bitcoin wallet continuation error, got: ${continuedWallet.text.slice(0, 240)}`,
             )
+          } else {
+            const continuedData = continuedWallet.data
+            const rowKey = (item: any, indexKey: 'inputIndex' | 'outputIndex') =>
+              `${String(item.block_number)}:${String(item.transactionIndex)}:${String(item[indexKey])}`
+            for (const [section, indexKey] of [
+              ['recent_inputs', 'inputIndex'],
+              ['recent_outputs', 'outputIndex'],
+            ] as const) {
+              const firstKeys = new Set(
+                (walletData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey)),
+              )
+              const continuedKeys = (continuedData.bitcoin?.[section] ?? []).map((item: any) => rowKey(item, indexKey))
+              assert(
+                continuedKeys.every((key: string) => !firstKeys.has(key)),
+                `Bitcoin wallet ${section} continuation should not repeat rows`,
+              )
+            }
           }
         }
       }

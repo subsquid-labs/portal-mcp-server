@@ -37,6 +37,11 @@ import {
   hexToBigInt,
   humanizeLabel,
 } from '../../helpers/format.js'
+import {
+  accumulateHyperliquidFee,
+  createHyperliquidFeeAccumulator,
+  summarizeHyperliquidFees,
+} from '../../helpers/hyperliquid-fees.js'
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
 import {
   normalizeBitcoinInputResult,
@@ -1335,7 +1340,9 @@ function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid
       'completeness',
       'fund_flow.summary',
       'activity.count',
-      'hyperliquid.fee_summary.total_fees',
+      'hyperliquid.fee_summary.fees_status',
+      'hyperliquid.fee_summary.total_fees_usd',
+      'hyperliquid.fee_summary.fees_by_token',
       'assets.volume_by_coin',
       'activity.items',
     ],
@@ -1355,6 +1362,7 @@ function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid
       'activity.items mixes normalized inputs and outputs; bitcoin contains the UTXO-style wallet breakdown.',
     ],
     hyperliquid: [
+      'Check hyperliquid.fee_summary.fees_status before citing USD fees. Use signed fees_by_token when the USD total is unavailable; negative fees are rebates.',
       'Start with overview and activity.count, then mention fee_summary and volume_by_coin before listing individual fills.',
       'activity.items is the normalized fill feed; assets.volume_by_coin is the best section for what this wallet traded.',
     ],
@@ -3255,6 +3263,7 @@ async function buildNonEvmWalletSummary(params: {
           px: true,
           sz: true,
           fee: true,
+          feeToken: true,
           dir: true,
           side: true,
           hash: true,
@@ -3286,6 +3295,7 @@ async function buildNonEvmWalletSummary(params: {
           ...(typeof fill.px === 'number' || typeof fill.px === 'string' ? { px: fill.px } : {}),
           ...(typeof fill.sz === 'number' || typeof fill.sz === 'string' ? { sz: fill.sz } : {}),
           ...(typeof fill.fee === 'number' || typeof fill.fee === 'string' ? { fee: fill.fee } : {}),
+          ...(typeof fill.feeToken === 'string' ? { feeToken: fill.feeToken } : {}),
           ...(typeof fill.dir === 'string' ? { dir: fill.dir } : {}),
           ...(typeof fill.side === 'string' ? { side: fill.side } : {}),
           ...(typeof fill.hash === 'string' ? { hash: fill.hash } : {}),
@@ -3332,7 +3342,7 @@ async function buildNonEvmWalletSummary(params: {
     notices.push('Older Hyperliquid fills are available via _pagination.next_cursor.')
   }
   const byCoin = new Map<string, ExactDecimal>()
-  let totalFees = EXACT_DECIMAL_ZERO
+  const feeTotals = createHyperliquidFeeAccumulator()
   fills.forEach((fill: any) => {
     const coin = String(fill.coin || 'UNKNOWN')
     const price = parseExactDecimal(fill.px)
@@ -3340,14 +3350,11 @@ async function buildNonEvmWalletSummary(params: {
     if (price && size) {
       byCoin.set(coin, addExactDecimals(byCoin.get(coin) ?? EXACT_DECIMAL_ZERO, multiplyExactDecimals(price, size)))
     }
-    const fee = parseExactDecimal(fill.fee)
-    if (fee) {
-      totalFees = addExactDecimals(totalFees, {
-        coefficient: fee.coefficient < 0n ? -fee.coefficient : fee.coefficient,
-        scale: fee.scale,
-      })
-    }
+    accumulateHyperliquidFee(feeTotals, fill)
   })
+  const feeSummary = summarizeHyperliquidFees(feeTotals)
+  const totalFees = feeSummary.fees_status === 'available' ? feeSummary.fees_by_token[0].total_fees : null
+  if (feeSummary.fee_notice) notices.push(feeSummary.fee_notice)
   const sideBreakdown = fills.reduce((acc: Record<string, number>, fill: any) => {
     const side = String(fill.side || 'unknown')
     acc[side] = (acc[side] || 0) + 1
@@ -3401,7 +3408,8 @@ async function buildNonEvmWalletSummary(params: {
     summary: {
       fill_events: fills.length,
       traded_volume_usd: formatExactDecimal(totalTradedVolume),
-      total_fees: formatExactDecimal(totalFees),
+      total_fees: totalFees,
+      ...feeSummary,
       coins_touched: byCoin.size,
       side_breakdown: sideBreakdown,
     },
@@ -3445,7 +3453,8 @@ async function buildNonEvmWalletSummary(params: {
         },
         hyperliquid: {
           fee_summary: {
-            total_fees: formatExactDecimal(totalFees),
+            total_fees: totalFees,
+            ...feeSummary,
           },
           side_breakdown: sideBreakdown,
         },
@@ -3522,9 +3531,9 @@ async function buildNonEvmWalletSummary(params: {
         title: address,
         subtitle: `${describeWalletWindow(timeframe)} on ${networkLabel}`,
         activityCountPath: 'activity.count',
-        primaryValuePath: 'hyperliquid.fee_summary.total_fees',
-        primaryLabel: 'Total fees',
-        primaryFormat: 'decimal',
+        primaryValuePath: 'hyperliquid.fee_summary.total_fees_usd',
+        primaryLabel: 'Net fees (USD)',
+        primaryFormat: 'currency_usd',
         secondaryCards: [
           buildMetricCard({
             id: 'coins',

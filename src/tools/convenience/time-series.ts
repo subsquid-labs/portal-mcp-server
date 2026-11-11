@@ -1321,9 +1321,9 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         let groupedChunkSizeReduced = false
 
         const recoveryBudget = new StreamRecoveryBudget()
+        let chunkSize = EVM_GENERIC_TIME_SERIES_CHUNK_SIZE.transaction_count ?? 1500
         const visitGroupedContractRange = async (onRecord: (record: unknown) => void | Promise<void>) => {
           let currentFrom = fromBlock
-          let chunkSize = EVM_GENERIC_TIME_SERIES_CHUNK_SIZE.transaction_count ?? 1500
 
           while (currentFrom <= toBlock) {
             const plannedTo = Math.min(currentFrom + chunkSize - 1, toBlock)

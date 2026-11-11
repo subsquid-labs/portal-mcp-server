@@ -83,6 +83,19 @@ async function main() {
     !isBoundedUpstreamToolError(boundedResult('upstream_unavailable', 'upstream', false)),
     'non-retryable upstream failures should not be treated as bounded transient errors',
   )
+  for (const [code, origin] of [
+    ['invalid_cursor', 'client_input'],
+    ['internal_error', 'server'],
+    ['upstream_timeout', 'upstream'],
+  ]) {
+    assert(
+      !isBoundedUpstreamToolError({
+        ...boundedResult(code, origin, false),
+        text: 'Portal server error (529) while using a continuation cursor',
+      }),
+      `explicit non-retryable ${code} must take precedence over transient-looking error text`,
+    )
+  }
   assert(
     !isBoundedUpstreamToolError(boundedResult('internal_error', 'server')),
     'internal server errors should not be treated as bounded upstream errors',
