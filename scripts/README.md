@@ -8,6 +8,8 @@ These scripts all use the shared manifest in `scripts/tool-manifest.ts`, which k
 - `npm run test:live` runs everything that talks to Portal or an installed client. CI runs it on every pull request as a reporting job that does not block, and in full on a `v*` tag.
 - `npm run test:all` (also `test:ci` and `test:release`) runs both.
 
+Direct Portal reference probes share `scripts/live-portal-probe.ts`. They make at most four attempts, with exponential backoff and a 60-second retry budget. HTTP `Retry-After` seconds and dates, structured retry delays, and Portal's five-second overload delay take precedence over shorter waits. Each raw request has a timeout of at most 30 seconds and consumes the full response body before returning it. Rate-limit exhaustion remains a failure. Parsing and data assertions run after transport recovery, so missing records, invalid responses and mismatched totals still fail. The real-time timestamp matrix runs at most two probes concurrently.
+
 ## Unit tests
 
 Unit tests sit next to the code as `src/**/*.test.ts` and run with the built-in `node --test` runner through `tsx` (`npm run test:unit`, a few seconds, no network). They are excluded from `tsc` output and never ship in the package. Prefer them for pure helpers: parsing, exact arithmetic, cursors, validation, coverage rules, and characterisation of large modules on recorded responses (`src/app-ui/fixtures.recorded.ts`).
@@ -36,6 +38,7 @@ Unit tests sit next to the code as `src/**/*.test.ts` and run with the built-in 
 | `test:distribution` | offline | distribution and submission manifests share the release version |
 | `test:claude-plugin:offline` | offline | Claude package rules, inherited skill permissions, credential handling, and static assets |
 | `test:fetch-reliability` | offline | Portal fetch timeouts, malformed bodies, cancellation, retry budget |
+| `test:live-probes` | offline | deterministic rate limits, retry delays, exhaustion, interrupted reference bodies, strict data assertions |
 | `test:stdio-backpressure` | offline | large results over stdio without stalls |
 | `test:performance-harness` | offline | repeated EVM candle requests reuse one snapshot |
 | `test:tool-admission` | offline | weighted work classes, fair promotion, overload, capacity release |

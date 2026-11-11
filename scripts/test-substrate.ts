@@ -3,6 +3,7 @@
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 
+import { fetchPortalText } from './live-portal-probe.ts'
 import { callToolWithRetry, sleep } from './test-helpers.ts'
 
 const POLKADOT_OLD_TIMESTAMP_ISO = '2022-04-23T12:03:06Z'
@@ -53,35 +54,12 @@ async function callExactTimestampLookup(client: Client, timestamp: string | numb
   return callToolWithRetry(client, 'portal_debug_resolve_time_to_block', args, { retries: 1, totalBudgetMs: 30_000 })
 }
 
-async function fetchPortalWithRetry(url: string, options?: RequestInit) {
-  let lastError: Error | undefined
-
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      const response = await fetch(url, options)
-      const text = await response.text()
-      if (response.ok) return text
-
-      lastError = new Error(`HTTP ${response.status} from ${url}: ${text.slice(0, 300)}`)
-      if (response.status !== 429 && response.status < 500) throw lastError
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-    }
-
-    if (attempt < 3) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 500))
-    }
-  }
-
-  throw lastError ?? new Error(`Failed to fetch ${url}`)
-}
-
 async function fetchJson(url: string, options?: RequestInit) {
-  return JSON.parse(await fetchPortalWithRetry(url, options))
+  return JSON.parse(await fetchPortalText('Substrate JSON reference', url, options))
 }
 
 async function fetchNdjson(url: string, body: Record<string, unknown>) {
-  const text = await fetchPortalWithRetry(url, {
+  const text = await fetchPortalText(`Substrate reference blocks ${body.fromBlock}-${body.toBlock}`, url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

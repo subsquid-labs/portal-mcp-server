@@ -21,6 +21,7 @@ import {
   buildTronLogFields,
   buildTronTransactionFields,
 } from '../src/helpers/fields.ts'
+import { fetchPortalText } from './live-portal-probe.ts'
 import { assert, assertChatSurface, callToolWithRetry, closeTestClient, connectTestClient } from './test-helpers.ts'
 
 const PORTAL = 'https://portal.sqd.dev'
@@ -41,46 +42,20 @@ const TRON_TRX_SENDER_BASE58 = 'TQhpXvhSbXWgdYg8qmK7kQeL3rsfxxojNc'
 type JsonRecord = Record<string, any>
 
 async function fetchNdjson(dataset: string, body: JsonRecord): Promise<JsonRecord[]> {
-  let lastError: Error | undefined
-  const maxAttempts = 4
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      const response = await fetch(`${PORTAL}/datasets/${dataset}/stream`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      const text = await response.text()
-      if (!response.ok) {
-        const error = new Error(
-          `Portal HTTP ${response.status} for ${dataset} blocks ${body.fromBlock} to ${body.toBlock}: ${text.slice(0, 300)}`,
-        )
-        const retryable = response.status === 429 || response.status === 529 || response.status >= 500
-        if (!retryable) {
-          Object.assign(error, { retryable: false })
-          throw error
-        }
-        if (attempt === maxAttempts) throw error
-
-        lastError = error
-        const retryAfterSeconds = Number(response.headers.get('retry-after') ?? '')
-        const retryDelayMs =
-          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1_000 : attempt * 1_500
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
-        continue
-      }
-      return text
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as JsonRecord)
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-      if ((error as { retryable?: boolean }).retryable === false) throw lastError
-      if (attempt < maxAttempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1_500))
-    }
-  }
-  throw lastError ?? new Error(`Portal request failed for ${dataset}`)
+  const text = await fetchPortalText(
+    `${dataset} integrity reference blocks ${body.fromBlock}-${body.toBlock}`,
+    `${PORTAL}/datasets/${dataset}/stream`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as JsonRecord)
 }
 
 function flatten(blocks: JsonRecord[], key: string): JsonRecord[] {

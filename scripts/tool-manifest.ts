@@ -1,6 +1,7 @@
 import type { Client } from '@modelcontextprotocol/client'
 
 import { EVENT_SIGNATURES } from '../src/constants/index.js'
+import { fetchPortalText } from './live-portal-probe.ts'
 import { assert, callToolWithRetry, extractJson, getText, isBoundedUpstreamToolError, sleep } from './test-helpers.ts'
 
 const POLKADOT_SAMPLE_FROM_BLOCK = 30_736_840
@@ -123,31 +124,20 @@ function encodeUint(value: number) {
 }
 
 async function baseRpcCall(method: string, params: unknown[]) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const response = await fetch(BASE_RPC_URL, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method,
-        params,
-      }),
-    })
-
-    if (response.status === 429 && attempt < 4) {
-      await sleep(500 * (attempt + 1))
-      continue
-    }
-
-    assert(response.ok, `Base RPC ${method} failed with HTTP ${response.status}`)
-    const data = (await response.json()) as { result?: unknown; error?: { message?: string } }
-    assert(!data.error, `Base RPC ${method} error: ${data.error?.message || 'unknown error'}`)
-    assert(data.result !== undefined, `Base RPC ${method} returned no result`)
-    return data.result
-  }
-
-  throw new Error(`Base RPC ${method} failed after retries`)
+  const text = await fetchPortalText(`Base RPC ${method}`, BASE_RPC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method,
+      params,
+    }),
+  })
+  const data = JSON.parse(text) as { result?: unknown; error?: { message?: string } }
+  assert(!data.error, `Base RPC ${method} error: ${data.error?.message || 'unknown error'}`)
+  assert(data.result !== undefined, `Base RPC ${method} returned no result`)
+  return data.result
 }
 
 function decodeAddressWord(value: string) {
@@ -161,17 +151,15 @@ function isZeroAddress(value: string) {
 }
 
 async function portalStream(dataset: string, body: Record<string, unknown>) {
-  const response = await fetch(`${PORTAL_API_URL}/datasets/${dataset}/stream`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-
-  if (response.status === 204) return []
-  if (!response.ok) {
-    throw new Error(`Portal stream fixture query failed with HTTP ${response.status}: ${await response.text()}`)
-  }
-  const text = await response.text()
+  const text = await fetchPortalText(
+    `${dataset} tool fixture blocks ${body.fromBlock}-${body.toBlock}`,
+    `${PORTAL_API_URL}/datasets/${dataset}/stream`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
   return text
     .split('\n')
     .map((line) => line.trim())

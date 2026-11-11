@@ -13,35 +13,14 @@ import {
   resolveTimeframeOrBlocks,
   timestampToBlock,
 } from '../dist/helpers/timeframe.js'
+import { retryPortalProbe } from './live-portal-probe.js'
 
-const REALTIME_MATRIX_CONCURRENCY = 3
+const REALTIME_MATRIX_CONCURRENCY = 2
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
     throw new Error(`Assertion failed: ${message}`)
   }
-}
-
-async function retryPortalProbe<T>(probe: () => Promise<T>, accept: (value: T) => boolean = () => true): Promise<T> {
-  let lastError: Error | undefined
-  let lastValue: T | undefined
-
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    try {
-      const value = await probe()
-      lastValue = value
-      if (accept(value)) return value
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
-    }
-
-    if (attempt < 4) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 750))
-    }
-  }
-
-  if (lastValue !== undefined) return lastValue
-  throw lastError ?? new Error('Portal probe failed without a result')
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -61,13 +40,13 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 }
 
 async function assertRealtimeTimestampMatrix() {
-  const datasets = await getDatasets()
+  const datasets = await retryPortalProbe('real-time dataset catalog', () => getDatasets())
   const realtimeDatasets = datasets.filter((dataset) => dataset.real_time)
 
   const rows = await mapLimit(realtimeDatasets, REALTIME_MATRIX_CONCURRENCY, (dataset) =>
-    retryPortalProbe(async () => {
+    retryPortalProbe(`${dataset.dataset} real-time timestamp matrix`, async () => {
       const head = await getBlockHead(dataset.dataset)
-      const headTimestamp = await getHeadTimestamp(dataset.dataset, head.number)
+      const headTimestamp = await getHeadTimestamp(dataset.dataset, head.number, 0)
       const window = await resolveTimeframeOrBlocks({ dataset: dataset.dataset, timeframe: '1h' })
 
       assert(
@@ -102,18 +81,23 @@ async function assertRealtimeTimestampMatrix() {
 
 async function assertHyperliquidFillsExactTimestampLookup() {
   const dataset = 'hyperliquid-fills'
-  const head = await getBlockHead(dataset)
-  const headTimestamp = await getHeadTimestamp(dataset, head.number)
+  const head = await retryPortalProbe(`${dataset} indexed head`, () => getBlockHead(dataset))
+  const headTimestamp = await retryPortalProbe(`${dataset} head timestamp`, () =>
+    getHeadTimestamp(dataset, head.number, 0),
+  )
   assert(
     Number.isFinite(headTimestamp) && headTimestamp > 1_000_000_000,
     'Hyperliquid fills head timestamp should resolve from block.timestamp',
   )
 
   const targetTimestamp = headTimestamp - 300
-  const exactProbeBlock = await retryPortalProbe(() => timestampToBlock(dataset, targetTimestamp))
+  const exactProbeBlock = await retryPortalProbe('Hyperliquid fills timestamp', () =>
+    timestampToBlock(dataset, targetTimestamp),
+  )
   const fiveMinuteWindow = await retryPortalProbe(
+    'Hyperliquid fills five-minute window',
     () => resolveTimeframeOrBlocks({ dataset, timeframe: '5m' }),
-    (window) => window.from_lookup?.resolution === 'verified_boundary',
+    { accept: (window) => window.from_lookup?.resolution === 'verified_boundary' },
   )
 
   assert(
@@ -140,8 +124,9 @@ async function assertHyperliquidFillsExactTimestampLookup() {
   assert(exactProbeBlock <= head.number, 'Hyperliquid fills timestamp endpoint should return a block at or before head')
 
   const directLookup = await retryPortalProbe(
+    'Hyperliquid fills direct timestamp lookup',
     () => resolveBlockAtTimestamp(dataset, targetTimestamp),
-    (lookup) => lookup.resolution === 'verified_boundary',
+    { accept: (lookup) => lookup.resolution === 'verified_boundary' },
   )
   assert(
     directLookup.resolution === 'verified_boundary',
@@ -156,15 +141,19 @@ async function assertHyperliquidFillsExactTimestampLookup() {
 
 async function assertSubstrateTimestampBoundaryIsVerified() {
   const dataset = 'polkadot'
-  const head = await getBlockHead(dataset)
-  const headTimestamp = await getHeadTimestamp(dataset, head.number)
+  const head = await retryPortalProbe(`${dataset} indexed head`, () => getBlockHead(dataset))
+  const headTimestamp = await retryPortalProbe(`${dataset} head timestamp`, () =>
+    getHeadTimestamp(dataset, head.number, 0),
+  )
   const fromTimestamp = headTimestamp - 3_600
   const toTimestamp = headTimestamp - 3_000
-  const window = await resolveTimeframeOrBlocks({
-    dataset,
-    from_timestamp: fromTimestamp,
-    to_timestamp: toTimestamp,
-  })
+  const window = await retryPortalProbe('Polkadot timestamp window', () =>
+    resolveTimeframeOrBlocks({
+      dataset,
+      from_timestamp: fromTimestamp,
+      to_timestamp: toTimestamp,
+    }),
+  )
 
   assert(window.from_lookup?.resolution === 'verified_boundary', 'Polkadot from boundary should be verified')
   assert(window.to_lookup?.resolution === 'verified_boundary', 'Polkadot to boundary should be verified')
@@ -177,8 +166,12 @@ async function assertSubstrateTimestampBoundaryIsVerified() {
     'Polkadot to block must not follow the requested timestamp',
   )
 
-  const actualFrom = await getBlockTimestamp(dataset, window.from_block)
-  const actualTo = await getBlockTimestamp(dataset, window.to_block)
+  const actualFrom = await retryPortalProbe('Polkadot direct from boundary', () =>
+    getBlockTimestamp(dataset, window.from_block, { retries: 0 }),
+  )
+  const actualTo = await retryPortalProbe('Polkadot direct to boundary', () =>
+    getBlockTimestamp(dataset, window.to_block, { retries: 0 }),
+  )
   assert(actualFrom === window.from_lookup?.block_timestamp, 'Polkadot from metadata should match direct block data')
   assert(actualTo === window.to_lookup?.block_timestamp, 'Polkadot to metadata should match direct block data')
 
@@ -189,22 +182,28 @@ async function assertFutureWindowFailsClosed() {
   const future = '2030-01-01T00:00:00Z'
   let rejected = false
   try {
-    await resolveTimeframeOrBlocks({
-      dataset: 'base-mainnet',
-      from_timestamp: future,
-      to_timestamp: '2030-01-01T00:05:00Z',
-    })
+    await retryPortalProbe('future timestamp rejection', () =>
+      resolveTimeframeOrBlocks({
+        dataset: 'base-mainnet',
+        from_timestamp: future,
+        to_timestamp: '2030-01-01T00:05:00Z',
+      }),
+    )
   } catch (error) {
     rejected = /after the latest indexed block/i.test(error instanceof Error ? error.message : String(error))
   }
   assert(rejected, 'Future timestamp windows should fail closed instead of returning current data')
 
   const dataset = 'base-mainnet'
-  const head = await getBlockHead(dataset)
-  const headTimestamp = await getHeadTimestamp(dataset, head.number)
+  const head = await retryPortalProbe(`${dataset} indexed head`, () => getBlockHead(dataset))
+  const headTimestamp = await retryPortalProbe(`${dataset} head timestamp`, () =>
+    getHeadTimestamp(dataset, head.number, 0),
+  )
   let nearHeadStartRejected = false
   try {
-    await resolveTimeframeOrBlocks({ dataset, from_timestamp: headTimestamp + 30 })
+    await retryPortalProbe('near-head future timestamp rejection', () =>
+      resolveTimeframeOrBlocks({ dataset, from_timestamp: headTimestamp + 30 }),
+    )
   } catch (error) {
     nearHeadStartRejected = /start timestamp is after the latest indexed block/i.test(
       error instanceof Error ? error.message : String(error),
@@ -246,8 +245,9 @@ function assertNaturalLanguageTimeInputs() {
 async function assertHyperliquidReplicaExactTimestampLookup() {
   const dataset = 'hyperliquid-replica-cmds'
   const window = await retryPortalProbe(
+    'Hyperliquid replica five-minute window',
     () => resolveTimeframeOrBlocks({ dataset, timeframe: '5m' }),
-    (candidate) => candidate.from_lookup?.resolution === 'verified_boundary',
+    { accept: (candidate) => candidate.from_lookup?.resolution === 'verified_boundary' },
   )
   assert(
     window.from_lookup?.resolution === 'verified_boundary',
@@ -287,18 +287,21 @@ async function main() {
   await assertHyperliquidReplicaExactTimestampLookup()
 
   const dataset = 'solana-mainnet'
-  const head = await getBlockHead(dataset)
-  const headTimestamp = await getHeadTimestamp(dataset, head.number)
+  const head = await retryPortalProbe(`${dataset} indexed head`, () => getBlockHead(dataset))
+  const headTimestamp = await retryPortalProbe(`${dataset} head timestamp`, () =>
+    getHeadTimestamp(dataset, head.number, 0),
+  )
   assert(
     Number.isFinite(headTimestamp) && headTimestamp > 1_000_000_000,
     'Solana head timestamp should resolve from block.timestamp',
   )
 
   const targetTimestamp = headTimestamp - 3600
-  const exactFromBlock = await retryPortalProbe(() => timestampToBlock(dataset, targetTimestamp))
+  const exactFromBlock = await retryPortalProbe('Solana timestamp', () => timestampToBlock(dataset, targetTimestamp))
   const oneHourWindow = await retryPortalProbe(
+    'Solana one-hour window',
     () => resolveTimeframeOrBlocks({ dataset, timeframe: '1h' }),
-    (window) => window.from_lookup?.resolution === 'verified_boundary',
+    { accept: (window) => window.from_lookup?.resolution === 'verified_boundary' },
   )
 
   assert(oneHourWindow.to_block === head.number, '1h Solana window should anchor to the cached latest slot')
@@ -335,7 +338,7 @@ async function main() {
   assert(oneHourWindow.from_block < oneHourWindow.to_block, '1h Solana window should produce an ordered slot range')
   console.log(`PASS  Solana 1h window -> ${oneHourWindow.from_block}..${oneHourWindow.to_block}`)
 
-  const nowLookup = await resolveBlockAtTimestamp(dataset, 'now')
+  const nowLookup = await retryPortalProbe('Solana current timestamp', () => resolveBlockAtTimestamp(dataset, 'now'))
   assert(
     ['verified_boundary', 'estimated'].includes(nowLookup.resolution),
     'Solana "now" lookup should resolve to a verified boundary or gracefully estimate from indexed head',

@@ -4,6 +4,7 @@
 
 ### Improvements
 
+- **Rate-aware live tests.** Direct Portal reference checks share bounded retries that honor rate-limit delays, including overloads and HTTP `Retry-After` dates. Timestamp verification retries transient failures and limits concurrent probes. Exhausted retries and data mismatches still fail, and the offline gate verifies recovery and failure behavior without network access.
 - **Current MCP Apps SDK.** Upgraded the Explorer to MCP Apps SDK 2.1.0. Removed the fixed bundle-size budgets from the build and App contract gate; resource byte counts and integrity checks remain available.
 - **Current MCP dependencies.** Updated the MCP runtime SDK, HTTP routing, and input validation dependencies. Local Explorer builds also rebuild when the dependency lockfile changes.
 - **Current network catalog.** Refreshed the Explorer's chain metadata from Portal and removed fixed network-count claims from plugin descriptions. Use `portal_list_networks` for current availability.
