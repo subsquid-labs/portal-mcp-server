@@ -5,6 +5,7 @@
 ### Improvements
 
 - **SQD guidance.** Bundled skills track SQD skills v1.1.0, which adds step-by-step EVM and Solana migration guides and folds the Pipes SDK compatibility notes into the main references. When the plugin already connects the SQD server, Portal setup confirms the tools instead of adding a second server. The RPC latency pattern describes the published `@subsquid/pipes` beta.11 sample shape.
+- **Base starter prompt.** The Codex plugin, the plugin README and the directory submissions now ask about Base transactions in the past 30 minutes instead of 2 hours. Two hours on Base is about 36,000 blocks, past the 12,000-block limit of `portal_get_time_series`, so the listed tool refused the prompt and the fallback analytics scan took 17 to 33 seconds and failed when Portal was busy. The 30-minute window answers in about a second.
 
 ### Fixes
 

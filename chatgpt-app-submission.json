@@ -392,7 +392,7 @@
     },
     {
       "description": "Measure recent transaction activity on Base.",
-      "user_prompt": "How many transactions landed on Base in the past 2h?",
+      "user_prompt": "How many transactions landed on Base in the past 30 minutes?",
       "file_attachment_urls": null,
       "tools_triggered": "portal_get_time_series",
       "expected_output": "Returns time buckets and a total transaction count for Base over the requested period.",

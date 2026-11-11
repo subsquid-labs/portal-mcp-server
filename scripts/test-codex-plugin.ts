@@ -57,7 +57,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
 
 const EXPECTED_STARTER_PROMPTS = [
   'Show me the last 200 BTC perp fills on Hyperliquid.',
-  'How many transactions landed on Base in the past 2h?',
+  'How many transactions landed on Base in the past 30 minutes?',
   'Show me the latest 20 USDC transfers on Base from the past hour.',
 ] as const
 

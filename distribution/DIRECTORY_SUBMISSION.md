@@ -29,7 +29,7 @@ Long description:
 Starter prompts:
 
 1. Show me the last 200 BTC perp fills on Hyperliquid.
-2. How many transactions landed on Base in the past 2h?
+2. How many transactions landed on Base in the past 30 minutes?
 3. Show me the latest 20 USDC transfers on Base from the past hour.
 
 Public URLs:
@@ -127,7 +127,7 @@ Release note for the listing:
 | Prompt | Expected tool | Expected result |
 |---|---|---|
 | Show me the last 200 BTC perp fills on Hyperliquid. | `portal_hyperliquid_query_fills` | The latest 200 BTC fills with time, direction, price, size, and trader fields. |
-| How many transactions landed on Base in the past 2h? | `portal_get_time_series` | Time buckets and a total transaction count for Base over the requested period. |
+| How many transactions landed on Base in the past 30 minutes? | `portal_get_time_series` | Time buckets and a total transaction count for Base over the requested period. |
 | Show me the latest 20 USDC transfers on Base from the past hour. | `portal_evm_query_token_transfers` | The latest 20 Base USDC transfers with sender, recipient, amount, time, and transaction hash. |
 | Which blockchain networks can SQD query? | `portal_list_networks` | A searchable list of supported networks and their availability. |
 | Summarize this wallet's activity on Base over the past day. | `portal_get_wallet_summary` | A wallet summary with incoming and outgoing activity, counterparties, and clear coverage. |
