@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-11
+
+Portal scans recover from interruptions without replaying records, and analytics disclose unavailable evidence and fee conversions. This release updates MCP compatibility and bundled SQD guidance, and gives live tests bounded rate-limit recovery.
+
 ### Improvements
 
 - **Rate-aware live tests.** Direct Portal reference checks share bounded retries that honor rate-limit delays, including overloads and HTTP `Retry-After` dates. Timestamp verification retries transient failures and limits concurrent probes. Exhausted retries and data mismatches still fail, and the offline gate verifies recovery and failure behavior without network access.

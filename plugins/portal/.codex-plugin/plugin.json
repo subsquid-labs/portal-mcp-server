@@ -1,6 +1,6 @@
 {
   "name": "portal",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Query blockchain data across supported networks with SQD.",
   "author": {
     "name": "Subsquid Labs",
