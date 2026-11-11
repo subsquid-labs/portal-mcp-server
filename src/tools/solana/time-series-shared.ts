@@ -4,6 +4,7 @@ import { ActionableError } from '../../helpers/errors.js'
 import { portalFetchStream, portalFetchStreamVisit } from '../../helpers/fetch.js'
 import { formatDuration, formatNumber, formatTimestamp } from '../../helpers/format.js'
 import { hashString53 } from '../../helpers/hash.js'
+import { StreamRecoveryBudget, getStreamRangeRecovery } from '../../helpers/stream-progress.js'
 import {
   type ResolvedBlockWindow,
   type TimestampInput,
@@ -254,6 +255,7 @@ export async function computeSolanaTimeSeries({
   const initialChunkSize = Math.min(CHUNK_SIZE_BY_METRIC[metric], Math.max(1, slotRange + 1))
   const initialRanges = buildInitialRanges(effectiveFrom, endBlock, initialChunkSize)
   const concurrency = CONCURRENCY_BY_METRIC[metric]
+  const recoveryBudget = new StreamRecoveryBudget()
 
   let firstObservedTimestamp: number | undefined
   let lastObservedTimestamp: number | undefined
@@ -271,6 +273,7 @@ export async function computeSolanaTimeSeries({
           rangeTo: range.to,
           includeAllBlocks,
           transactionFields,
+          recoveryBudget,
           initialChunkSize: Math.min(initialChunkSize, range.to - range.from + 1),
           onRecord: (record) => {
             const block = record as {
@@ -416,6 +419,7 @@ async function visitSolanaTimeSeriesRange({
   includeAllBlocks,
   transactionFields,
   initialChunkSize,
+  recoveryBudget,
   onRecord,
 }: {
   dataset: string
@@ -424,6 +428,7 @@ async function visitSolanaTimeSeriesRange({
   includeAllBlocks: boolean
   transactionFields: Record<string, boolean>
   initialChunkSize: number
+  recoveryBudget: StreamRecoveryBudget
   onRecord: (record: unknown) => void | Promise<void>
 }): Promise<{ chunksFetched: number; chunkSizeReduced: boolean }> {
   let currentFrom = rangeFrom
@@ -444,7 +449,7 @@ async function visitSolanaTimeSeriesRange({
           toBlock: chunkTo,
           includeAllBlocks,
           fields: {
-            block: { timestamp: true },
+            block: { number: true, timestamp: true },
             transaction: transactionFields,
           },
           transactions: [{}],
@@ -477,7 +482,10 @@ async function visitSolanaTimeSeriesRange({
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
 
-      if (message.includes('Response too large') && chunkSize > MIN_SOLANA_CHUNK_SIZE) {
+      const recovery = getStreamRangeRecovery(err, currentFrom, chunkTo, { budget: recoveryBudget, allowTimeout: true })
+      if (recovery && (recovery.fromBlock > currentFrom || chunkSize > MIN_SOLANA_CHUNK_SIZE)) {
+        if (recovery.deliveredRecords > 0) chunksFetched++
+        currentFrom = recovery.fromBlock
         chunkSize = Math.max(MIN_SOLANA_CHUNK_SIZE, Math.floor(chunkSize / 2))
         chunkSizeReduced = true
         continue

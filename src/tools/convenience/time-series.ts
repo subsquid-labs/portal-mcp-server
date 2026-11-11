@@ -26,6 +26,7 @@ import { formatBTC, formatDuration, formatResult, formatTimestamp, formatUSD } f
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
 import { buildTimeSeriesPipesRecipe } from '../../helpers/pipes-recipe.js'
 import { buildBucketCoverage, buildBucketGapDiagnostics, buildQueryFreshness } from '../../helpers/result-metadata.js'
+import { StreamRecoveryBudget, getStreamRangeRecovery } from '../../helpers/stream-progress.js'
 import {
   type TimestampInput,
   describeTimeWindowInput,
@@ -809,7 +810,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         .string()
         .optional()
         .describe(
-          'Total time period to analyze. Defaults to "15m" on Base mainnet and "6h" elsewhere. This tool reads every block and refuses windows over 12,000 blocks. Accepts compact durations like "30m" or natural phrases like "past 30 minutes".',
+          'Total time period to analyze. Defaults to "15m" on Base mainnet and Sepolia, and "6h" elsewhere. This tool reads every block and refuses windows over 12,000 blocks. Accepts compact durations like "30m" or natural phrases like "past 30 minutes".',
         ),
       address: z
         .string()
@@ -869,7 +870,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const hasTimestamps = from_timestamp !== undefined || to_timestamp !== undefined
       const duration =
         requestedDuration ??
-        (dataset === 'base-mainnet' && !hasTimestamps
+        ((dataset === 'base-mainnet' || dataset === 'base-sepolia') && !hasTimestamps
           ? DEFAULT_BASE_TIME_SERIES_DURATION
           : DEFAULT_TIME_SERIES_DURATION)
       const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
@@ -1319,6 +1320,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         let totalTransactions = 0
         let groupedChunkSizeReduced = false
 
+        const recoveryBudget = new StreamRecoveryBudget()
         const visitGroupedContractRange = async (onRecord: (record: unknown) => void | Promise<void>) => {
           let currentFrom = fromBlock
           let chunkSize = EVM_GENERIC_TIME_SERIES_CHUNK_SIZE.transaction_count ?? 1500
@@ -1346,14 +1348,12 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               )
               currentFrom = plannedTo + 1
             } catch (err) {
-              const message = err instanceof Error ? err.message : String(err)
-              const shouldReduceChunkSize =
-                (message.includes('Response too large') ||
-                  message.toLowerCase().includes('timed out') ||
-                  message.toLowerCase().includes('timeout')) &&
-                chunkSize > MIN_EVM_GENERIC_CHUNK_SIZE
-
-              if (shouldReduceChunkSize) {
+              const recovery = getStreamRangeRecovery(err, currentFrom, plannedTo, {
+                budget: recoveryBudget,
+                allowTimeout: true,
+              })
+              if (recovery && (recovery.fromBlock > currentFrom || chunkSize > MIN_EVM_GENERIC_CHUNK_SIZE)) {
+                currentFrom = recovery.fromBlock
                 chunkSize = Math.max(MIN_EVM_GENERIC_CHUNK_SIZE, Math.floor(chunkSize / 2))
                 groupedChunkSizeReduced = true
                 continue

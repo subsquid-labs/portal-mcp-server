@@ -17,6 +17,7 @@ import {
   paginateOffsetItems,
 } from '../../helpers/pagination.js'
 import { buildAnalysisCoverage, buildQueryFreshness, buildRankedOrdering } from '../../helpers/result-metadata.js'
+import { StreamRecoveryBudget, getStreamRangeRecovery } from '../../helpers/stream-progress.js'
 import {
   type ResolvedBlockWindow,
   type TimestampInput,
@@ -255,6 +256,7 @@ export function registerGetTopContractsTool(server: McpServer) {
         let currentFrom = analyzedFromBlock
         let chunkSize = Math.min(INITIAL_EVM_ANALYTICS_CHUNK_SIZE, Math.max(1, latestBlock - analyzedFromBlock + 1))
         let autoChunked = false
+        const recoveryBudget = new StreamRecoveryBudget()
 
         while (currentFrom <= latestBlock) {
           const plannedTo = Math.min(currentFrom + chunkSize - 1, latestBlock)
@@ -322,8 +324,13 @@ export function registerGetTopContractsTool(server: McpServer) {
 
             currentFrom = lastProcessedBlock + 1
           } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            if (message.includes('Response too large') && chunkSize > MIN_EVM_ANALYTICS_CHUNK_SIZE) {
+            // This attempt's counters are local and have not been merged.
+            const recovery = getStreamRangeRecovery(error, currentFrom, plannedTo, {
+              budget: recoveryBudget,
+              discardDelivered: true,
+              allowTimeout: true,
+            })
+            if (recovery && chunkSize > MIN_EVM_ANALYTICS_CHUNK_SIZE) {
               chunkSize = Math.max(MIN_EVM_ANALYTICS_CHUNK_SIZE, Math.floor(chunkSize / 2))
               autoChunked = true
               continue

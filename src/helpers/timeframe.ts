@@ -37,6 +37,7 @@ const BLOCK_TIME_ESTIMATES: Record<string, number> = {
  */
 const DATASET_BLOCK_TIMES: Record<string, number> = {
   'base-mainnet': 0.2, // Current canonical block cadence since Denim.
+  'base-sepolia': 0.2,
   'base-': 2,
   'monad-': 0.4,
   'optimism-': 2,
@@ -67,6 +68,41 @@ const DATASET_BLOCK_TIMES: Record<string, number> = {
   'astar-substrate': 12,
   'shiden-substrate': 12,
   'shibuya-substrate': 12,
+}
+
+// Activation times: https://github.com/base/base/pull/6124 and https://github.com/base/base/pull/5694.
+const BASE_DENIM_TIMESTAMPS: Record<string, number> = {
+  'base-mainnet': 1_793_901_600,
+  'base-sepolia': 1_792_605_600,
+}
+
+function assertBaseEstimateWithinCadence(dataset: string, headTimestamp?: number, fromTimestamp?: number): void {
+  const activation = BASE_DENIM_TIMESTAMPS[dataset.toLowerCase()]
+  if (activation === undefined) return
+
+  if (headTimestamp === undefined || !Number.isFinite(headTimestamp)) {
+    throw new ActionableError(
+      'SQD cannot estimate a Base time window without the indexed head timestamp.',
+      [
+        'Retry after the indexed head timestamp becomes available.',
+        'Use exact from_block/to_block values if you know the intended block window.',
+      ],
+      { dataset },
+      { code: 'incomplete_result', origin: 'upstream', retryable: true },
+    )
+  }
+
+  if (fromTimestamp !== undefined && fromTimestamp < activation) {
+    throw new ActionableError(
+      'SQD cannot estimate a Base time window that reaches before the Denim cadence change.',
+      [
+        'Retry the same request when timestamp boundaries can be verified.',
+        'Use exact from_block/to_block values for historical windows.',
+      ],
+      { dataset, requested_from_timestamp: fromTimestamp, denim_activation_timestamp: activation },
+      { code: 'incomplete_result', origin: 'upstream', retryable: true },
+    )
+  }
 }
 
 export type ParsedTimestampInput = {
@@ -126,7 +162,13 @@ function estimateFromBlock(
   dataset: string,
   chainType: string,
   reason: EstimatedTimeframeResolution['reason'],
+  headTimestamp?: number,
 ) {
+  assertBaseEstimateWithinCadence(
+    dataset,
+    headTimestamp,
+    headTimestamp === undefined ? undefined : headTimestamp - seconds,
+  )
   const blockTime = estimateBlockTime(dataset, chainType)
   const blockCount = Math.floor(seconds / blockTime)
   const fromBlock = Math.max(0, latestBlock - blockCount + 1)
@@ -808,6 +850,7 @@ export async function resolveBlockAtTimestamp(
       head_timestamp_human: formatTimestamp(headTimestamp),
     }
   } catch {
+    assertBaseEstimateWithinCadence(dataset, headTimestamp, parsed.timestamp)
     const deltaSeconds = Math.max(0, headTimestamp - parsed.timestamp)
     const estimatedOffset = Math.round(deltaSeconds / blockTime)
     const estimatedBlockNumber = Math.max(metadata.start_block, headBlock - estimatedOffset)
@@ -881,10 +924,14 @@ export async function resolveTimeframeOrBlocks(params: {
     assertWindowWithinGuardrail(seconds)
 
     const estimationReason = isTimestampEndpointDown(dataset) ? 'timestamp_endpoint_down' : undefined
+    let headTimestamp: number | undefined
 
     if (estimationReason) {
+      if (BASE_DENIM_TIMESTAMPS[dataset.toLowerCase()] !== undefined) {
+        headTimestamp = await getHeadTimestamp(dataset, latestBlock, 1).catch(() => undefined)
+      }
       return {
-        ...estimateFromBlock(latestBlock, seconds, dataset, chainType, estimationReason),
+        ...estimateFromBlock(latestBlock, seconds, dataset, chainType, estimationReason, headTimestamp),
         range_kind: 'timeframe',
       }
     }
@@ -892,7 +939,7 @@ export async function resolveTimeframeOrBlocks(params: {
     // Real-time datasets expose head block timestamps, so anchor relative
     // windows to the latest indexed block instead of wall-clock time.
     try {
-      const headTimestamp = await getHeadTimestamp(dataset, latestBlock, 1)
+      headTimestamp = await getHeadTimestamp(dataset, latestBlock, 1)
       const targetTimestamp = Math.max(0, headTimestamp - seconds)
       const lookup = await resolveBlockAtTimestamp(dataset, targetTimestamp, {
         boundary: 'from',
@@ -930,7 +977,7 @@ export async function resolveTimeframeOrBlocks(params: {
       // Cache the failure so subsequent calls skip straight to estimation
       markTimestampEndpointDown(dataset)
       return {
-        ...estimateFromBlock(latestBlock, seconds, dataset, chainType, 'timestamp_endpoint_unavailable'),
+        ...estimateFromBlock(latestBlock, seconds, dataset, chainType, 'timestamp_endpoint_unavailable', headTimestamp),
         range_kind: 'timeframe',
       }
     }

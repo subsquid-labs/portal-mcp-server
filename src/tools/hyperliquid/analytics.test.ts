@@ -4,18 +4,8 @@ import { test } from 'node:test'
 import type { McpServer } from '@modelcontextprotocol/server'
 import type { z } from 'zod'
 
+import { summarizeHyperliquidFees } from '../../helpers/hyperliquid-fees.js'
 import { accumulateFill, createFillAccumulator, registerHyperliquidAnalyticsTool } from './analytics.js'
-
-/*
- * The fee sign is the point of this file. Hyperliquid charges a taker fee and
- * pays a maker rebate, and a rebate arrives as a negative `fee`. Summing the
- * absolute values turns a market that paid rebates out into one that collected
- * fees, which is not an imprecise number but the wrong sign on a real one. The
- * fills summary was fixed for this and the analytics tool was not, because its
- * copy of the arithmetic sat inside a streaming callback that only a live
- * Portal window could reach. It is a plain function now, so the sign is held
- * here rather than by whoever next reads that loop.
- */
 
 const fill = (over: Record<string, unknown> = {}) => ({
   user: '0xaaaa000000000000000000000000000000000001',
@@ -24,6 +14,7 @@ const fill = (over: Record<string, unknown> = {}) => ({
   sz: '2',
   dir: 'Open Long',
   fee: '0.5',
+  feeToken: 'USDC',
   closedPnl: '0',
   ...over,
 })
@@ -34,8 +25,8 @@ test('a maker rebate lowers the fee total instead of raising it', () => {
   accumulateFill(totals, fill({ fee: '-1.9' }))
   accumulateFill(totals, fill({ fee: '3' }))
 
-  assert.equal(Number(totals.totalFees.toFixed(2)), 2.05)
-  assert.equal(Number(totals.coinData.get('BTC')?.fees.toFixed(2)), 2.05)
+  assert.equal(summarizeHyperliquidFees(totals.fees).total_fees_usd, 2.05)
+  assert.equal(summarizeHyperliquidFees(totals.coinData.get('BTC')!.fees).total_fees_usd, 2.05)
 })
 
 test('a market that only paid rebates reports a negative fee total', () => {
@@ -43,9 +34,38 @@ test('a market that only paid rebates reports a negative fee total', () => {
   accumulateFill(totals, fill({ fee: '-0.4' }))
   accumulateFill(totals, fill({ fee: '-0.6' }))
 
-  assert.equal(Number(totals.totalFees.toFixed(2)), -1)
-  assert.ok(totals.totalFees < 0, 'rebates must not be reported as fees paid')
+  assert.equal(summarizeHyperliquidFees(totals.fees).total_fees_usd, -1)
+  assert.equal(summarizeHyperliquidFees(totals.fees).fees_status, 'available')
 })
+
+test('fees in different tokens cannot be added to a USD total', () => {
+  const totals = createFillAccumulator()
+  accumulateFill(totals, fill({ fee: '2', feeToken: 'USDC' }))
+  accumulateFill(totals, fill({ fee: '-0.25', feeToken: 'HYPE' }))
+  accumulateFill(totals, fill({ coin: 'ETH', fee: '1.5', feeToken: 'USDC' }))
+
+  assert.equal(summarizeHyperliquidFees(totals.fees).total_fees_usd, null)
+  assert.equal(summarizeHyperliquidFees(totals.coinData.get('BTC')!.fees).total_fees_usd, null)
+  assert.equal(summarizeHyperliquidFees(totals.coinData.get('ETH')!.fees).total_fees_usd, 1.5)
+})
+
+for (const feeToken of [undefined, null, true, {}, '', ' ', 'usdc']) {
+  test(`an unverified fee token ${JSON.stringify(feeToken)} cannot imply a USD fee`, () => {
+    const totals = createFillAccumulator()
+    accumulateFill(totals, fill({ feeToken }))
+    assert.equal(summarizeHyperliquidFees(totals.fees).total_fees_usd, null)
+    assert.equal(summarizeHyperliquidFees(totals.coinData.get('BTC')!.fees).total_fees_usd, null)
+  })
+}
+
+for (const fee of [undefined, null, true, {}, '', 'not a number', 'Infinity']) {
+  test(`an invalid fee ${JSON.stringify(fee)} cannot imply a known zero`, () => {
+    const totals = createFillAccumulator()
+    accumulateFill(totals, fill({ fee }))
+    assert.equal(summarizeHyperliquidFees(totals.fees).total_fees_usd, null)
+    assert.equal(summarizeHyperliquidFees(totals.coinData.get('BTC')!.fees).total_fees_usd, null)
+  })
+}
 
 test('realized PnL keeps its sign too', () => {
   const totals = createFillAccumulator()
@@ -90,7 +110,7 @@ test('a fill missing its fields is counted, not dropped or turned into NaN', () 
 
   assert.equal(totals.totalFills, 1)
   assert.equal(totals.totalVolume, 0)
-  assert.equal(totals.totalFees, 0)
+  assert.equal(summarizeHyperliquidFees(totals.fees).total_fees_usd, null)
   assert.equal(totals.traders.size, 0, 'a fill with no user adds no trader')
   assert.deepEqual([...totals.allCoins], ['unknown'])
   assert.equal(totals.dirCounts.Unknown, 1)
@@ -98,9 +118,22 @@ test('a fill missing its fields is counted, not dropped or turned into NaN', () 
 
 test('analytics preserves unavailable metrics and caches only the resolved block window', async (t) => {
   type Payload = {
-    overview: { total_fills: number; long_short_ratio: number | null; long_short_label: string }
+    overview: {
+      total_fills: number
+      total_fees_usd: number | null
+      fees_status: string
+      fees_by_token: Array<{ fee_token: string; total_fees: string | null }>
+      long_short_ratio: number | null
+      long_short_label: string
+    }
     liquidations: { status?: string; count: number | null; volume_usd: number | null }
-    volume_by_coin: Array<{ long_short_ratio: number | null }>
+    volume_by_coin: Array<{
+      coin: string
+      fees_usd: number | null
+      fees_status: string
+      long_short_ratio: number | null
+    }>
+    _ui: { metric_cards: Array<{ id: string }> }
     top_pnl_winners: Array<{ realized_pnl: number; pnl_formatted: string }>
     top_pnl_losers: Array<{ realized_pnl: number; pnl_formatted: string }>
     _cache?: { hit: boolean }
@@ -127,6 +160,14 @@ test('analytics preserves unavailable metrics and caches only the resolved block
   let now = initialTime
   let head = 1_000_000
   let aggregationRequests = 0
+  const feeScenarios: Record<string, Record<string, unknown>[]> = {
+    FEE_USDC: [fill({ fee: '0.95' }), fill({ fee: '-1.9' }), fill({ fee: '3' })],
+    FEE_REBATE: [fill({ fee: '-0.4' }), fill({ fee: '-0.6' })],
+    FEE_MIXED: [fill({ fee: '2' }), fill({ fee: '-0.25', feeToken: 'HYPE' }), fill({ coin: 'ETH', fee: '1.5' })],
+    FEE_MISSING: [fill({ feeToken: undefined })],
+    FEE_INVALID: [fill({ feeToken: true })],
+    FEE_BAD_AMOUNT: [fill({ fee: 'not a number' })],
+  }
   t.mock.method(Date, 'now', () => now)
   t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input))
@@ -145,14 +186,17 @@ test('analytics preserves unavailable metrics and caches only the resolved block
       fromBlock: number
       toBlock: number
       fills?: Array<{ coin?: string[] }>
+      fields?: { fill?: { feeToken?: boolean } }
     }
     if (query.fills) {
+      assert.equal(query.fields?.fill?.feeToken, true, 'fee amounts require their source unit')
       aggregationRequests += 1
       now += 100
       return json({
         header: { number: query.toBlock, timestamp: 1_700_000_000 + query.toBlock },
         fills:
-          query.fills[0]?.coin?.[0] === 'CLOSE_ONLY'
+          feeScenarios[query.fills[0]?.coin?.[0] ?? ''] ??
+          (query.fills[0]?.coin?.[0] === 'CLOSE_ONLY'
             ? [fill({ dir: 'Close Long' })]
             : query.fills[0]?.coin?.[0] === 'SHORT_ONLY'
               ? [fill({ dir: 'Open Short' })]
@@ -162,7 +206,7 @@ test('analytics preserves unavailable metrics and caches only the resolved block
                     fill({ dir: 'Open Long', closedPnl: '-10' }),
                     fill({ user: '0xbbbb000000000000000000000000000000000002', dir: 'Long > Short', closedPnl: '5' }),
                     fill({ user: '0xcccc000000000000000000000000000000000003', dir: 'Buy', closedPnl: '0' }),
-                  ],
+                  ]),
       })
     }
     const blocks = Array.from({ length: query.toBlock - query.fromBlock + 1 }, (_, index) => ({
@@ -177,6 +221,7 @@ test('analytics preserves unavailable metrics and caches only the resolved block
     assert.equal(fresh.liquidations.count, null)
     assert.equal(fresh.liquidations.volume_usd, null)
     assert.ok(fresh._notices?.some((notice) => /liquidation/i.test(notice)))
+    assert.ok(fresh._ui.metric_cards.every((card) => card.id !== 'liquidations'))
   })
   await t.test('all-long opening fills cannot be described as short-biased', () => {
     assert.equal(fresh.overview.long_short_ratio, null)
@@ -229,6 +274,34 @@ test('analytics preserves unavailable metrics and caches only the resolved block
       assert.equal(payload.overview.long_short_ratio, ratio)
       assert.equal(payload.volume_by_coin[0].long_short_ratio, ratio)
     })
+  }
+
+  for (const [scenario, expectedUsd] of [
+    ['FEE_USDC', 2.05],
+    ['FEE_REBATE', -1],
+    ['FEE_MIXED', null],
+    ['FEE_MISSING', null],
+    ['FEE_INVALID', null],
+    ['FEE_BAD_AMOUNT', null],
+  ] as const) {
+    for (const response_format of ['full', 'compact', 'summary']) {
+      const payload = (await callTool({ timeframe: '1h', response_format, coin: [scenario] })).structuredContent
+      await t.test(`${response_format} fee units for ${scenario}`, () => {
+        assert.equal(payload.overview.total_fees_usd, expectedUsd)
+        assert.equal(payload.overview.fees_status, expectedUsd === null ? 'unavailable' : 'available')
+        if (scenario === 'FEE_MIXED') {
+          assert.deepEqual(payload.overview.fees_by_token, [
+            { fee_token: 'HYPE', total_fees: '-0.25' },
+            { fee_token: 'USDC', total_fees: '3.5' },
+          ])
+          assert.ok(payload._notices?.some((notice) => /fee.*USDC/i.test(notice)))
+          if (response_format !== 'summary') {
+            assert.equal(payload.volume_by_coin.find((row) => row.coin === 'BTC')?.fees_usd, null)
+            assert.equal(payload.volume_by_coin.find((row) => row.coin === 'ETH')?.fees_usd, 1.5)
+          }
+        }
+      })
+    }
   }
 
   for (const response_format of ['compact', 'summary']) {

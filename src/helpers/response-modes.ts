@@ -1,6 +1,12 @@
 // Response format modes for context optimization
 // Reduces token usage by 50-95% depending on mode
 
+import {
+  accumulateHyperliquidFee,
+  createHyperliquidFeeAccumulator,
+  summarizeHyperliquidFees,
+} from './hyperliquid-fees.js'
+
 export type ResponseFormat = 'full' | 'compact' | 'summary'
 
 export function resolveDefaultResponseFormat(
@@ -257,8 +263,8 @@ export function summarizeHyperliquidFills(fills: any[]): any {
   const coins = new Set<string>()
   const dirCounts: Record<string, number> = {}
   let totalVolume = 0,
-    totalFees = 0,
     totalPnl = 0
+  const fees = createHyperliquidFeeAccumulator()
 
   const byCoin = new Map<string, number>()
   fills.forEach((fill) => {
@@ -266,7 +272,7 @@ export function summarizeHyperliquidFills(fills: any[]): any {
     if (fill.coin) coins.add(fill.coin)
     const notional = toFiniteNumber(fill.px) * toFiniteNumber(fill.sz)
     totalVolume += notional
-    totalFees += toFiniteNumber(fill.fee)
+    accumulateHyperliquidFee(fees, fill)
     totalPnl += toFiniteNumber(fill.closedPnl)
     const dir = fill.dir || 'Unknown'
     dirCounts[dir] = (dirCounts[dir] || 0) + 1
@@ -283,9 +289,7 @@ export function summarizeHyperliquidFills(fills: any[]): any {
     unique_traders: traders.size,
     unique_coins: coins.size,
     total_volume_usd: parseFloat(totalVolume.toFixed(2)),
-    // Signed: Hyperliquid maker rebates are negative fees. Summing absolute
-    // values reported a trader who only earned rebates as having paid fees.
-    total_fees_usd: parseFloat(totalFees.toFixed(2)),
+    ...summarizeHyperliquidFees(fees),
     total_realized_pnl: parseFloat(totalPnl.toFixed(2)),
     direction_breakdown: dirCounts,
     top_coins_by_volume: topCoins,
