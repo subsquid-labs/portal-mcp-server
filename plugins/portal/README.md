@@ -71,7 +71,7 @@ Cursor loads the public SQD MCP connection and the same four skills. No API key 
 
 ## Starter prompts
 
-- Show me the last 200 BTC perp fills on Hyperliquid.
+- Show me the last 25 BTC perp fills on Hyperliquid.
 - How many transactions landed on Base in the past 30 minutes?
 - Show me the latest 20 USDC transfers on Base from the past hour.
 
