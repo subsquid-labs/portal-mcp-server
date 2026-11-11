@@ -6,6 +6,10 @@
 
 - **SQD guidance.** Bundled skills track SQD skills v1.1.0, which adds step-by-step EVM and Solana migration guides and folds the Pipes SDK compatibility notes into the main references. When the plugin already connects the SQD server, Portal setup confirms the tools instead of adding a second server. The RPC latency pattern describes the published `@subsquid/pipes` beta.11 sample shape.
 
+### Fixes
+
+- **Time series timestamp windows.** `from_timestamp` and `to_timestamp` now set the chart's span. The span used to come from `duration`, 6 hours by default, so a 2-hour window was backfilled with 4 hours of earlier blocks and counted them, and a 24-hour window dropped everything older than 6 hours. The answer names the window's start and end instead of "last 6h", and `duration` is ignored when `from_timestamp` is set.
+
 ## [0.8.6] - 2026-11-11
 
 Portal scans recover from interruptions without replaying records, and analytics disclose unavailable evidence and fee conversions. This release updates MCP compatibility and bundled SQD guidance, and gives live tests bounded rate-limit recovery.
