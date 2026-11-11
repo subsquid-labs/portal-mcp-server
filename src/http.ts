@@ -106,6 +106,7 @@ function runtimeContextFromRequest(ctx: McpRequestContext): RuntimeRequestContex
     appEnabled: resolveActivityExplorerSurface(ctx.requestInfo),
     toolsets: requestedToolsetsFromRequest(ctx.requestInfo),
     connectionKey: headers?.get(CONNECTION_KEY_HEADER) || undefined,
+    userAgent: headers?.get('user-agent') || undefined,
   }
 }
 

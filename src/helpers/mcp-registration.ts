@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+
 import type {
   CallToolResult,
   InputRequiredResult,
@@ -8,6 +10,7 @@ import type {
 import { type ZodRawShape, z } from 'zod'
 
 import { getActivityExplorerToolMeta } from '../apps/activity-explorer.js'
+import { classifyClientFamily } from '../observability.js'
 import { isToolActive } from '../toolsets.js'
 import { runWithPortalRequestDeadline } from './request-context.js'
 
@@ -112,6 +115,25 @@ const PORTAL_TOOL_OUTPUT_SCHEMA = z
   })
   .catchall(z.unknown())
 
+/*
+ * The shared output schema is about 40% of tools/list. The OpenAI listing,
+ * which ChatGPT and Codex share, is reviewed against it; other hosts only pay
+ * for it. A client whose User-Agent names another known host skips it, and
+ * its results are identical because every structuredContent is an object.
+ * Anything unidentified keeps the schema, so a wrong or missing User-Agent
+ * costs tokens, never behaviour.
+ */
+const OUTPUT_SCHEMA_SKIPPING_FAMILIES = new Set(['claude', 'cursor', 'grok', 'gemini', 'vscode', 'windsurf'])
+const outputSchemaListing = new AsyncLocalStorage<boolean>()
+
+export function listsOutputSchemaFor(userAgent: string | undefined): boolean {
+  return !OUTPUT_SCHEMA_SKIPPING_FAMILIES.has(classifyClientFamily(userAgent))
+}
+
+export function runWithOutputSchemaListing<T>(enabled: boolean, callback: () => T): T {
+  return outputSchemaListing.run(enabled, callback)
+}
+
 function getPortalToolTitle(name: string): string {
   const title = PORTAL_TOOL_TITLES[name]
   if (name.startsWith('__test_')) return name.slice('__test_'.length).replaceAll('_', ' ')
@@ -152,7 +174,7 @@ export function registerPortalTool<InputShape extends ZodRawShape>(
       title: getPortalToolTitle(name),
       description,
       inputSchema: z.object(inputShape),
-      outputSchema: PORTAL_TOOL_OUTPUT_SCHEMA,
+      ...((outputSchemaListing.getStore() ?? true) ? { outputSchema: PORTAL_TOOL_OUTPUT_SCHEMA } : {}),
       annotations: READ_ONLY_TOOL_ANNOTATIONS,
       _meta: activityExplorerMeta,
     },

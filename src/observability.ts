@@ -36,6 +36,8 @@ export type RuntimeRequestContext = {
   toolsetLabel?: string
   /** Hashed connection identifier used only as a fairness key; never logged or labelled. */
   connectionKey?: string
+  /** HTTP User-Agent, read only to size the tool catalog; never logged or labelled. */
+  userAgent?: string
 }
 
 export type ToolEventStatus = 'success' | 'partial' | 'tool_error' | 'request_error' | 'cancelled'
