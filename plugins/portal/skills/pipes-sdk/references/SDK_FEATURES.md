@@ -57,7 +57,7 @@ evmEventDecoder({ range: { from: 'latest' }, ... })
 
 ```typescript
 import erc20Json from './erc20.json'
-import { defineAbi } from '@subsquid/pipes'
+import { defineAbi, evmEventDecoder } from '@subsquid/pipes/evm'
 
 const erc20 = defineAbi(erc20Json)
 

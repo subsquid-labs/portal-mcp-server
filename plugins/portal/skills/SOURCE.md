@@ -19,6 +19,7 @@ Packaging changes for the Claude plugin directory, which reads every file in the
 - `portal/references/tron.md` describes the Tron MCP tools without pinning a server version and keeps the exact TRX and TRC-10 amount units.
 - The Hyperliquid ClickHouse examples label loss-based selections as large losing closes. Portal fills do not identify liquidations, so those rows cannot establish liquidation counts or volume.
 - `pipes-sdk/references/PATTERNS.md` describes the RPC latency watcher output as published in `@subsquid/pipes@1.0.0-beta.11`: `url`, `receivedAt`, and `portalDelayMs` sit on each `RpcObservation` in `sample.rpc`, unresolved observations carry no delay, and the example loops over the `LatencySample[]` each batch emits.
+- `pipes-sdk/references/SDK_FEATURES.md` imports `defineAbi` and `evmEventDecoder` from `@subsquid/pipes/evm`; the package root does not export `defineAbi`.
 - Wrong and right examples are labelled in words instead of check and cross symbols, and warning callouts drop the warning sign.
 
 Upstream adopted the rest of the earlier local changes in v1.1.0: the network count, the dataset catalog and retirement list, the Pipes SDK beta.11 and CLI beta.3 notes, and the Pub/Sub, Portal 529, and EVM field compatibility notes. The separate `pipes-sdk/references/COMPATIBILITY.md` is gone because those facts now live in `SDK_FEATURES.md`, `TROUBLESHOOTING.md`, and `BIGQUERY_TARGET.md`, with the latency notes in `PATTERNS.md`.
