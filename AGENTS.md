@@ -26,6 +26,7 @@ An MCP server that answers blockchain questions from SQD Portal data across EVM,
 
 ## Conventions
 
+- Use the latest stable MCP SDK and MCP Apps releases when updating dependencies or preparing a server release. Verify published versions against upstream release notes, update the lockfile, and run compatibility checks. Report Explorer bundle bytes without imposing a fixed size budget.
 - Format only the files you changed (`npx biome format --write <files>`); the repository is Biome-formatted and a whole-file reformat hides the real diff.
 - Pure logic gets a unit test next to the code (`src/**/*.test.ts`). Black-box checks live in `scripts/` and are listed in `scripts/README.md` with their gate.
 - The Explorer shows recorded Portal data in previews and screenshots; only sparse, mixed, and error cells are synthetic.

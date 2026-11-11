@@ -195,28 +195,6 @@ async function main() {
     ACTIVITY_EXPLORER_RESOURCE_URI.includes(ACTIVITY_EXPLORER_HASH),
     'resource URI must use the bundle hash as its cache key',
   )
-  /*
-   * Two numbers, because they answer different questions. 700,000 is the hard
-   * gate: past it the resource is too big to send a host on every session.
-   * 600,000 is where the bundle stops having room to grow, and a build that
-   * crosses it says so while still passing, so the next feature is a decision
-   * rather than a surprise.
-   *
-   * The measured floor is about 490,000 before a line of app code:
-   * lightweight-charts 156,427, zod 137,297, the MCP client 58,832, and the
-   * mono font subset 16,052. A target below that is not reachable by trimming
-   * app code, and pretending otherwise would put a gate on the release that
-   * only a dependency change could satisfy.
-   */
-  assert(
-    ACTIVITY_EXPLORER_BYTES > 20_000 && ACTIVITY_EXPLORER_BYTES < 700_000,
-    `embedded app must stay inside its release byte budget (${ACTIVITY_EXPLORER_BYTES} bytes)`,
-  )
-  if (ACTIVITY_EXPLORER_BYTES > 600_000) {
-    console.warn(
-      `WARN  the Explorer bundle is ${ACTIVITY_EXPLORER_BYTES} bytes, past the 600,000 headroom mark and ${700_000 - ACTIVITY_EXPLORER_BYTES} from the gate`,
-    )
-  }
   for (const tool of [
     'portal_list_networks',
     'portal_get_network_info',

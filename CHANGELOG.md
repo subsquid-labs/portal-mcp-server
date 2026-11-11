@@ -4,6 +4,7 @@
 
 ### Improvements
 
+- **Current MCP Apps SDK.** Upgraded the Explorer to MCP Apps SDK 2.1.0. Removed the fixed bundle-size budgets from the build and App contract gate; resource byte counts and integrity checks remain available.
 - **Current MCP dependencies.** Updated the MCP runtime SDK, HTTP routing, and input validation dependencies. Local Explorer builds also rebuild when the dependency lockfile changes.
 - **Current network catalog.** Refreshed the Explorer's chain metadata from Portal and removed fixed network-count claims from plugin descriptions. Use `portal_list_networks` for current availability.
 - **SQD guidance.** Refreshed the bundled skills from the official SQD source, including Portal setup, current Pipes SDK compatibility, and the BigQuery target. Existing tool-permission and credential-handling rules remain in place.

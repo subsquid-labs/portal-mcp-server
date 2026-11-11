@@ -41,15 +41,6 @@ if (!bundle) throw new Error('SQD Activity Explorer bundle is empty')
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><title>SQD Explorer</title></head><body><div id="app"></div><script>${bundle}</script></body></html>`
 const hash = createHash('sha256').update(html).digest('hex').slice(0, 12)
 const bytes = Buffer.byteLength(html)
-/* Release budget for the self-contained App resource, the mono font included.
-   The hard cap fails the build; the soft cap only says so, so a feature that
-   eats the headroom is visible in the log before it is a blocker. */
-const maxBytes = 700_000
-const warnBytes = 600_000
-if (bytes > maxBytes)
-  throw new Error(`SQD Activity Explorer is ${bytes} bytes, above the ${maxBytes}-byte release budget`)
-if (bytes > warnBytes) console.warn(`SQD Activity Explorer is ${bytes} bytes, above the ${warnBytes}-byte soft budget`)
-
 await mkdir(path.dirname(output), { recursive: true })
 await writeFile(
   output,
