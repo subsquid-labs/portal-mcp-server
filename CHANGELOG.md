@@ -16,6 +16,7 @@
 
 ### Fixes
 
+- **Wallet counterparty evidence.** EVM wallet results expose the exact asset-movement counterparty table in the Explorer alongside the ranking.
 - **Base time windows.** Updated the block estimate for Denim's 200 ms blocks. Base mainnet and Sepolia charts default to 15 minutes and suggest a shorter window when a request exceeds the scan limit. Estimated windows require an indexed head timestamp and refuse ranges crossing the Denim cadence change; verified historical timestamp queries remain available.
 - **Interrupted streams.** Adaptive scans resume after the last completed block when a size limit or timeout interrupts delivery. Buffered scans can discard an attempt and split safely. Grouped contract charts retain their reduced chunk size between passes within the shared recovery budget. Failures without a safe checkpoint return an explicit error instead of replaying records and inflating totals. Errors retain their cause and delivery metadata. Stream byte limits apply before processing records, and failed readers release the upstream response.
 - **Hyperliquid analytics.** Position flips are no longer labelled as liquidations. Liquidation metrics are explicitly unavailable because Portal fills do not expose the required marker. Long-only activity has a long-biased interpretation and an undefined ratio, and PnL rankings include only traders with the matching profit or loss sign. Volume is identified as per-account fill notional rather than deduplicated market volume.

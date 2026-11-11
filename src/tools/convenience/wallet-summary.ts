@@ -2192,6 +2192,17 @@ export function registerGetWalletSummaryTool(server: McpServer) {
               }),
             ]
           : []),
+        ...(fundFlow.movement_counterparties.length > 0
+          ? [
+              buildTablePanel({
+                id: 'wallet-flow-counterparty-table',
+                kind: 'table_panel',
+                title: 'Asset movement counterparties',
+                subtitle: 'Exact inbound and outbound movements by counterparty.',
+                table_id: 'flow_counterparties',
+              }),
+            ]
+          : []),
         ...(fundFlow.largest_movements.length > 0
           ? [
               buildTablePanel({
