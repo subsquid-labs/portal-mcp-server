@@ -1,16 +1,16 @@
 # Common errors during the Portal migration
 
-Each entry maps back to a step in `SKILL.md`.
+Each entry maps back to a step in `evm-migration.md` or `solana-migration.md`.
 
 ---
 
-## Both chains (v2-with-`apiKey`)
+## Squids still on the v2 gateway
 
-> The v2 gateway requires authentication as of **May 19, 2026 12:00 UTC** for self-hosted setups (Cloud is unaffected). Migrating to Portal is the recommended path. The public Portal is shared capacity; authenticated and dedicated Portal endpoints accept `x-api-key`. The v2-with-`apiKey` config below is the alternative for squids that must stay on v2 a bit longer. See <https://docs.sqd.dev/announcements/gateway-api-keys>.
+Self-hosted v2 gateway calls have needed an API key since 2026-05-19 12:00 UTC ([announcement](https://docs.sqd.dev/announcements/gateway-api-keys)); SQD Cloud injects the key itself. Migrating to Portal removes the requirement. `v2-auth.md` is the path for an EVM squid that stays on v2 for now. The Solana v2 gateway has kept only the last 30 days of data since 2026-06-01 and is scheduled for removal, so a Solana squid that hits these errors migrates.
 
 ### `TS2353: 'apiKey' does not exist in type 'GatewaySettings'`
 
-On `.setGateway({ url, apiKey })` while still on a v2 squid (pre-Portal migration). Applies to both EVM and Solana.
+On `.setGateway({ url, apiKey })` in a squid that has not migrated yet, EVM or Solana.
 
 **Cause:** `apiKey` on `GatewaySettings` was added in:
 
@@ -30,9 +30,9 @@ npm i @subsquid/evm-processor@^1.30.0
 npm i @subsquid/solana-stream@^0.5.0
 ```
 
-Going to `latest` instead lands on the Portal stack (`@subsquid/evm-stream` for EVM, `@subsquid/solana-stream@^1.x.x` for Solana) where `.setGateway` is gone.
+The current packages (`@subsquid/evm-stream` for EVM, `@subsquid/solana-stream@^1.x.x` for Solana) are the Portal stack and have no `.setGateway`; installing them means doing the migration.
 
-Get a key at <https://portal.sqd.dev/app>. The full setup guide is at <https://docs.sqd.dev/en/sdk/squid-sdk/evm/guides/migration/gateway-api-key>.
+How the user adds their key: `v2-auth.md`.
 
 ### Anonymous v2 archive requests start 401-ing after 2026-05-19 12:00 UTC
 
@@ -40,7 +40,7 @@ Symptom: `HttpError: Got 401 from https://v2.archive.subsquid.io/network/...` or
 
 **Cause:** the v2 gateway requires API-key authentication from May 19, 2026 12:00 UTC onward. Cloud-hosted squids are not affected (Cloud injects the key). RPC-only squids (no `setGateway`) are not affected.
 
-**Fix:** either pin the v2 package version that supports `apiKey` (`@subsquid/evm-processor@^1.30.0` / `@subsquid/solana-stream@^0.5.0`) and have the user add their key as SQD's guide describes, or complete the Portal migration in the rest of this skill (`setGateway` is replaced by `setPortal`; use the access mode configured for that Portal endpoint). Don't ask for the key, read it, or write it into the project.
+**Fix:** migrate to Portal with the steps in this skill, where `setPortal` replaces `setGateway`. An EVM squid that stays on v2 for now upgrades the processor, and the user adds their key as described in `v2-auth.md`.
 
 ---
 
@@ -88,7 +88,7 @@ const dataSource = new DataSourceBuilder()
 
 After the install swap, any file still importing from `@subsquid/evm-processor` breaks.
 
-**Fix:** `grep -R "@subsquid/evm-processor"` the project. Retarget every file per the import table in `SKILL.md` (EVM Step 2). Two specific utilities are not mentioned in the upstream doc:
+**Fix:** `grep -R "@subsquid/evm-processor"` the project. Retarget every file per the import table in `evm-migration.md` (Step 2). Two specific utilities are not mentioned in the upstream doc:
 
 | Was | Now |
 |---|---|
@@ -272,11 +272,11 @@ Two possible causes:
    })
    ```
 
-### Indexer restarts on every non-2xx Portal response
+### Indexer exits during a Portal outage
 
-The default HTTP client gives up on transient errors.
+The HTTP client spent its retry budget. `@subsquid/evm-stream` before 0.1.4 capped every Portal request at 6 retries (about 33 seconds) even when `retryAttempts` was set; 0.1.4 and later default to 20 retries (about five minutes) and honour the configured value.
 
-**Fix:** use the object form of `.setPortal()` with infinite retries:
+**Fix:** upgrade `@subsquid/evm-stream`, and use the object form of `.setPortal()` with infinite retries:
 ```ts
 .setPortal({
   url: 'https://portal.sqd.dev/datasets/ethereum-mainnet',
@@ -422,11 +422,11 @@ reward:       { lamports, rewardType }
 })
 ```
 
-### Indexer exits on transient Portal HTTP errors
+### Indexer exits during a Portal outage
 
-Bare URL form of `.setPortal()` gives up on non-2xx responses by default.
+The HTTP client spent its retry budget. `@subsquid/solana-stream` before 1.2.1 capped every Portal request at 6 retries (about 33 seconds) even when `retryAttempts` was set; 1.2.1 and later default to 20 retries (about five minutes) and honour the configured value.
 
-**Fix:** switch to the object form with infinite retries:
+**Fix:** upgrade `@subsquid/solana-stream`, and use the object form of `.setPortal()` with infinite retries:
 ```ts
 .setPortal({
   url: 'https://portal.sqd.dev/datasets/solana-mainnet',
@@ -471,6 +471,8 @@ run(dataSource, db, async (raw) => {
 ```
 
 Same pattern as the EVM RPC-client step.
+
+For RPC as a second **data source** rather than for handler reads, `@subsquid/squid-sdk` (0.7.0 on 2026-11-11) has `SolanaFallbackDataSourceBuilder` (`@subsquid/squid-sdk/solana/fallback`) and `EvmFallbackDataSourceBuilder` (`@subsquid/squid-sdk/evm/fallback`): an ordered list of Portal and RPC sources that fails over when the active one errors or hangs. See the [fallback reference](https://docs.sqd.dev/en/sdk/squid-sdk/evm/reference/evm-fallback).
 
 ### `@subsquid/borsh` typed decoders fail after the upgrade
 

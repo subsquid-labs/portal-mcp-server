@@ -6,7 +6,7 @@ Use this when the user asks to be set up for SQD Portal, for example after pasti
 
 The hosted server is `https://portal.sqd.dev/mcp`. It needs no account and no key.
 
-Check whether the client already has it before adding a second copy (`claude mcp list`, `codex mcp list`, or the `mcpServers` entries in Cursor's `mcp.json`).
+When this skill runs from the SQD plugin, the plugin already connects this server as `SQD`: confirm the `portal_` tools are listed and skip to step 2. Otherwise, check whether the client already has it before adding a second copy (`claude mcp list`, `codex mcp list`, or the `mcpServers` entries in Cursor's `mcp.json`).
 
 | Client | Command or config |
 |---|---|
@@ -57,7 +57,7 @@ SQD_PORTAL_API_KEY=<the user pastes the key here>
 - Check that `.env` is in `.gitignore`, and add it if it is missing.
 - For a hosted service, put the key in the platform's secret variables instead of a file.
 
-See the credential rules in `../SKILL.md` (External Data Boundary) and, for indexers, [credential handling](../../pipes-sdk/references/CREDENTIALS.md).
+See the credential rules in `../SKILL.md` (Untrusted data) and, for indexers, [credential handling](../../pipes-sdk/references/CREDENTIALS.md).
 
 ## 5. Send the key
 
@@ -65,7 +65,7 @@ Send `Authorization: Bearer <key>`. Portal also accepts `x-api-key: <key>`. When
 
 Have the user configure the header in their own HTTP client or application. Do not read an existing key from the environment or files, or write it into a command or project configuration. The [Dedicated Portal key guide](https://docs.sqd.dev/en/sdk/squid-sdk/evm/guides/migration/portal-api-key) shows the supported client configuration.
 
-For Pipes SDK and current Squid SDK clients, authentication headers belong in the Portal client's `http.headers`. Keep any existing HTTP options beside `headers`, because `http` replaces the HTTP client settings as a whole. A squid still using `.setGateway()` has a separate v2 setup; see the `migrate-to-portal` skill.
+For Pipes SDK and current Squid SDK clients, authentication headers belong in the Portal client's `http.headers`. Keep any existing HTTP options beside `headers`, because `http` replaces the HTTP client settings as a whole. A squid still using `.setGateway()` has a separate v2 setup; see the `migrate-to-portal` skill. Ponder on Portal reads `PORTAL_API_KEY` and sends it as `x-api-key`.
 
 ## 6. Verify
 
@@ -90,4 +90,4 @@ Tell the user, in a few lines:
 
 - which MCP client entry was added, and whether a restart is needed
 - which file holds the Portal URL and the key variable, and that the value was not read or printed
-- whether the key check passed, and if not, the `error.code` and the fix from the table above
+- whether the user's key check passed, and if not, the `error.code` and the fix from the table above

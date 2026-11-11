@@ -203,17 +203,9 @@ If the handler does direct RPC calls, also add:
  })
 ```
 
-## Required from 2026-05-19 12:00 UTC: API key on v2 gateway
+## Staying on the v2 gateway
 
-Self-hosted squids that still hit the v2 archive must authenticate from May 19, 2026 12:00 UTC. Cloud-hosted squids are unaffected. To stay on v2 for now, upgrade the processor:
-
-```bash
-npm i @subsquid/evm-processor@^1.30.0
-```
-
-The user then creates a key at <https://portal.sqd.dev/app> and adds it to the squid as SQD's guide describes. Don't ask for the key, read it, or write it into the project. The `apiKey` gateway setting was added in `@subsquid/evm-processor@1.30.0`; earlier versions reject it.
-
-Reference docs: <https://docs.sqd.dev/announcements/gateway-api-keys> · <https://docs.sqd.dev/en/sdk/squid-sdk/evm/guides/migration/gateway-api-key>
+Self-hosted squids that still read the v2 gateway need an API key. The package version and how the user adds their key are in `v2-auth.md`.
 
 ## Reference templates
 

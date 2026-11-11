@@ -181,14 +181,12 @@ ORDER BY (entity_id, block_number, tx_hash, event_type)
 
 ```typescript
 onRollback: async ({ reason, store, safeCursor }) => {
-  // reason is 'recovery' after an unclean restart or 'fork' after a reorg
-  await store.removeAllRows({
-    tables: ['events'],
-    where: 'block_number > {latest:UInt64}',
-    params: { latest: safeCursor.number },
-  })
+  // reason is 'recovery' on every restart with a saved cursor, or 'fork' after a reorg
+  await store.removeRowsAfter(safeCursor, { tables: ['events'] })
 }
 ```
+
+`removeRowsAfter` writes the block condition itself and expects the block-number column to be named `block_number`; pass `column` when yours differs. On a `CollapsingMergeTree(sign)` table it inserts cancel rows (`sign = -1`), so the collapse column must be named `sign`. Details and the shared-table `where` option: [SDK_FEATURES.md](SDK_FEATURES.md#clickhouse).
 
 **Critical:** ORDER BY must include ALL distinguishing fields to prevent unwanted deduplication.
 

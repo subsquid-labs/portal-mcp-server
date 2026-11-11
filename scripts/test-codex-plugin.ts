@@ -266,14 +266,14 @@ function assertManifest() {
   }
   const skillsSource = readFileSync(SKILLS_SOURCE_PATH, 'utf8')
   assert(
-    skillsSource.includes('c51e993d74c06d2d6eda798a7e1283ae93001320'),
+    skillsSource.includes('d8f9b7293a8854aaaf136ebc79bc156fd87a6ba7'),
     'bundled skills should record the verified upstream commit',
   )
   const portalSkill = readFileSync(resolve(PLUGIN_ROOT, 'skills/portal/SKILL.md'), 'utf8')
   const portalResultContract = readFileSync(resolve(PLUGIN_ROOT, 'skills/portal/references/mcp-results.md'), 'utf8')
   for (const required of [
-    'tools/list',
     'sqd://tools',
+    'sqd://investigations',
     '_server',
     '_evidence',
     '_coverage',
@@ -288,9 +288,10 @@ function assertManifest() {
     )
   }
   assert(
-    portalSkill.includes('The duplicate HTTP `/tools` endpoint is retired.'),
+    !/portal\.sqd\.dev\/mcp\/tools|GET \/tools\b/.test(`${portalSkill}\n${portalResultContract}`),
     'bundled Portal skill should not route agents to the retired HTTP /tools endpoint',
   )
+  assert(!/^allowed-tools:/m.test(portalSkill), 'bundled Portal skill should not pre-approve tools')
   assert(
     !/[\u2014\u2013]/.test(`${portalSkill}\n${portalResultContract}`),
     'bundled Portal MCP guidance should not use em or en dashes',

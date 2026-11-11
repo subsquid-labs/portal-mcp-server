@@ -1,6 +1,6 @@
 # SDK 1.0 Features & Testing
 
-Reference for SDK 1.0+ APIs: time-based ranges, `defineAbi`, query builders, typed errors, decode-error hooks, the testing library, Tron/Bitcoin streams, BigQuery/Parquet/Pub/Sub targets, finality, and cursor keying. The original examples target beta.4; the Pub/Sub section and current release changes are checked against beta.11. Read [COMPATIBILITY.md](COMPATIBILITY.md) before upgrading, especially for Pub/Sub and RPC latency monitoring.
+Reference for SDK 1.0+ APIs: time-based ranges, `defineAbi`, query builders, typed errors, decode-error hooks, the testing library, Tron/Bitcoin streams, BigQuery/Parquet/Pub/Sub targets, finality, and cursor keying. Examples target `@subsquid/pipes@1.0.0-beta.11`, which was npm `latest` on 2026-11-11; the `beta` tag still pointed to beta.4 on that date. Re-check with `npm view @subsquid/pipes dist-tags --json`.
 
 ## Renamed in the Beta Line
 
@@ -12,7 +12,7 @@ The beta line (and alpha.17+) removed the old aliases and renamed several export
 | `evmPortalSource` (alias) | `evmPortalStream` (only name) | `@subsquid/pipes/evm` |
 | `solanaPortalSource` (alias) | `solanaPortalStream` (only name) | `@subsquid/pipes/solana` |
 | `hyperliquidFillsPortalSource` (alias) | `hyperliquidFillsPortalStream` (only name) | `@subsquid/pipes/hyperliquid` |
-| `evmPortalMockStream` | `mockEvmPortalStream` | `@subsquid/pipes/testing/evm` |
+| `evmPortalMockStream` | `mockPortal({ blocks })` from `@subsquid/pipes/testing`; the intermediate name `mockEvmPortalStream` still exists but is deprecated | `@subsquid/pipes/testing/evm` |
 | `batchForInsert` / `chunk` | `chunkForInsert` | `@subsquid/pipes/targets/drizzle/node-postgres` |
 | `factorySqliteDatabase` / `contractFactoryStore` | `contractFactorySqliteStore` | `@subsquid/pipes/evm` |
 | `SdkError` (enum) | `SdkErrorName` | `@subsquid/pipes` |
@@ -172,7 +172,11 @@ Added to the EVM field selection:
 - **Block:** `uncles`, `withdrawalsRoot`, `withdrawals` (alpha.14+); `blobGasUsed`, `excessBlobGas` (alpha.20+)
 - **Transaction:** `logsBloom`, `accessList` (alpha.14+); EIP-4844 blob fields `blobVersionedHashes`, `blobGasUsed`, `blobGasPrice` (alpha.20+, populated on type-3 transactions)
 
+- **Block, Avalanche header fields** (beta.7+, all optional): `extDataHash`, `blockExtraData`, `blockGasCost`, `extDataGasUsed`, `timestampMilliseconds`, `minDelayExcess`, `targetExponent`, `minPriceExponent`, `settledHeight`, `settledGasUnix`, `settledGasNumerator`, `settledExcess`. `timestampMilliseconds`, `settledHeight` and `settledGasUnix` are `number`; the two hashes are hex strings; the rest are `bigint`.
+
 Portal itself serves a few more columns the SDK schema doesn't type yet (`parentBeaconBlockRoot`, `requestsHash` on blocks; `maxFeePerBlobGas` on transactions). Column availability varies by dataset — `ethereum-mainnet` and `polygon-mainnet` were reindexed from genesis with the full set. alpha.20 also made the decoder tolerant of chains without post-London/post-Cancun fields.
+
+**Transaction `effectiveGasPrice` and `type` are optional** (beta.8+): typed `effectiveGasPrice?: bigint` and `type?: number`. Some datasets return null for them on old blocks (Mantle up to block 29,459), so handle `undefined` even when the field is selected. `blobGasUsed` and `blobGasPrice` arrive as hex or decimal strings depending on the dataset and decode to `bigint` either way. Source: `src/portal-client/query/evm.ts`.
 
 ## Typed Error System
 
@@ -182,9 +186,11 @@ Framework errors carry unique codes linking to docs (`https://docs.sqd.dev/en/sd
 |-------|------|------|
 | `DefaultPipeIdError` | E0001 | `.pipeTo()` called without `id` on source |
 | `BlockRangeConfigurationError` | E0002 | Inverted range, invalid date with `'latest'`, unresolvable timestamp |
-| `InstructionDecoderConfigurationError` | E0003 | Solana decoder built with an unusable discriminator set (missing, duplicated, or mixed-width discriminators) |
+| `InstructionDecoderConfigurationError` | E0003 | Solana decoder built with an instruction that is not one of `program.instructions`, a `program` without an address, or an unusable discriminator set (missing, duplicated, or mixed-width discriminators) |
+| `EventDecoderConfigurationError` | E0004 | Two entries of one `evmEventDecoder` can match the same log |
+| `PortalBlockOrderError` | E1006 | The portal delivered a block out of order, twice, or outside the requested range |
 
-Configuration errors are E0xxx; target errors are E1xxx–E2xxx (ClickHouse, Postgres, BigQuery, Parquet, and Pub/Sub each own a code block).
+Source and pipe configuration errors are E0xxx. E1xxx covers fork handling and the portal contract. Targets own E2xxx: ClickHouse E20xx, Postgres E21xx, BigQuery E22xx, Parquet E23xx, Pub/Sub E24xx. The full list is `docs/errors.md` in the SDK repository; cause and fix for the start-time errors are in [TROUBLESHOOTING.md](TROUBLESHOOTING.md#error-pattern-12-coded-sdk-errors).
 
 ## Decode-Error Hook (`onError`)
 
@@ -208,29 +214,18 @@ Use it for known-bad historical records (e.g. an event whose data layout changed
 Test pipe logic end-to-end without hitting a real portal. Requires `vitest` and `viem` as dev dependencies.
 
 The library provides:
+- **`mockPortal`** (from `@subsquid/pipes/testing`): spin up a mock portal HTTP server that holds a chain and answers each query from it
+- **`readAll`** (from `@subsquid/pipes/testing`): drain a stream into a flat array of data items
 - **`encodeEvent`** — encode events with full type inference from viem ABIs
 - **`mockBlock`** — build mock blocks with auto-generated metadata
-- **`mockEvmPortalStream`** — spin up a mock portal HTTP server
 - **`resetMockBlockCounter`** — reset block numbering between tests
 
 ### Basic test setup
 
 ```typescript
 import { commonAbis, evmEventDecoder, evmPortalStream } from '@subsquid/pipes/evm'
-import {
-  type MockPortal,
-  encodeEvent,
-  mockEvmPortalStream,
-  mockBlock,
-  resetMockBlockCounter,
-} from '@subsquid/pipes/testing/evm'
-
-// Helper: collect stream output
-async function readAll<T>(stream: AsyncIterable<{ data: T[] }>): Promise<T[]> {
-  const res: T[] = []
-  for await (const chunk of stream) res.push(...chunk.data)
-  return res
-}
+import { type MockPortal, mockPortal, readAll } from '@subsquid/pipes/testing'
+import { encodeEvent, mockBlock, resetMockBlockCounter } from '@subsquid/pipes/testing/evm'
 
 const ERC20_ABI = [
   {
@@ -265,7 +260,7 @@ it('should decode ERC20 transfers', async () => {
     args: { from: ALICE, to: BOB, value: 1_000_000n },
   })
 
-  portal = await mockEvmPortalStream({
+  portal = await mockPortal({
     blocks: [mockBlock({ transactions: [{ logs: [transfer] }] })],
   })
 
@@ -295,7 +290,7 @@ it('should test custom transformations', async () => {
     args: { from: ALICE, to: BOB, value: 2_000_000n },
   })
 
-  portal = await mockEvmPortalStream({
+  portal = await mockPortal({
     blocks: [mockBlock({ transactions: [{ logs: [transfer] }] })],
   })
 
@@ -325,7 +320,12 @@ it('should test custom transformations', async () => {
 
 - `encodeEvent` accepts `abi`, `eventName`, `address`, and typed `args`
 - `mockBlock` auto-generates `number`, `hash`, `timestamp` — call `resetMockBlockCounter()` in `beforeEach`
-- `mockEvmPortalStream` returns `{ url, close() }` — use `portal.url` with `evmPortalStream`
+- `mockPortal({ blocks })` resolves to `{ url, close() }` plus the chain controls below. Pass `portal.url` to `evmPortalStream`
+- The mock answers like the real portal: it filters EVM logs, transactions, traces and state diffs by the query, serves both `/stream` and `/finalized-stream`, answers 204 at the head and 409 for a parent hash that is not on its chain. A block number you did not pass exists as an empty block up to the head
+- Options beside `blocks`: `latest` (defaults to the highest block given), `finalized` (defaults to `latest`; `null` makes the dataset report none), `blocksPerResponse`, `previousBlocks`, `maxAddresses`, `kind`, `delay`
+- Drive the chain during a test with `portal.append(...blocks)`, `portal.fork(at, branch?)`, `portal.setHead({ latest?, finalized? })` and `portal.fail({ status, times?, retryAfter? })` or `portal.fail({ stallAfter, times? })`; `portal.requests` records what the pipe asked for. Declare the variable as `MockChainPortal` (or let it infer) to reach these
+- `mockPortal(responses)`, the list form, replays an exact response sequence and resolves to plain `{ url, close() }`. Use it only when a test needs that exact sequence
+- `mockEvmPortalStream` from `@subsquid/pipes/testing/evm` and `finalizedMockPortal` still exist but are deprecated (beta.9). `mockEvmPortalStream` sends every block in one response whatever the query asks for, so a test built on it cannot catch a wrong filter
 - Chain `.pipe()` on the decoder/query output inside `outputs` to test transformations
 - Multiple event types: pass multiple in `events: { transfers: ..., approvals: ... }` and access `batch.transfers`, `batch.approvals`
 - Bitcoin currently exposes `mockBitcoinRpc` at `@subsquid/pipes/testing/bitcoin`; it records JSON-RPC calls and lets tests return controlled bitcoind results. It does not provide EVM-style mock blocks or a mock Portal stream.
@@ -344,9 +344,9 @@ When using `evmEventDecoder` with a manual `.pipe()` transform, each decoded eve
 | `d.contract` | string | Emitter contract address |
 | `d.factory` | object/null | Factory metadata (if using factory pattern) |
 
-**⚠️ Common mistake:** Using `d.blockNumber` or `d.txHash` (which don't exist). These silently return `undefined`, stored as `0` or `""` in ClickHouse.
+**Common mistake:** Using `d.blockNumber` or `d.txHash` (which don't exist). These silently return `undefined`, stored as `0` or `""` in ClickHouse.
 
-**⚠️ DateTime64(3) gotcha:** For `DateTime64(3, 'UTC')` columns, pass ISO strings via `d.timestamp.toISOString()` with `date_time_input_format: 'best_effort'`. Passing epoch seconds (e.g., `1700392127`) is misinterpreted as `1970-01-20`.
+**DateTime64(3) gotcha:** For `DateTime64(3, 'UTC')` columns, pass ISO strings via `d.timestamp.toISOString()` with `date_time_input_format: 'best_effort'`. Passing epoch seconds (e.g., `1700392127`) is misinterpreted as `1970-01-20`.
 
 The CLI-generated `enrichEvents` helper (in `src/utils/index.ts`) flattens into `{ ...event, blockNumber, txHash, logIndex, timestamp /* unix SECONDS */, contractAddress }`. It is used **only by the `custom` templates** — the `erc20Transfers`/`uniswapV3Swaps` templates use inline `.pipe()` maps instead, and those emit `timestamp` in **milliseconds** (not seconds; see Timestamp Handling).
 
@@ -377,7 +377,7 @@ The CLI-generated `enrichEvents` helper divides by 1000 and emits **unix seconds
 
 ## Target Configuration
 
-Available targets: ClickHouse, PostgreSQL (Drizzle), BigQuery, Parquet, and Google Pub/Sub. (A `memory` target exists in source but is **not** exported from the package; still true in `1.0.0-beta.4`. There is no `./targets/memory` export, so `createMemoryTarget` is internal/testing-only and cannot be imported by consumers.)
+Available targets: ClickHouse, PostgreSQL (Drizzle), BigQuery, Parquet, and Google Pub/Sub. (A `memory` target exists in source but is **not** exported from the package; still true in `1.0.0-beta.11`. There is no `./targets/memory` export, so `createMemoryTarget` is internal/testing-only and cannot be imported by consumers.)
 
 ### ClickHouse
 
@@ -390,17 +390,17 @@ stream.pipeTo(clickhouseTarget({
     await store.insert({ table: 'transfers', values: data.transfers, format: 'JSONEachRow' })
   },
   onRollback: async ({ reason, store, safeCursor }) => {
-    // reason: 'recovery' (startup) | 'fork' (chain reorg)
-    await store.removeAllRows({
-      tables: 'transfers',
-      where: 'block_number > {latest:UInt32}',
-      params: { latest: safeCursor.number },
-    })
+    // reason: 'recovery' (every restart with a saved cursor) | 'fork' (chain reorg)
+    await store.removeRowsAfter(safeCursor, { tables: 'transfers' })
   },
 }))
 ```
 
-**Rollbacks and materialized views (alpha.16):** on a fork, `store.removeAllRows` removes rows by inserting **cancel rows** (`sign = -1`) when the table is a `CollapsingMergeTree`/`VersionedCollapsingMergeTree` (or Replicated variant) with a `sign` column — the only delete mechanism that propagates through materialized views. Write MVs rollback-aware: aggregate with the sign (`sum(value * sign)`, `sum(sign)` for counts). On any other engine it falls back to a lightweight `DELETE` with a warning — the table is cleaned but MVs built on it keep the removed rows. Irreversible aggregates (`min`, `max`, `uniq`, `argMax`) cannot be rolled back by any mechanism — recompute the affected tail after a fork. A `minmax` skip index on `block_number` is auto-created on first rollback; call `store.ensureRollbackIndex({ table })` in `onStart` to set it up eagerly.
+**`store.removeRowsAfter(cursor, { tables, where?, params?, column? })` (beta.10+)** writes the block condition itself: it removes rows above `safeCursor.number` and stops at `safeCursor.upTo` when the target sets it, so the hook cannot remove rows outside the block range this pipe wrote. The target sets `upTo` on a fork (the cursor the fork rolls back from) and after a run that stopped inside its first batch (that batch's last block). `tables` takes one name or an array, and `column` defaults to `block_number`. Pass `where` and `params` only for a table several pipes write, to pick this pipe's rows.
+
+The target saves a start cursor before the first batch's data, so the hook also runs with `reason: 'recovery'` after a crash inside the first batch. There `safeCursor.number` is one block below the range start (`-1` for a range that starts at 0). `store.removeAllRows({ tables, where, params })` is deprecated for this reason: a hook written as `where: 'block_number > {latest:UInt32}'` then removes every row above the range start in the listed tables, including rows another pipe wrote to a shared table. Replace it when you see it in older code. Without an `onRollback` hook the target warns at startup and refuses a fork on the hot stream with E2007.
+
+**Rollbacks and materialized views (alpha.16):** `store.removeRowsAfter` removes rows by inserting **cancel rows** (`sign = -1`) when the table is a `CollapsingMergeTree`/`VersionedCollapsingMergeTree` (or Replicated variant) with a `sign` column — the only delete mechanism that propagates through materialized views. Write MVs rollback-aware: aggregate with the sign (`sum(value * sign)`, `sum(sign)` for counts). On any other engine it falls back to a lightweight `DELETE` with a warning — the table is cleaned but MVs built on it keep the removed rows. Irreversible aggregates (`min`, `max`, `uniq`, `argMax`) cannot be rolled back by any mechanism — recompute the affected tail after a fork. A `minmax` skip index on `block_number` is auto-created on first rollback; call `store.ensureRollbackIndex({ table })` in `onStart` to set it up eagerly.
 
 ### PostgreSQL with Drizzle
 
@@ -458,11 +458,11 @@ stream.pipeTo(bigqueryTarget({
 }))
 ```
 
-Key facts: tables auto-create with `PARTITION BY RANGE_BUCKET(block_number, …)` (partition column forced `INT64 NOT NULL`); declared schema is enforced against existing tables (fails fast on mismatch); reorgs run bounded `DELETE`s per tracked table, resumed idempotently after crashes. An optional `onBeforeRollback: async ({ cursor }) => ...` fires after the safe cursor resolves, before the per-table `DELETE`s. Gotchas: `TIMESTAMP` wire format is INT64 **microseconds** (`date.getTime() * 1000`; a JS `Date` also works, a raw milliseconds number lands in 1970, see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md#the-timestamp-microseconds-rule)); uint256 overflows BIGNUMERIC (max ≈ 5.79e38), clamp and keep the exact decimal in a STRING column.
+Key facts: tables auto-create with `PARTITION BY RANGE_BUCKET(block_number, …)` (partition column forced `INT64 NOT NULL`); declared schema is enforced against existing tables (fails fast on mismatch); reorgs run bounded `DELETE`s per tracked table, resumed idempotently after crashes. An optional `onBeforeRollback: async ({ cursor }) => ...` fires after the safe cursor resolves, before the per-table `DELETE`s. Gotchas: `TIMESTAMP` wire format is INT64 **microseconds** (`date.getTime() * 1000`; a JS `Date` also works, a raw milliseconds number lands in 1970 — see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md#the-timestamp-microseconds-rule)); uint256 overflows BIGNUMERIC (max ≈ 5.79e38) — clamp and keep the exact decimal in a STRING column.
 
-Deep reference, the full `bigqueryTarget` option set, GCP prerequisites, the `sync` WAL table, fork and crash recovery, the `E2201`-`E2213` codes, and query-cost rules: [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md).
+Deep reference — the full `bigqueryTarget` option set, GCP prerequisites, the `sync` WAL table, fork and crash recovery, the `E2201`–`E2213` codes, and query-cost rules: [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md).
 
-### Google Pub/Sub (current beta.11 protocol)
+### Google Pub/Sub (beta.2+)
 
 ```typescript
 import { PubSub } from '@google-cloud/pubsub'
@@ -472,7 +472,7 @@ stream.pipeTo(pubsubTarget({
   pubsub: new PubSub({ projectId: process.env.GOOGLE_CLOUD_PROJECT }),
   state: { path: './state/transfers.sqlite' }, // cursor, rollback manifest, outbox, sequence
   namespace: 'base-erc20',
-  // For a new feed, review allowColdStart below before starting.
+  allowColdStart: true, // first run only; remove once the namespace has published
   topics: {
     transfers: {
       topic: 'evm.base.erc20-transfers',
@@ -496,7 +496,17 @@ stream.pipeTo(pubsubTarget({
 
 `topics` routes emit BigQuery CDC-compatible JSON rows with `_id`, `_CHANGE_TYPE`, and `_CHANGE_SEQUENCE_NUMBER`; fork repair emits a later `DELETE` or restoring `UPSERT`. `bigint` encodes as a decimal string and `Date` as RFC 3339, so choose destination column types accordingly. The SQLite state file is load-bearing: keep it on durable storage and run one producer per path. Losing its sequence counter can cause BigQuery to ignore lower replacement sequence numbers.
 
-Beta.5 removed `signals` routes. Every CDC message carries finality in `_finalized`; consume its maximum watermark. `sequenceBarrier` defaults to true and enforces one topic per producer with ordered block operations. A new empty state is refused unless `allowColdStart: true` explicitly bootstraps a namespace that has never published. Never enable it to recover a previously published namespace. For pre-schema-4 state or lost state, use a fresh namespace/state path and re-bootstrap the consumer. See [COMPATIBILITY.md](COMPATIBILITY.md) for the migration and beta.11 downgrade check.
+Options that decide whether the pipe starts and what it publishes (`src/targets/pubsub/pubsub-target.ts` at beta.11):
+
+- **`allowColdStart`** (default `false`): a run that finds empty state is refused with E2420, because restarting the sequence under a namespace that already published makes rows freeze downstream. Set `true` to bootstrap a namespace that has never published, then remove it.
+- **`publishFrom`** (default `'latest'`): resolved to the current head on first start and persisted. The pipe may read earlier blocks for warm-up, but nothing below this block is published. Pass a block number to publish history.
+- **`sequenceBarrier`** (default `true`): keeps `_CHANGE_SEQUENCE_NUMBER` gap-free, which limits the producer to one topic (E2428) and in practice one route (E2429 on a batch spanning several blocks). Merge streams into one route's `map`, or set `false` when no consumer relies on a contiguous sequence.
+- **`mode`** on a route: `'event'` (default, ids are write-once) or `'materialized'` (ids may be revised; `windowTopic` builds such a route).
+- **`assumeNoForks`**, **`topicSetup`** (`'validate'` default, `'create'`, `'none'`), **`attributes`**, **`publish.*`** and **`settings.id`**: see the published `pubsubTarget` reference.
+
+Every route is a CDC row route; there is no `signals` option. Pub/Sub delivery is at-least-once. Needs the optional peers `@google-cloud/pubsub` and `better-sqlite3`.
+
+**State upgrades.** The state file is schema 4. A schema 3 file written by `1.0.0-beta.4` migrates in place on first open and keeps its change sequence. It is refused with E2411 only while its outbox still holds signal operations: let beta.4 drain the outbox, then upgrade. A state file from any other version needs the SDK version that wrote it, or fresh state under a fresh namespace and a consumer re-bootstrap. From beta.11 finalized rows are deleted later, 1,000 rows per transaction between batches, so a batch no longer stalls when finality advances. A failed state write (full, missing or read-only volume) stops the pipe with E2426; see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#error-pattern-12-coded-sdk-errors).
 
 ### Parquet
 
@@ -523,7 +533,7 @@ stream.pipeTo(parquetTarget({
 }))
 ```
 
-Key facts: writes **finalized-only** rotating files (`<min>-<max>.parquet`) readable directly by DuckDB/Spark/Athena/ClickHouse `s3()`; constant memory; crash-safe via a durable cursor file (`_sqd_parquet_state.json`). Leaf column types: `INT64`, `INT32`, `UTF8`, `BYTE_ARRAY`, `BOOLEAN`, `DOUBLE`, `TIMESTAMP`, `DATE`, `JSON` (plus nested `LIST` and `STRUCT`); `DECIMAL` is unsupported (use `UTF8` or a scaled `INT64`). Configure `UNCOMPRESSED`, `SNAPPY` (default), `GZIP`, or `BROTLI` through `parquetjsEngine({ compression })` or per-column compression, not as a top-level target setting. Requires optional peer dep `@dsnp/parquetjs`. `onData` must be a pure function of the batch (recovery re-processes finalized blocks and expects byte-identical rows).
+Key facts: writes **finalized-only** rotating files (`<min>-<max>.parquet`) readable directly by DuckDB/Spark/Athena/ClickHouse `s3()`; constant memory; crash-safe via a durable cursor file (`_sqd_parquet_state.<pipe-id>.json`). One `dir` belongs to one pipe: a directory that already holds another pipe's state file is refused at startup with E2321 (beta.9+), and `settings.id` only names the state file. Leaf column types: `INT64`, `INT32`, `UTF8`, `BYTE_ARRAY`, `BOOLEAN`, `DOUBLE`, `TIMESTAMP`, `DATE`, `JSON` (plus nested `LIST` and `STRUCT`); `DECIMAL` is unsupported (use `UTF8` or a scaled `INT64`). Configure `UNCOMPRESSED`, `SNAPPY` (default), `GZIP`, or `BROTLI` through `parquetjsEngine({ compression })` or per-column compression, not as a top-level target setting. Requires optional peer dep `@dsnp/parquetjs`. `onData` must be a pure function of the batch (recovery re-processes finalized blocks and expects byte-identical rows).
 
 ### Finalized-only target semantics (beta.2+)
 

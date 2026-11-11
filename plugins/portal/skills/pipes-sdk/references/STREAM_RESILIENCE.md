@@ -8,13 +8,46 @@ Portal API streams over HTTP. Long-running syncs (millions of blocks) will inevi
 
 - Connection errors: `ETIMEDOUT`, `ECONNRESET`, `TypeError: terminated`, `fetch failed`
 - HTTP timeouts
-- Retryable statuses: `429`, `502`, `503`, `504`, `521`-`524`, `529`. including Portal's structured `overloaded` (`rate_limit_error`) and `availability_error` responses
+- Retryable statuses: `429`, `502`, `503`, `504`, `521`–`524`, `529` (since beta.7), and any response that carries `Retry-After` — including Portal's structured `overloaded` (`rate_limit_error`) and `availability_error` responses
 
-It honors the `Retry-After` header when Portal sends one (mandatory on `overloaded`), otherwise backs off on a fixed schedule (10ms → 100ms → 500ms → 2s → 10s → 20s, then 20s repeating). A network blip therefore does *not* kill the process — it shows up as a stalled sync with retry warnings.
+It honors the `Retry-After` header when Portal sends one (mandatory on `overloaded`), otherwise backs off on a fixed schedule (10ms → 100ms → 500ms → 2s → 10s → 20s, then 20s repeating). A network blip therefore does *not* kill the process — it shows up as a stalled sync with retry warnings (`HTTP request id:<n> will be retried in <ms> ms`).
+
+### Stalled responses and the stall watchdog
+
+Two mechanisms report a pipe that is alive but not moving. Neither stops the process.
+
+**A response that stops sending data is cut and requested again** (beta.9+; before that the stream failed after 300 s). The limit is 30 s when Portal serves the response from real-time data and 150 s for archive data. The client logs a warning and asks for the rest from the block after the last one it parsed:
+
+```
+portal response stalled: no block for 30s, requesting again from block 21000042
+```
+
+Change the limit with `bodyTimeout` (milliseconds) in the stream's HTTP client options. It then applies to both kinds of response:
+
+```typescript
+evmPortalStream({
+  id: 'my-pipe',
+  portal: {
+    url: 'https://portal.sqd.dev/datasets/ethereum-mainnet',
+    http: { bodyTimeout: 60_000 },
+  },
+  outputs: /* ... */,
+})
+```
+
+**The stall watchdog names the phase that is stuck** (beta.7+). After 120 s in one place the pipe logs a warning, then repeats it at a doubling interval capped at 15 minutes, so a stall of hours stays a handful of lines:
+
+| Log line | Level | Meaning |
+|----------|-------|---------|
+| `stalled: waiting for data from the portal for 2m 30s` | warn | No data from Portal. Check Portal status and the network; the pipe continues on its own when data arrives |
+| `stalled: processing block 21,000,042 for 2m` or `stalled: processing blocks 21,000,042 → 21,000,150 for 2m` | warn | Your transformers or the target write of that batch have not returned. Look at the database (locks, slow inserts, a hung connection) or a slow `.pipe()` step |
+| `recovered: <phase> took 4m 10s` | info | The stalled phase finished |
+
+The BigQuery target has its own 15 s watchdog on each append; see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md#observability). The portal line measures the time since the pipe last received a batch, so on a chain or filter that is quiet for minutes at the head, read it against the expected block time before treating it as a fault.
 
 What still kills the process (and what supervisors are for):
 - **Decode errors** — an undecodable record is fatal by default (see the `onError` hook in [SDK_FEATURES.md](SDK_FEATURES.md#decode-error-hook-onerror))
-- **Sink failures**, ClickHouse/Postgres down or misconfigured, schema drift; for BigQuery, a missing dataset or a declared schema that no longer matches the live table (see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md))
+- **Sink failures** — ClickHouse/Postgres down or misconfigured, schema drift; for BigQuery, a missing dataset or a declared schema that no longer matches the live table (see [BIGQUERY_TARGET.md](BIGQUERY_TARGET.md))
 - **Non-retryable Portal errors** — `invalid_request_error` (`malformed_request`, `unknown_dataset`): the request is wrong and retrying can't help
 - **Process-level faults** — OOM kills, unhandled exceptions in your `.pipe()` transforms, host reboots
 
@@ -172,7 +205,7 @@ The Pipes SDK writes a sync cursor to `{database}.sync` after each batch commit,
 3. Requests Portal data from block X onward
 4. Calls the target's `onRollback({ reason: 'recovery', safeCursor, store })` hook so rows written past the saved cursor can be removed before replay
 
-`CollapsingMergeTree(sign)` does not deduplicate two identical `sign = 1` rows. Persistent ClickHouse targets therefore need an `onRollback` handler that removes rows above `safeCursor`; without it, an unclean restart can replay duplicates and a hot-stream fork is refused. The remaining risks include a corrupted sync table or two pipes sharing the same `id` and database. Keep one database per project and don't rename a pipe's `id` casually — the cursor is keyed by it, so a rename orphans the old cursor and the pipe re-syncs from its range start.
+`CollapsingMergeTree(sign)` does not deduplicate two identical `sign = 1` rows. Persistent ClickHouse targets therefore need an `onRollback` handler that calls `store.removeRowsAfter(safeCursor, { tables })`; without it, an unclean restart can replay duplicates and a hot-stream fork is refused (E2007). The target saves a start cursor before the first batch's data, so a crash inside the first batch is repaired the same way. The hook API is described in [SDK_FEATURES.md](SDK_FEATURES.md#clickhouse). The remaining risks include a corrupted sync table or two pipes sharing the same `id` and database. Keep one database per project and don't rename a pipe's `id` casually — the cursor is keyed by it, so a rename orphans the old cursor and the pipe re-syncs from its range start.
 
 ## Diagnosing Repeated Crashes
 
