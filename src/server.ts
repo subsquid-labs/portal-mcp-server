@@ -11,7 +11,7 @@ import {
 import { RequestCancelledError } from './helpers/errors.js'
 import { attachEvidenceReceipt } from './helpers/evidence-receipt.js'
 import { runWithGuardrailScope } from './helpers/guardrails.js'
-import { PORTAL_TOOL_NAMES } from './helpers/mcp-registration.js'
+import { PORTAL_TOOL_NAMES, listsOutputSchemaFor, runWithOutputSchemaListing } from './helpers/mcp-registration.js'
 import { runWithPortalRequestSignal } from './helpers/request-context.js'
 import { getToolWorkProfile, toolAdmission } from './helpers/tool-admission.js'
 import { formatToolError } from './helpers/tool-error.js'
@@ -134,7 +134,11 @@ export function createPortalServer(runtimeContext: RuntimeRequestContext = { tra
   const selection = narrowToolSelection(DEPLOYMENT_TOOL_SELECTION, runtimeContext.toolsets)
   const context: RuntimeRequestContext = { ...runtimeContext, toolsetLabel: selection.label }
   return runWithActivityExplorerSurface(appEnabled, () =>
-    runWithToolSelection(selection, () => buildPortalServer(context, appEnabled)),
+    runWithToolSelection(selection, () =>
+      runWithOutputSchemaListing(listsOutputSchemaFor(runtimeContext.userAgent), () =>
+        buildPortalServer(context, appEnabled),
+      ),
+    ),
   )
 }
 

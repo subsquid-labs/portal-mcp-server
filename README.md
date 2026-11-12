@@ -173,12 +173,14 @@ Tool and resource discovery stays on the MCP protocol itself. The server does no
 
 The Codex plugin wrapper lives in `plugins/portal` and defaults to the hosted MCP endpoint at `https://portal.sqd.dev/mcp`.
 
-Install it from this repo-local marketplace:
+Install it from the GitHub marketplace:
 
 ```bash
-codex plugin marketplace add .
+codex plugin marketplace add subsquid-labs/portal-mcp-server
 codex plugin add portal@sqd
 ```
+
+From a clone of this repository, `codex plugin marketplace add .` registers the local copy instead.
 
 Open a new Codex thread after installing. First-use prompts include Hyperliquid BTC perp fills, recent Base transaction volume, and the latest USDC transfers on Base.
 

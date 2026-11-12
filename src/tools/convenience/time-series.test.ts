@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { ActionableError } from '../../helpers/errors.js'
-import { MAX_SERIES_SCAN_BLOCKS, assertSeriesDurationScannable, assertSeriesWindowScannable } from './time-series.js'
+import { parseTimeframeToSeconds } from '../../helpers/timeframe.js'
+import {
+  MAX_SERIES_SCAN_BLOCKS,
+  assertSeriesDurationScannable,
+  assertSeriesWindowScannable,
+  resolveSeriesWindow,
+} from './time-series.js'
 
 /*
  * Bound series scans by block count because the same duration spans different
@@ -104,5 +110,52 @@ describe('assertSeriesDurationScannable', () => {
     assert.doesNotThrow(() =>
       assertSeriesDurationScannable({ dataset: 'base-mainnet', chainType: 'evm', duration: 'whenever' }),
     )
+  })
+})
+
+/*
+ * A timestamp window sets the series span. Bucketing it against a duration
+ * pulled in blocks from before the window or dropped its older blocks.
+ */
+describe('resolveSeriesWindow', () => {
+  const now = 1_794_400_000
+
+  it('spans a 30 minute timestamp window, not the 6h default', () => {
+    const window = resolveSeriesWindow({
+      dataset: 'base-mainnet',
+      from_timestamp: now - 2_400,
+      to_timestamp: now - 600,
+      nowUnix: now,
+    })
+    assert.equal(parseTimeframeToSeconds(window.duration), 1_800)
+    assert.equal(window.windowLabel, '2026-11-11 11:46:40 UTC to 2026-11-11 12:16:40 UTC')
+  })
+
+  it('spans a 24h window in full', () => {
+    const window = resolveSeriesWindow({ dataset: 'ethereum-mainnet', from_timestamp: '24h ago', nowUnix: now })
+    assert.equal(window.duration, '1d')
+  })
+
+  it('lets the timestamps win over a duration that would reach outside them', () => {
+    const window = resolveSeriesWindow({
+      dataset: 'ethereum-mainnet',
+      requestedDuration: '6h',
+      from_timestamp: '2h ago',
+      to_timestamp: 'now',
+      nowUnix: now,
+    })
+    assert.equal(window.duration, '2h')
+  })
+
+  it('keeps an explicit duration and the defaults', () => {
+    assert.equal(resolveSeriesWindow({ dataset: 'base-mainnet', requestedDuration: '1h' }).duration, '1h')
+    assert.deepEqual(resolveSeriesWindow({ dataset: 'base-mainnet' }), { duration: '15m' })
+    assert.deepEqual(resolveSeriesWindow({ dataset: 'ethereum-mainnet' }), { duration: '6h' })
+  })
+
+  it('leaves an unreadable timestamp to the window resolver', () => {
+    assert.deepEqual(resolveSeriesWindow({ dataset: 'ethereum-mainnet', from_timestamp: 'not a time' }), {
+      duration: '6h',
+    })
   })
 })

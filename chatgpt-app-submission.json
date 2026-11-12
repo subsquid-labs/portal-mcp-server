@@ -384,15 +384,15 @@
   "test_cases": [
     {
       "description": "Retrieve the latest 200 Hyperliquid BTC fills.",
-      "user_prompt": "Show me the last 200 BTC perp fills on Hyperliquid.",
+      "user_prompt": "Show me the last 25 BTC perp fills on Hyperliquid.",
       "file_attachment_urls": null,
       "tools_triggered": "portal_hyperliquid_query_fills",
-      "expected_output": "Returns the latest 200 BTC fills with time, direction, price, size, and trader fields.",
+      "expected_output": "Returns the latest 25 BTC fills with time, direction, price, size, and trader fields.",
       "expected_output_url": null
     },
     {
       "description": "Measure recent transaction activity on Base.",
-      "user_prompt": "How many transactions landed on Base in the past 2h?",
+      "user_prompt": "How many transactions landed on Base in the past 30 minutes?",
       "file_attachment_urls": null,
       "tools_triggered": "portal_get_time_series",
       "expected_output": "Returns time buckets and a total transaction count for Base over the requested period.",

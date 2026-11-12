@@ -547,6 +547,55 @@ async function listToolNames(options: { path?: string; headers?: Record<string, 
   return (parsed.result.tools as { name: string }[]).map((tool) => tool.name).sort()
 }
 
+async function rpcAs(userAgent: string | undefined, id: number, method: string, params: Record<string, unknown>) {
+  const response = await rawRequest({
+    method: 'POST',
+    path: '/mcp',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      ...(userAgent ? { 'User-Agent': userAgent } : {}),
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+  })
+  assert(response.status === 200, `${method} as ${userAgent ?? 'no User-Agent'} should be 200, got ${response.status}`)
+  const parsed = response.body.trimStart().startsWith('{') ? JSON.parse(response.body) : parseSseJson(response.body)
+  assert(!parsed.error, `${method} as ${userAgent ?? 'no User-Agent'} failed: ${JSON.stringify(parsed.error)}`)
+  return parsed.result
+}
+
+async function assertOutputSchemaByUserAgent() {
+  const cases: [string | undefined, boolean][] = [
+    [undefined, true],
+    ['openai-mcp/1.0.0', true],
+    ['codex-mcp-client/0.167.0', true],
+    ['node', true],
+    ['Cursor/1.0.0', false],
+    ['claude-code/2.1.321 (sdk-cli, agent-sdk/0.3.321)', false],
+  ]
+  let id = 910
+  for (const [userAgent, expected] of cases) {
+    const { tools } = (await rpcAs(userAgent, id++, 'tools/list', {})) as { tools: Record<string, unknown>[] }
+    const withSchema = tools.filter((tool) => tool.outputSchema !== undefined).length
+    assert(
+      withSchema === (expected ? tools.length : 0),
+      `${userAgent ?? 'no User-Agent'} should ${expected ? 'list' : 'skip'} output schemas, got ${withSchema} of ${tools.length}`,
+    )
+  }
+
+  const call = { name: 'portal_get_head', arguments: { network: 'base' } }
+  const listed = (await rpcAs('codex-mcp-client/0.167.0', id++, 'tools/call', call)) as Record<string, any>
+  const skipped = (await rpcAs('Cursor/1.0.0', id++, 'tools/call', call)) as Record<string, any>
+  assert(
+    listed.structuredContent?.answer !== undefined &&
+      listed.structuredContent.answer === skipped.structuredContent?.answer &&
+      JSON.stringify(Object.keys(listed.structuredContent).sort()) ===
+        JSON.stringify(Object.keys(skipped.structuredContent ?? {}).sort()),
+    'tools/call must return the same structuredContent whether or not the output schema was listed',
+  )
+  console.log('PASS  output schemas: listed for OpenAI and unidentified clients, skipped for Cursor and Claude')
+}
+
 async function assertToolsetNarrowing() {
   const all = await listToolNames({})
   assert(all.length === 31, `the default connection lists 31 tools, got ${all.length}`)
@@ -837,6 +886,7 @@ async function main() {
   await assertPublicHttpSurface()
   await assertModernHttpProtocol()
   await assertHttpAppIsolation()
+  await assertOutputSchemaByUserAgent()
   await postRpc(1, 'initialize', {
     protocolVersion: '2024-11-05',
     capabilities: {},

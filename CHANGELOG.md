@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Improvements
+
+- **SQD guidance.** Bundled skills track SQD skills v1.1.0, which adds step-by-step EVM and Solana migration guides and folds the Pipes SDK compatibility notes into the main references. When the plugin already connects the SQD server, Portal setup confirms the tools instead of adding a second server. The RPC latency pattern describes the published `@subsquid/pipes` beta.11 sample shape.
+- **Base starter prompt.** The Codex plugin, the plugin README and the directory submissions now ask about Base transactions in the past 30 minutes instead of 2 hours. Two hours on Base is about 36,000 blocks, past the 12,000-block limit of `portal_get_time_series`, so the listed tool refused the prompt and the fallback analytics scan took 17 to 33 seconds and failed when Portal was busy. The 30-minute window answers in about a second.
+- **Hyperliquid starter prompt.** The fills prompt asks for the last 25 BTC fills instead of 200. `portal_hyperliquid_query_fills` returns 25 fills a page, so 200 took eight model turns, and Claude and Cursor gave up paging and pulled the fills from the Portal stream API instead. Cursor took 86 seconds for 200 and 24 seconds, from one call, for 25.
+- **Smaller tool list for most hosts.** The hosted server leaves the shared output schema out of `tools/list` when the HTTP User-Agent names Claude, Cursor, Grok, Gemini, VS Code or Windsurf. The listing drops from about 38,500 to 23,400 tokens, loaded at the start of every session. ChatGPT, Codex and clients the server can't identify still get the schema, and tool results are the same either way.
+
+### Fixes
+
+- **Time series timestamp windows.** `from_timestamp` and `to_timestamp` now set the chart's span. The span used to come from `duration`, 6 hours by default, so a 2-hour window was backfilled with 4 hours of earlier blocks and counted them, and a 24-hour window dropped everything older than 6 hours. The answer names the window's start and end instead of "last 6h", and `duration` is ignored when `from_timestamp` is set.
+
+- **Gemini install.** `gemini extensions install https://github.com/subsquid-labs/portal-mcp-server` failed with "Configuration file not found" since v0.8.5, because Gemini CLI only picks a release asset named for the platform or a release's only asset, and releases also carry `sqd.mcpb`. Releases now include `darwin.`, `linux.`, and `win32.` copies of the Gemini archive.
+
+### Documentation
+
+- The README installs the Codex plugin from the GitHub marketplace, so it works without a clone.
+
 ## [0.8.6] - 2026-11-11
 
 Portal scans recover from interruptions without replaying records, and analytics disclose unavailable evidence and fee conversions. This release updates MCP compatibility and bundled SQD guidance, and gives live tests bounded rate-limit recovery.

@@ -280,6 +280,51 @@ function buildLongWindowNotice(duration: string): string | undefined {
   return `Long-window note: ${describeTimeWindowInput(duration)} reads more blocks than the default ${DEFAULT_TIME_SERIES_DURATION} window, so it takes longer. Windows over ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()} blocks are refused rather than run.`
 }
 
+function formatCompactDuration(seconds: number): string {
+  if (seconds % 86_400 === 0) return `${seconds / 86_400}d`
+  if (seconds % 3_600 === 0) return `${seconds / 3_600}h`
+  if (seconds % 60 === 0) return `${seconds / 60}m`
+  return `${seconds}s`
+}
+
+/* A from_timestamp window used to be bucketed by duration, 6h by default, so
+   a 2h window was backfilled with 4h of blocks from before it and a 24h window
+   dropped every block older than 6h. The timestamps now set the span. */
+export function resolveSeriesWindow(params: {
+  dataset: string
+  requestedDuration?: string
+  from_timestamp?: TimestampInput
+  to_timestamp?: TimestampInput
+  nowUnix?: number
+}): { duration: string; windowLabel?: string } {
+  const { dataset, requestedDuration, from_timestamp, to_timestamp } = params
+  const nowUnix = params.nowUnix ?? Math.floor(Date.now() / 1000)
+  const hasTimestamps = from_timestamp !== undefined || to_timestamp !== undefined
+  let span: { from: number; to: number } | undefined
+  if (from_timestamp !== undefined) {
+    try {
+      const from = parseTimestampInput(from_timestamp, nowUnix).timestamp
+      const to = to_timestamp !== undefined ? parseTimestampInput(to_timestamp, nowUnix).timestamp : nowUnix
+      if (to > from) span = { from, to }
+    } catch {
+      /* resolveTimeframeOrBlocks reports the bad input with its own guidance. */
+    }
+  }
+  if (span) {
+    return {
+      duration: formatCompactDuration(span.to - span.from),
+      windowLabel: `${formatTimestamp(span.from)} to ${formatTimestamp(span.to)}`,
+    }
+  }
+  if (requestedDuration) return { duration: requestedDuration }
+  return {
+    duration:
+      (dataset === 'base-mainnet' || dataset === 'base-sepolia') && !hasTimestamps
+        ? DEFAULT_BASE_TIME_SERIES_DURATION
+        : DEFAULT_TIME_SERIES_DURATION,
+  }
+}
+
 function withWindowNotice(message: string, notice?: string): string {
   return notice ? `${message} ${notice}` : message
 }
@@ -512,6 +557,8 @@ function buildTimeSeriesAnswer(params: {
   /* mode=fast read a slice of the window on purpose; the missing hours were
      not unindexed, they were not asked for. */
   windowNarrowedByFastMode?: boolean
+  /* The from_timestamp/to_timestamp span, which "last <duration>" would misdate. */
+  windowLabel?: string
 }): string {
   const values = params.timeSeries
     .map((row) => {
@@ -540,7 +587,7 @@ function buildTimeSeriesAnswer(params: {
     params.observedSpanSeconds !== undefined && parseTimeframeToSeconds(params.duration) > 0
       ? params.observedSpanSeconds / parseTimeframeToSeconds(params.duration)
       : 1
-  const durationLabel = describeTimeWindowInput(params.duration)
+  const durationLabel = params.windowLabel ?? describeTimeWindowInput(params.duration)
   const spanLabel = params.windowNarrowedByFastMode
     ? `the newest ${formatDuration(params.observedSpanSeconds ?? 0)}`
     : durationLabel
@@ -810,7 +857,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         .string()
         .optional()
         .describe(
-          'Total time period to analyze. Defaults to "15m" on Base mainnet and Sepolia, and "6h" elsewhere. This tool reads every block and refuses windows over 12,000 blocks. Accepts compact durations like "30m" or natural phrases like "past 30 minutes".',
+          'Total time period to analyze. Defaults to "15m" on Base mainnet and Sepolia, and "6h" elsewhere. This tool reads every block and refuses windows over 12,000 blocks. Accepts compact durations like "30m" or natural phrases like "past 30 minutes". Ignored when from_timestamp is set, because the timestamps define the window.',
         ),
       address: z
         .string()
@@ -868,11 +915,12 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       let dataset = await resolveDataset(network)
       const chainType = detectChainType(dataset)
       const hasTimestamps = from_timestamp !== undefined || to_timestamp !== undefined
-      const duration =
-        requestedDuration ??
-        ((dataset === 'base-mainnet' || dataset === 'base-sepolia') && !hasTimestamps
-          ? DEFAULT_BASE_TIME_SERIES_DURATION
-          : DEFAULT_TIME_SERIES_DURATION)
+      const { duration, windowLabel } = resolveSeriesWindow({
+        dataset,
+        requestedDuration,
+        from_timestamp,
+        to_timestamp,
+      })
       const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
       const notices: string[] = []
       const pipesRecipe = buildTimeSeriesPipesRecipe({
@@ -1686,6 +1734,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             metric,
             interval,
             duration,
+            windowLabel,
             timeSeries: normalizedTimeSeries,
             fromBlock: solanaResult.from_block,
             toBlock: solanaResult.to_block,
@@ -1921,6 +1970,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             metric,
             interval,
             duration,
+            windowLabel,
             timeSeries,
             fromBlock,
             toBlock,
@@ -2142,7 +2192,16 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             )
           }
           const resultMessage = withWindowNotice(
-            buildTimeSeriesAnswer({ dataset, metric, interval, duration, timeSeries, fromBlock: scanFrom, toBlock }),
+            buildTimeSeriesAnswer({
+              dataset,
+              metric,
+              interval,
+              duration,
+              windowLabel,
+              timeSeries,
+              fromBlock: scanFrom,
+              toBlock,
+            }),
             longWindowNotice,
           )
           return formatResult(
@@ -2305,6 +2364,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             metric,
             interval,
             duration,
+            windowLabel,
             timeSeries,
             fromBlock,
             toBlock,
@@ -2846,6 +2906,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           metric,
           interval,
           duration,
+          windowLabel,
           timeSeries: cachedSeries.timeSeries,
           fromBlock: cachedSeries.effectiveFromBlock,
           toBlock,

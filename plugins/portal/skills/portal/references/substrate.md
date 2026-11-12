@@ -38,7 +38,7 @@ Substrate chains (Polkadot, Kusama, and parachains) use a different data model f
 - `fromBlock/toBlock` — Block range (inclusive)
 - `events` — Array of event filter objects
 - `calls` — Array of call filter objects
-- `evmLogs` — EVM log filters for Frontier parachains (Moonbeam, Astar)
+- `evmLogs` — EVM log filters for Frontier parachains (Astar, Peaq)
 - `ethereumTransactions` — EVM transaction filters for Frontier parachains
 - `contractsEvents` — ink! smart contract event filters
 - `gearMessagesEnqueued` / `gearUserMessagesSent` — Gear/Vara network filters
@@ -182,7 +182,7 @@ Extrinsics are signed or unsigned transactions submitted to the chain. They cont
 
 ## Frontier EVM on Substrate
 
-Some Substrate parachains run an EVM via the Frontier pallet (Moonbeam, Astar, etc.). These use **Substrate datasets** (e.g., `moonbeam-substrate`) with special filter types.
+Some Substrate parachains run an EVM via the Frontier pallet (Astar, Peaq). Query that activity from their **Substrate datasets** (`astar-substrate`, `peaq-mainnet-substrate`) with the filter types below.
 
 ### EVM Logs (Frontier)
 
@@ -433,7 +433,7 @@ Filter `Revive.ContractEmitted` events:
 
 ---
 
-### Example 5: EVM Transfers on Moonbeam (Frontier)
+### Example 5: EVM Transfers on Astar (Frontier)
 
 ```json
 {
@@ -456,7 +456,7 @@ Filter `Revive.ContractEmitted` events:
 }
 ```
 
-**Dataset:** `moonbeam-substrate` | **Event:** ERC20 Transfer via Frontier EVM
+**Dataset:** `astar-substrate` | **Event:** ERC20 Transfer via Frontier EVM (returns `EVM.Log` events; checked 2026-11-11)
 **Notes:** Use the `-substrate` suffixed dataset for Substrate-level queries on Frontier parachains.
 
 ---
@@ -566,10 +566,10 @@ Substrate datasets do **not** support real-time streaming. Only finalized histor
 ### Wrong Dataset Name for Frontier Parachains
 
 ```
-POST /datasets/moonbeam/stream  (with type: "substrate")
+POST /datasets/astar-mainnet/stream  (with type: "substrate")
 ```
 **Wrong.** Frontier parachains use `-substrate` suffixed datasets for Substrate queries:
-- `moonbeam-substrate` (not `moonbeam-mainnet` which is EVM-only)
+- `astar-substrate` (`astar-mainnet` is the EVM dataset and takes `"type": "evm"`)
 
 ---
 

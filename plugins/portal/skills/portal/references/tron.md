@@ -391,8 +391,8 @@ console.log(hex.slice(0, -8));  // strip 4-byte checksum
 ### Mistake 1: `0x`-Prefixed Hex
 
 ```json
-{"logs": [{"address": ["0xa614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}  // ❌ no results
-{"logs": [{"address": ["a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}    // ✅
+{"logs": [{"address": ["0xa614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}  // wrong: no results
+{"logs": [{"address": ["a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}    // right
 ```
 Tron hex is always bare — in filters and in responses.
 
@@ -401,16 +401,16 @@ Tron hex is always bare — in filters and in responses.
 ### Mistake 2: Base58 Addresses in Filters
 
 ```json
-{"transferTransactions": [{"to": ["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"]}]}  // ❌
-{"transferTransactions": [{"to": ["41a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}  // ✅
+{"transferTransactions": [{"to": ["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"]}]}  // wrong
+{"transferTransactions": [{"to": ["41a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}  // right
 ```
 Convert base58 → 41-hex first (see Address Format Conversion).
 
 ### Mistake 2b: `41`-Prefixed Address in a Log Filter
 
 ```json
-{"logs": [{"address": ["41a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}  // ❌ no results
-{"logs": [{"address": ["a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}    // ✅ 20-byte form
+{"logs": [{"address": ["41a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}  // wrong: no results
+{"logs": [{"address": ["a614f803b6fd780986a42c78ec9c7f77e6ded13c"]}]}    // right: 20-byte form
 ```
 Log addresses use the EVM-style 20-byte form; only transaction-level filters take the `41…` form.
 
@@ -433,14 +433,14 @@ Log records only carry `transactionIndex`. Add `"transaction": true` to the log 
 
 ```json
 {"type": "evm"}   // works, but EVM-shaped: no native transfers, internal txs, or energy fields
-{"type": "tron"}  // ✅ full Tron data model
+{"type": "tron"}  // right: full Tron data model
 ```
 
 ### Mistake 7: Decimal TRC-10 Asset ID
 
 ```json
-{"transferAssetTransactions": [{"asset": ["1005157"]}]}         // ❌ 0 rows (decimal id)
-{"transferAssetTransactions": [{"asset": ["31303035313537"]}]}  // ✅ raw hex asset_name
+{"transferAssetTransactions": [{"asset": ["1005157"]}]}         // wrong: 0 rows (decimal id)
+{"transferAssetTransactions": [{"asset": ["31303035313537"]}]}  // right: raw hex asset_name
 ```
 The `asset` filter matches the raw hex `asset_name` verbatim (`31303035313537` = hex of ASCII `"1005157"`). The decimal id returns no results.
 
@@ -466,12 +466,16 @@ The `asset` filter matches the raw hex `asset_name` verbatim (`31303035313537` =
 
 ## MCP Tool Availability
 
-Two Portal MCP tools query Tron natively and accept any address form (Base58 `T...`, `41...` hex, or 20-byte hex):
+Two Portal MCP tools query Tron natively:
 
-- `portal_tron_query_transactions`: native TRX transfers (`kind: "transfer"`), TRC-10 transfers (`kind: "transfer_asset"`), smart-contract calls by `contract_addresses` and `method` (`kind: "trigger_smart_contract"`), or any contract type filtered by `types` (`kind: "all"`), with `include_logs` and `include_internal_transactions`. Rows carry hex and Base58 addresses, `success`, and `fee_trx`. A native TRX transfer carries `amount_sun` with `amount_trx` decoded from it and `amount_unit: "TRX"`. A TRC-10 transfer carries `asset_amount` as an exact integer in that asset's own base units plus `asset_name`, and no TRX amount, because TRC-10 decimals belong to the asset rather than the chain.
-- `portal_tron_query_logs`: TVM event logs by `addresses`, `event` alias or `topic0`, and `topic1`-`topic3` (an address is padded to a topic), with the parent transaction hash joined onto every row and `decode: true` for known events.
+| Tool | Covers | Notes |
+|---|---|---|
+| `portal_tron_query_logs` | TVM event logs by contract address, `topic0` or an `event` alias (`transfer`, `approval`, `swap`, `mint`, `burn`), and indexed topics `topic1`..`topic3` | `decode: true` returns decoded fields with Base58 addresses; the parent transaction hash is on every row; `include_transaction` attaches type, caller, contract, result, and fee |
+| `portal_tron_query_transactions` | Native TRX transfers (`kind: "transfer"`), TRC-10 transfers (`transfer_asset` with `asset`), contract calls (`trigger_smart_contract` with `contract_addresses`, `method`, or `sighash`), or any contract type (`kind: "all"` with `types`) | `include_logs` and `include_internal_transactions` attach the related records |
 
-Dataset-agnostic tools also work with `tron-mainnet`: `portal_list_networks`, `portal_get_network_info`, `portal_get_head`, `portal_debug_resolve_time_to_block`, `portal_debug_query_blocks`. Use the raw Stream API below for anything the tools do not expose, such as `internalTransactions` as a primary query or `includeAllBlocks`.
+Both accept addresses in any form (Base58 `T…`, `41`-prefixed hex, `0x` or bare 20-byte hex), default to `tron-mainnet`, take `timeframe`, `from_timestamp`/`to_timestamp`, or block bounds, cap `limit` at 25, and paginate with `cursor`. Dataset-agnostic tools (`portal_list_networks`, `portal_get_network_info`, `portal_get_head`, `portal_debug_resolve_time_to_block`, `portal_debug_query_blocks`) also accept `tron-mainnet`. Use the raw Stream API above for exports, unbounded ranges, or the exact request bodies.
+
+Transaction rows carry hex and Base58 addresses, `success`, and `fee_trx`. A native TRX transfer carries `amount_sun` with `amount_trx` decoded from it and `amount_unit: "TRX"`. A TRC-10 transfer carries `asset_amount` as an exact integer in that asset's own base units plus `asset_name`, and no TRX amount, because TRC-10 decimals belong to the asset rather than the chain.
 
 ## Official Docs
 

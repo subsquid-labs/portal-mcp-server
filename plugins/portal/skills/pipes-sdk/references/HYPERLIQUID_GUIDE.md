@@ -29,7 +29,7 @@ mkdir hl-indexer && cd hl-indexer
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@subsquid/pipes": "^1.0.0-beta.1",
+    "@subsquid/pipes": "^1.0.0-beta.10",
     "@clickhouse/client": "^1.14.0"
   },
   "devDependencies": {
@@ -157,11 +157,7 @@ export async function main() {
           }
         },
         onRollback: async ({ safeCursor, store }) => {
-          await store.removeAllRows({
-            tables: ['hl_fills'],
-            where: 'block_number > {latest:UInt64}',
-            params: { latest: safeCursor.number },
-          })
+          await store.removeRowsAfter(safeCursor, { tables: ['hl_fills'] })
         },
       }),
     )
