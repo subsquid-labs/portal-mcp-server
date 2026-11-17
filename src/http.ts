@@ -5,6 +5,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node'
 import { type McpRequestContext, createMcpHandler } from '@modelcontextprotocol/server'
 
 import { isActivityExplorerEnabledByDeployment, resolveActivityExplorerSurface } from './apps/activity-explorer.js'
+import { ENDPOINT_PAGE_HEADERS, renderEndpointPage, wantsEndpointPage } from './endpoint-page.js'
 import { hasConfiguredCursorSecret } from './helpers/pagination.js'
 import {
   connectionKeyFromRequest,
@@ -211,6 +212,13 @@ const server = createServer(
     }
 
     if (url.pathname === '/' || url.pathname === '/mcp') {
+      // A GET here is answered by Accept: a page for browsers, the transport's 405 for the rest.
+      if (req.method === 'GET' || req.method === 'HEAD') res.setHeader('Vary', 'Accept')
+      if (wantsEndpointPage(req.method, readHeader(req, 'accept'))) {
+        res.writeHead(200, ENDPOINT_PAGE_HEADERS)
+        res.end(req.method === 'HEAD' ? undefined : renderEndpointPage(npmVersion))
+        return
+      }
       const bodyLimit = evaluateBodyLimit(
         {
           'content-length': readHeader(req, 'content-length'),
