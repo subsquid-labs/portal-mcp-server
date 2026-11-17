@@ -242,7 +242,7 @@ Manual fallback, from a local clone after `npm run build`, add an entry like thi
 
 ## HTTP Deployment Notes
 
-HTTP mode exposes MCP at `/` and `/mcp`, liveness at `/health`, and readiness at `/ready`. The hosted service exposes the same versioned health response at `https://portal.sqd.dev/mcp/health`.
+HTTP mode exposes MCP at `/` and `/mcp`, liveness at `/health`, and readiness at `/ready`. A browser that opens `/` or `/mcp` gets a short page that links the setup guides; MCP clients get the protocol responses as before. The hosted service exposes the same versioned health response at `https://portal.sqd.dev/mcp/health`.
 
 - MCP and health endpoints do not require authentication.
 - Tool and resource discovery use the MCP protocol; retired `/tools` and `/tools.json` routes return `404`.
