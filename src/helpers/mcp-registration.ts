@@ -141,6 +141,8 @@ function getPortalToolTitle(name: string): string {
   return title
 }
 
+const DEFAULT_TOOL_DEADLINE_MS = 55_000
+
 /**
  * Registers Portal's concise Zod raw shapes through the MCP SDK v2 schema API.
  * Keeping this translation in one place lets every tool use the modern API
@@ -160,13 +162,10 @@ export function registerPortalTool<InputShape extends ZodRawShape>(
   // A tool outside the active toolset selection is never registered, so
   // discovery still comes from this one registry.
   if (!isToolActive(name)) return undefined
-  const deadlineMs = options?.deadlineMs
+  const deadlineMs = options?.deadlineMs ?? DEFAULT_TOOL_DEADLINE_MS
   const activityExplorerMeta = getActivityExplorerToolMeta(name)
-  const boundedHandler =
-    deadlineMs !== undefined
-      ? (args: z.infer<z.ZodObject<InputShape>>, context: ServerContext) =>
-          runWithPortalRequestDeadline(deadlineMs, async () => handler(args, context), { tool: name, stage: 'tool' })
-      : handler
+  const boundedHandler = (args: z.infer<z.ZodObject<InputShape>>, context: ServerContext) =>
+    runWithPortalRequestDeadline(deadlineMs, async () => handler(args, context), { tool: name, stage: 'tool' })
 
   return server.registerTool(
     name,

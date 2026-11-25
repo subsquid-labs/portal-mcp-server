@@ -53,6 +53,7 @@ type QueueEntry = {
   transport: RuntimeRequestContext['transport']
   caller?: ToolCaller
   enqueuedAt: number
+  isResume?: boolean
   resolve: (value: ToolAdmissionLease) => void
   reject: (error: Error) => void
   signal?: AbortSignal
@@ -62,6 +63,10 @@ type QueueEntry = {
 
 export type ToolAdmissionLease = {
   waitMs: number
+  /** Temporarily release weighted capacity while this call is sleeping on upstream backoff. */
+  suspend: () => void
+  /** Re-acquire weighted capacity before issuing the next upstream attempt. */
+  resume: (signal?: AbortSignal) => Promise<void>
   release: () => void
 }
 
@@ -204,7 +209,8 @@ export class WeightedToolAdmissionController {
     if (this.canGrant(profile.weight, caller) && this.queue.length === 0) {
       return this.grant(profile, transport, now, caller)
     }
-    if (this.queue.length >= this.maxQueued) {
+    const freshQueued = this.queue.reduce((count, entry) => count + (entry.isResume ? 0 : 1), 0)
+    if (freshQueued >= this.maxQueued) {
       this.rejectMetric(profile, transport, 'queue_full')
       throw overloadError('queue_full', this.snapshot())
     }
@@ -265,18 +271,12 @@ export class WeightedToolAdmissionController {
     clearTimeout(entry.timeoutId)
     entry.signal?.removeEventListener('abort', entry.abort)
     this.adjustMap(this.queuedByKey, this.key(entry.profile, entry.transport), -1)
-    if (entry.caller) this.adjustMap(this.queuedByCaller, entry.caller.key, -1)
+    if (entry.caller && !entry.isResume) this.adjustMap(this.queuedByCaller, entry.caller.key, -1)
     this.syncMetrics(entry.profile, entry.transport)
     return true
   }
 
-  private grant(
-    profile: ToolWorkProfile,
-    transport: RuntimeRequestContext['transport'],
-    enqueuedAt: number,
-    caller?: ToolCaller,
-  ): ToolAdmissionLease {
-    const waitMs = Math.max(0, Date.now() - enqueuedAt)
+  private activateLease(profile: ToolWorkProfile, transport: RuntimeRequestContext['transport'], caller?: ToolCaller) {
     this.activeWeight += profile.weight
     this.activeCalls += 1
     this.adjustMap(this.activeByKey, this.key(profile, transport), 1)
@@ -290,31 +290,135 @@ export class WeightedToolAdmissionController {
         )
       }
     }
-    if (this.emitMetrics) toolAdmissionWait.observe({ tool_class: profile.class, transport }, waitMs / 1000)
     this.syncMetrics(profile, transport)
+  }
+
+  private deactivateLease(
+    profile: ToolWorkProfile,
+    transport: RuntimeRequestContext['transport'],
+    caller?: ToolCaller,
+  ) {
+    this.activeWeight = Math.max(0, this.activeWeight - profile.weight)
+    this.activeCalls = Math.max(0, this.activeCalls - 1)
+    this.adjustMap(this.activeByKey, this.key(profile, transport), -1)
+    if (caller) {
+      this.adjustMap(this.activeWeightByCaller, caller.key, -profile.weight)
+      this.adjustMap(this.activeCallsByFamily, caller.family, -1)
+      if (this.emitMetrics) {
+        toolAdmissionActiveByFamily.set(
+          { client_family: caller.family },
+          this.activeCallsByFamily.get(caller.family) ?? 0,
+        )
+      }
+    }
+    this.syncMetrics(profile, transport)
+  }
+
+  private grant(
+    profile: ToolWorkProfile,
+    transport: RuntimeRequestContext['transport'],
+    enqueuedAt: number,
+    caller?: ToolCaller,
+  ): ToolAdmissionLease {
+    const waitMs = Math.max(0, Date.now() - enqueuedAt)
+    this.activateLease(profile, transport, caller)
+    if (this.emitMetrics) toolAdmissionWait.observe({ tool_class: profile.class, transport }, waitMs / 1000)
     let released = false
-    return {
+    let suspended = false
+    let pendingResume: { entry: QueueEntry; promise: Promise<void> } | undefined
+
+    const cancelPendingResume = () => {
+      if (!pendingResume) return
+      const { entry } = pendingResume
+      pendingResume = undefined
+      if (this.removeQueued(entry)) {
+        entry.reject(new RequestCancelledError())
+        this.promote()
+      }
+    }
+
+    const lease: ToolAdmissionLease = {
       waitMs,
+      suspend: () => {
+        if (released || suspended) return
+        suspended = true
+        this.deactivateLease(profile, transport, caller)
+        this.promote()
+      },
+      resume: (signal?: AbortSignal) => {
+        if (released || !suspended) return Promise.resolve()
+        if (signal?.aborted) return Promise.reject(new RequestCancelledError())
+        if (pendingResume) return pendingResume.promise
+
+        if (this.canGrant(profile.weight, caller)) {
+          suspended = false
+          this.activateLease(profile, transport, caller)
+          return Promise.resolve()
+        }
+
+        const resumeTimeoutMs = Math.max(this.queueTimeoutMs, 30_000)
+        const entry = {} as QueueEntry
+        const promise = new Promise<void>((resolve, reject) => {
+          entry.profile = profile
+          entry.transport = transport
+          entry.caller = caller
+          entry.enqueuedAt = Date.now()
+          entry.isResume = true
+          entry.signal = signal
+          entry.resolve = () => {
+            pendingResume = undefined
+            if (released) {
+              this.deactivateLease(profile, transport, caller)
+              this.promote()
+              resolve()
+              return
+            }
+            suspended = false
+            resolve()
+          }
+          entry.reject = (error: Error) => {
+            pendingResume = undefined
+            reject(error)
+          }
+          entry.abort = () => {
+            if (!this.removeQueued(entry)) return
+            pendingResume = undefined
+            reject(new RequestCancelledError())
+            this.promote()
+          }
+          entry.timeoutId = setTimeout(() => {
+            if (!this.removeQueued(entry)) return
+            pendingResume = undefined
+            this.rejectMetric(profile, transport, 'queue_timeout')
+            reject(overloadError('queue_timeout', this.snapshot()))
+            this.promote()
+          }, resumeTimeoutMs)
+
+          signal?.addEventListener('abort', entry.abort, { once: true })
+          /* Already-admitted calls resuming after backoff jump ahead of fresh
+             requests so they finish instead of timing out behind new arrivals. */
+          this.queue.unshift(entry)
+          this.adjustMap(this.queuedByKey, this.key(profile, transport), 1)
+          this.syncMetrics(profile, transport)
+          this.promote()
+        })
+
+        if (suspended && this.queue.includes(entry)) {
+          pendingResume = { entry, promise }
+        }
+        return promise
+      },
       release: () => {
         if (released) return
         released = true
-        this.activeWeight = Math.max(0, this.activeWeight - profile.weight)
-        this.activeCalls = Math.max(0, this.activeCalls - 1)
-        this.adjustMap(this.activeByKey, this.key(profile, transport), -1)
-        if (caller) {
-          this.adjustMap(this.activeWeightByCaller, caller.key, -profile.weight)
-          this.adjustMap(this.activeCallsByFamily, caller.family, -1)
-          if (this.emitMetrics) {
-            toolAdmissionActiveByFamily.set(
-              { client_family: caller.family },
-              this.activeCallsByFamily.get(caller.family) ?? 0,
-            )
-          }
-        }
-        this.syncMetrics(profile, transport)
+        cancelPendingResume()
+        if (suspended) return
+        this.deactivateLease(profile, transport, caller)
         this.promote()
       },
     }
+
+    return lease
   }
 
   private promote() {
@@ -327,14 +431,25 @@ export class WeightedToolAdmissionController {
       clearTimeout(entry.timeoutId)
       entry.signal?.removeEventListener('abort', entry.abort)
       this.adjustMap(this.queuedByKey, this.key(entry.profile, entry.transport), -1)
-      if (entry.caller) this.adjustMap(this.queuedByCaller, entry.caller.key, -1)
+      if (entry.caller && !entry.isResume) this.adjustMap(this.queuedByCaller, entry.caller.key, -1)
       this.syncMetrics(entry.profile, entry.transport)
       if (entry.signal?.aborted) {
         entry.reject(new RequestCancelledError())
         promoted = true
         continue
       }
-      entry.resolve(this.grant(entry.profile, entry.transport, entry.enqueuedAt, entry.caller))
+      if (entry.isResume) {
+        this.activateLease(entry.profile, entry.transport, entry.caller)
+        if (this.emitMetrics) {
+          toolAdmissionWait.observe(
+            { tool_class: entry.profile.class, transport: entry.transport },
+            Math.max(0, Date.now() - entry.enqueuedAt) / 1000,
+          )
+        }
+        entry.resolve(undefined as unknown as ToolAdmissionLease)
+      } else {
+        entry.resolve(this.grant(entry.profile, entry.transport, entry.enqueuedAt, entry.caller))
+      }
       promoted = true
     }
   }

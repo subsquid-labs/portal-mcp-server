@@ -7,6 +7,7 @@ import { type McpRequestContext, createMcpHandler } from '@modelcontextprotocol/
 import { isActivityExplorerEnabledByDeployment, resolveActivityExplorerSurface } from './apps/activity-explorer.js'
 import { ENDPOINT_PAGE_HEADERS, renderEndpointPage, wantsEndpointPage } from './endpoint-page.js'
 import { hasConfiguredCursorSecret } from './helpers/pagination.js'
+import { runWithPortalRequestSignal } from './helpers/request-context.js'
 import {
   connectionKeyFromRequest,
   evaluateBodyLimit,
@@ -240,18 +241,31 @@ const server = createServer(
         )
         return
       }
-      /* One span per MCP request, parented to the caller's own trace when the
-         header carries one. Tool spans hang off it, so a batched request is a
-         single tree rather than a handful of unrelated roots. */
-      await recordRequestSpan(
-        {
-          method: req.method ?? 'POST',
-          transport: 'http',
-          traceparent: readHeader(req, 'traceparent'),
-          tracestate: readHeader(req, 'tracestate'),
-        },
-        () => handleMcpRequest(req, res),
-      )
+      /* Propagate client socket disconnects to in-flight Portal fetches and
+         retry waits so abandoned HTTP requests stop consuming upstream work. */
+      const disconnectController = new AbortController()
+      const onResponseClose = () => {
+        if (!res.writableEnded) disconnectController.abort()
+      }
+      res.once('close', onResponseClose)
+      try {
+        /* One span per MCP request, parented to the caller's own trace when the
+           header carries one. Tool spans hang off it, so a batched request is a
+           single tree rather than a handful of unrelated roots. */
+        await runWithPortalRequestSignal(disconnectController.signal, () =>
+          recordRequestSpan(
+            {
+              method: req.method ?? 'POST',
+              transport: 'http',
+              traceparent: readHeader(req, 'traceparent'),
+              tracestate: readHeader(req, 'tracestate'),
+            },
+            () => handleMcpRequest(req, res),
+          ),
+        )
+      } finally {
+        res.off('close', onResponseClose)
+      }
       return
     }
 

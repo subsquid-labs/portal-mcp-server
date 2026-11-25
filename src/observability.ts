@@ -138,6 +138,7 @@ const BOUNDED_ERROR_CODES = new Set<ToolErrorCode>([
   'no_data',
   'incomplete_result',
   'response_too_large',
+  'overloaded',
   'upstream_reorg',
   'rate_limited',
   'upstream_unavailable',

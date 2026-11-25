@@ -1,14 +1,20 @@
 import assert from 'node:assert/strict'
 import { afterEach, describe, it } from 'node:test'
 
+import { clearDatasetCaches } from '../cache/datasets.js'
+import { ActionableError } from './errors.js'
+import { resetPortalRateLimitState } from './fetch.js'
 import {
+  clearTimeframeCaches,
   describeTimeWindowInput,
   estimateBlockTime,
+  getBlockTimestamp,
   parseTimeframeToSeconds,
   parseTimestampInput,
   resolveBlockAtTimestamp,
   resolveTimeframeOrBlocks,
   timeframeToBlocks,
+  timestampToBlock,
 } from './timeframe.js'
 
 const NOW = 1_700_000_000
@@ -16,6 +22,9 @@ const originalFetch = globalThis.fetch
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  clearTimeframeCaches()
+  clearDatasetCaches()
+  resetPortalRateLimitState()
 })
 
 describe('parseTimeframeToSeconds', () => {
@@ -193,5 +202,103 @@ describe('Base cadence estimates', () => {
       resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' }),
       /indexed head timestamp/i,
     )
+  })
+})
+
+describe('timeframe lookup caching and deduplication', () => {
+  it('caches and deduplicates repeated block timestamp and timestamp-to-block lookups', async () => {
+    let streamCalls = 0
+    let timestampCalls = 0
+    globalThis.fetch = async (input) => {
+      const url = String(input)
+      if (url.includes('/timestamps/')) {
+        timestampCalls++
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        return Response.json({ block_number: 12_345 })
+      }
+      if (url.endsWith('/stream')) {
+        streamCalls++
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        return new Response(JSON.stringify({ header: { number: 12_345, timestamp: 1_775_000_000 } }) + '\n')
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }
+
+    const [b1, b2] = await Promise.all([
+      timestampToBlock('ethereum-mainnet', 1_775_000_000),
+      timestampToBlock('ethereum-mainnet', 1_775_000_000),
+    ])
+    const b3 = await timestampToBlock('ethereum-mainnet', 1_775_000_000)
+    assert.deepEqual([b1, b2, b3], [12_345, 12_345, 12_345])
+    assert.equal(timestampCalls, 1)
+
+    const [t1, t2] = await Promise.all([
+      getBlockTimestamp('ethereum-mainnet', 12_345),
+      getBlockTimestamp('ethereum-mainnet', 12_345),
+    ])
+    const t3 = await getBlockTimestamp('ethereum-mainnet', 12_345)
+    assert.deepEqual([t1, t2, t3], [1_775_000_000, 1_775_000_000, 1_775_000_000])
+    assert.equal(streamCalls, 1)
+  })
+
+  it('preserves upstream rate_limited errors on Base timeframes without poisoning the timestamp endpoint', async () => {
+    let phase: 'rate_limited' | 'healthy' = 'rate_limited'
+    const exactBoundary = BASE_HEAD_TIMESTAMP - 900
+    globalThis.fetch = async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/head')) return Response.json({ number: BASE_HEAD_BLOCK, hash: '0x1234' })
+      if (url.endsWith('/metadata')) return Response.json({ start_block: 0 })
+      if (phase === 'rate_limited') {
+        return new Response('overloaded', { status: 529, headers: { 'Retry-After': '120' } })
+      }
+      if (url.includes('/timestamps/')) return Response.json({ block_number: 1_000 })
+      if (url.endsWith('/stream')) {
+        const query = JSON.parse(String(init?.body))
+        if (query.fromBlock === BASE_HEAD_BLOCK) {
+          return new Response(
+            JSON.stringify({ header: { number: BASE_HEAD_BLOCK, timestamp: BASE_HEAD_TIMESTAMP } }) + '\n',
+          )
+        }
+        const records = [999, 1_000, 1_001]
+          .filter((number) => number >= query.fromBlock && number <= query.toBlock)
+          .map((number) => ({ header: { number, timestamp: exactBoundary + (number - 1_000) * 2 } }))
+        return new Response(records.map((record) => JSON.stringify(record)).join('\n') + '\n')
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }
+
+    await assert.rejects(
+      resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' }),
+      (error: unknown) => error instanceof ActionableError && error.code === 'rate_limited',
+    )
+
+    // Once Portal recovers, the next call must still verify boundaries instead of
+    // being stuck in the 5-minute timestamp-endpoint-down fallback.
+    resetPortalRateLimitState()
+    phase = 'healthy'
+    const recovered = await resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' })
+    assert.equal(recovered.from_block, 1_000)
+    assert.equal(recovered.from_lookup?.resolution, 'verified_boundary')
+  })
+
+  it('falls back promptly on non-Base chains when timestamp verification hits a 10s 529 overload', async () => {
+    let streamCalls = 0
+    globalThis.fetch = async (input) => {
+      const url = String(input)
+      if (url.endsWith('/head')) return Response.json({ number: 900_000, hash: '0xbtc' })
+      if (url.endsWith('/metadata')) return Response.json({ start_block: 0 })
+      if (url.includes('/timestamps/') || url.endsWith('/stream')) {
+        if (url.endsWith('/stream')) streamCalls++
+        return new Response('overloaded', { status: 529, headers: { 'Retry-After': '10' } })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }
+
+    const startedAt = Date.now()
+    const resolved = await resolveTimeframeOrBlocks({ dataset: 'bitcoin-mainnet', timeframe: '24h' })
+    assert.ok(Date.now() - startedAt < 500, 'should fall back promptly instead of sleeping 10s+ on a 529')
+    assert.equal(resolved.estimated_timeframe?.resolution, 'estimated')
+    assert.equal(resolved.to_block, 900_000)
+    assert.equal(streamCalls, 1)
   })
 })

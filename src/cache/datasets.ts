@@ -1,8 +1,13 @@
 import { PORTAL_URL } from '../constants/index.js'
 import { createCache } from '../helpers/cache-manager.js'
-import { createBlockRangeError, createDatasetError } from '../helpers/errors.js'
+import { RequestCancelledError, createBlockRangeError, createDatasetError } from '../helpers/errors.js'
 import { portalFetch } from '../helpers/fetch.js'
-import { getPortalRequestSignal } from '../helpers/request-context.js'
+import {
+  type SharedPortalWork,
+  getPortalRequestSignal,
+  runAsSharedPortalWork,
+  waitForSharedPortalWork,
+} from '../helpers/request-context.js'
 import type { BlockHead, ChainType, Dataset, DatasetMetadata } from '../types/index.js'
 
 // ============================================================================
@@ -10,31 +15,54 @@ import type { BlockHead, ChainType, Dataset, DatasetMetadata } from '../types/in
 // ============================================================================
 
 const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+const DATASETS_STALE_MAX_AGE_MS = 60 * 60 * 1000 // 1 hour stale-on-error fallback
+const DATASETS_REFRESH_COOLDOWN_MS = 15 * 1000 // Pause before retrying a failed catalog refresh
 const HEAD_CACHE_TTL = 30 * 1000 // 30 seconds (blocks change every 2-12s)
 
 const headCache = createCache<BlockHead>(HEAD_CACHE_TTL, 100)
+const startBlockCache = createCache<number>(CACHE_TTL, 100)
 const metadataCache = createCache<{ start_block: number; head: BlockHead; finalized_head?: BlockHead }>(
   HEAD_CACHE_TTL,
   100,
 )
 let datasetsCache: { data: Dataset[]; timestamp: number } | null = null
+let datasetsRefreshBlockedUntil = 0
 const knownDatasetKinds = new Map<string, ChainType>()
 
-const pendingRequests = new Map<string, { promise: Promise<any>; requestSignal?: AbortSignal }>()
+const pendingRequests = new Map<string, SharedPortalWork<any>>()
+
+export function clearDatasetCaches(): void {
+  headCache.clear()
+  startBlockCache.clear()
+  metadataCache.clear()
+  datasetsCache = null
+  datasetsRefreshBlockedUntil = 0
+  knownDatasetKinds.clear()
+  pendingRequests.clear()
+}
 
 function dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const requestSignal = getPortalRequestSignal()
-  const existing = pendingRequests.get(key)
-  if (existing && existing.requestSignal === requestSignal) {
-    return existing.promise as Promise<T>
+  const signal = getPortalRequestSignal()
+  if (signal?.aborted) {
+    return Promise.reject(new RequestCancelledError())
   }
-  if (existing) return fn()
 
-  const promise = fn().finally(() => {
-    if (pendingRequests.get(key)?.promise === promise) pendingRequests.delete(key)
-  })
-  pendingRequests.set(key, { promise, requestSignal })
-  return promise
+  const existing = pendingRequests.get(key)
+  if (existing && !existing.controller.signal.aborted) {
+    return waitForSharedPortalWork(existing as SharedPortalWork<T>, signal)
+  }
+
+  const work = runAsSharedPortalWork(fn)
+  pendingRequests.set(key, work)
+  work.promise.then(
+    () => {
+      if (pendingRequests.get(key) === work) pendingRequests.delete(key)
+    },
+    () => {
+      if (pendingRequests.get(key) === work) pendingRequests.delete(key)
+    },
+  )
+  return waitForSharedPortalWork(work, signal)
 }
 
 function rememberDatasetKinds(datasets: Dataset[]) {
@@ -56,16 +84,30 @@ export function peekKnownChainType(dataset: string): ChainType | undefined {
  * Uses ?expand[]=metadata&expand[]=schema to get chain kind, chain_id, display_name, and available tables.
  */
 export async function getDatasets(): Promise<Dataset[]> {
-  if (datasetsCache && Date.now() - datasetsCache.timestamp < CACHE_TTL) {
+  const now = Date.now()
+  if (datasetsCache && now - datasetsCache.timestamp < CACHE_TTL) {
+    return datasetsCache.data
+  }
+  if (datasetsCache && now < datasetsRefreshBlockedUntil && now - datasetsCache.timestamp < DATASETS_STALE_MAX_AGE_MS) {
     return datasetsCache.data
   }
 
-  return dedupe('datasets', async () => {
-    const data = await portalFetch<Dataset[]>(`${PORTAL_URL}/datasets?expand%5B%5D=metadata&expand%5B%5D=schema`)
-    rememberDatasetKinds(data)
-    datasetsCache = { data, timestamp: Date.now() }
-    return data
-  })
+  try {
+    return await dedupe('datasets', async () => {
+      const data = await portalFetch<Dataset[]>(`${PORTAL_URL}/datasets?expand%5B%5D=metadata&expand%5B%5D=schema`)
+      rememberDatasetKinds(data)
+      datasetsCache = { data, timestamp: Date.now() }
+      datasetsRefreshBlockedUntil = 0
+      return data
+    })
+  } catch (error) {
+    if (error instanceof RequestCancelledError) throw error
+    if (datasetsCache && Date.now() - datasetsCache.timestamp < DATASETS_STALE_MAX_AGE_MS) {
+      datasetsRefreshBlockedUntil = Date.now() + DATASETS_REFRESH_COOLDOWN_MS
+      return datasetsCache.data
+    }
+    throw error
+  }
 }
 
 /**
@@ -280,15 +322,20 @@ export async function validateDataset(dataset: string): Promise<void> {
   await resolveDataset(dataset)
 }
 
-export async function getBlockHead(dataset: string, finalized = false): Promise<BlockHead> {
+export async function getBlockHead(
+  dataset: string,
+  finalized = false,
+  options: { fresh?: boolean } = {},
+): Promise<BlockHead> {
   const cacheKey = `${dataset}:${finalized ? 'finalized' : 'head'}`
-  const cached = headCache.get(cacheKey)
-
-  if (cached) {
-    return cached
+  if (!options.fresh) {
+    const cached = headCache.get(cacheKey)
+    if (cached) {
+      return cached
+    }
   }
 
-  return dedupe(cacheKey, async () => {
+  return dedupe(options.fresh ? `fresh:${cacheKey}` : cacheKey, async () => {
     const endpoint = finalized ? 'finalized-head' : 'head'
     const head = await portalFetch<BlockHead>(`${PORTAL_URL}/datasets/${dataset}/${endpoint}`)
     headCache.set(cacheKey, head)
@@ -296,27 +343,51 @@ export async function getBlockHead(dataset: string, finalized = false): Promise<
   })
 }
 
-export async function getDatasetMetadata(dataset: string): Promise<{
+async function getDatasetStartBlock(dataset: string): Promise<number> {
+  const cached = startBlockCache.get(dataset)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  return dedupe(`start_block:${dataset}`, async () => {
+    const metadata = await portalFetch<DatasetMetadata>(`${PORTAL_URL}/datasets/${dataset}/metadata`)
+    startBlockCache.set(dataset, metadata.start_block)
+    return metadata.start_block
+  })
+}
+
+export async function getDatasetMetadata(
+  dataset: string,
+  options: { includeFinalized?: boolean; fresh?: boolean } = {},
+): Promise<{
   start_block: number
   head: BlockHead
   finalized_head?: BlockHead
 }> {
+  const includeFinalized = options.includeFinalized ?? false
+  const fresh = options.fresh ?? false
   const cached = metadataCache.get(dataset)
-  if (cached) {
+  if (!fresh && cached && (!includeFinalized || cached.finalized_head !== undefined)) {
     return cached
   }
 
-  return dedupe(`metadata:${dataset}`, async () => {
-    const [metadata, head, finalizedHead] = await Promise.all([
-      portalFetch<DatasetMetadata>(`${PORTAL_URL}/datasets/${dataset}/metadata`),
-      getBlockHead(dataset, false),
-      getBlockHead(dataset, true).catch(() => undefined),
+  const dedupeKey = `${fresh ? 'fresh:' : ''}metadata:${dataset}${includeFinalized ? ':finalized' : ''}`
+  return dedupe(dedupeKey, async () => {
+    const [startBlock, head, finalizedHead] = await Promise.all([
+      getDatasetStartBlock(dataset),
+      getBlockHead(dataset, false, { fresh }),
+      includeFinalized
+        ? getBlockHead(dataset, true, { fresh }).catch(() => undefined)
+        : Promise.resolve(cached?.finalized_head),
     ])
 
+    /* Merge against any finalized_head written by a concurrent lookup so a
+       non-finalized refresh never wipes out a fresher finalized head. */
+    const mergedFinalizedHead = finalizedHead ?? metadataCache.get(dataset)?.finalized_head
     const result = {
-      start_block: metadata.start_block,
+      start_block: startBlock,
       head,
-      finalized_head: finalizedHead,
+      ...(mergedFinalizedHead !== undefined ? { finalized_head: mergedFinalizedHead } : {}),
     }
 
     metadataCache.set(dataset, result)
@@ -330,7 +401,7 @@ export async function validateBlockRange(
   toBlock: number,
   finalizedOnly: boolean = false,
 ): Promise<{ validatedToBlock: number; head: BlockHead }> {
-  const meta = await getDatasetMetadata(dataset)
+  const meta = await getDatasetMetadata(dataset, { includeFinalized: finalizedOnly })
 
   if (fromBlock < meta.start_block) {
     throw createBlockRangeError(

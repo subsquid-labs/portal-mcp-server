@@ -1,9 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
-import { getBlockHead, getChainType, getDatasets, isL2Chain, resolveDataset } from '../../cache/datasets.js'
+import { getChainType, getDatasetMetadata, getDatasets, isL2Chain, resolveDataset } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
-import { portalFetch, portalFetchStream } from '../../helpers/fetch.js'
+import { portalFetchStream } from '../../helpers/fetch.js'
 import {
   formatDuration,
   formatResult,
@@ -12,14 +12,18 @@ import {
   normalizeUnixTimestamp,
 } from '../../helpers/format.js'
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
+import { getCachedBlockTimestamp, rememberBlockTimestamp } from '../../helpers/timeframe.js'
 import { buildToolDescription } from '../../helpers/tool-ux.js'
-import type { BlockHead, DatasetMetadata } from '../../types/index.js'
 
 async function fetchHeadTimestamp(
   dataset: string,
   chainType: string,
   blockNumber: number,
 ): Promise<number | undefined> {
+  const cached = getCachedBlockTimestamp(dataset, blockNumber)
+  if (cached !== undefined) {
+    return cached
+  }
   const baseQuery = {
     fromBlock: blockNumber,
     toBlock: blockNumber,
@@ -88,7 +92,11 @@ async function fetchHeadTimestamp(
   })
 
   const first = response[0] as { header?: { timestamp?: number }; timestamp?: number } | undefined
-  return normalizeUnixTimestamp(first?.header?.timestamp ?? first?.timestamp)
+  const normalized = normalizeUnixTimestamp(first?.header?.timestamp ?? first?.timestamp)
+  if (normalized !== undefined) {
+    rememberBlockTimestamp(dataset, blockNumber, normalized)
+  }
+  return normalized
 }
 
 function buildHeadLag(blockNumber: number | undefined, timestamp: number | undefined) {
@@ -168,12 +176,11 @@ export function registerGetDatasetInfoTool(server: McpServer) {
       const dataset = await resolveDataset(network)
       const networkLabel = humanizeLabel(dataset) ?? dataset
 
-      const [datasets, metadata, head, finalizedHead] = await Promise.all([
+      const [datasets, metadata] = await Promise.all([
         getDatasets(),
-        portalFetch<DatasetMetadata>(`${PORTAL_URL}/datasets/${dataset}/metadata`),
-        portalFetch<BlockHead>(`${PORTAL_URL}/datasets/${dataset}/head`),
-        portalFetch<BlockHead>(`${PORTAL_URL}/datasets/${dataset}/finalized-head`).catch(() => undefined),
+        getDatasetMetadata(dataset, { includeFinalized: true, fresh: true }),
       ])
+      const { head, finalized_head: finalizedHead } = metadata
 
       const ds = datasets.find((d) => d.dataset === dataset)
       const chainType = await getChainType(dataset)

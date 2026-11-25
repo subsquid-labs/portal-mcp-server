@@ -925,7 +925,6 @@ async function visitAdaptiveEvmLogRange(
       {
         maxBytes: EVM_OHLC_MAX_BYTES,
         timeout: EVM_OHLC_QUERY_TIMEOUT_MS,
-        retries: 0,
         onRecord,
       },
     )
@@ -2370,5 +2369,6 @@ export function registerEvmOhlcTool(server: McpServer) {
 
       return result
     },
+    { deadlineMs: 45_000 },
   )
 }

@@ -5,8 +5,11 @@ import { ActionableError } from '../src/helpers/errors.ts'
 import {
   getPortalRequestSignal,
   runAsSharedPortalWork,
+  runWhilePortalBackoffSleep,
   runWithPortalRequestSignal,
+  runWithToolAdmissionLease,
   waitForSharedPortalWork,
+  withPortalFetchAdmissionTracking,
 } from '../src/helpers/request-context.js'
 import {
   DEFAULT_TOOL_WEIGHT_BUDGET,
@@ -224,6 +227,77 @@ async function main() {
     'a share below the heaviest profile is floored so every tool stays schedulable',
   )
 
+  /* When a caller's active call sleeps on upstream backoff, yielding its slot
+     lets another call from the same HTTP caller run immediately instead of
+     timing out with overloaded, then re-acquires cleanly on wakeup. */
+  const yielder = new WeightedToolAdmissionController(32, 16, 150, false, { clientWeightShare: 0.5 })
+  const httpCaller = { key: 'claude:backoff', family: 'claude' }
+  const sleepingLease = await yielder.acquire(raw, 'http', undefined, httpCaller)
+  let siblingRanDuringSleep = false
+  let resumedBeforeSiblingDone = false
+  const sleepingWork = runWithToolAdmissionLease(sleepingLease, () =>
+    withPortalFetchAdmissionTracking(async () => {
+      await runWhilePortalBackoffSleep(async () => {
+        const siblingLease = await yielder.acquire(raw, 'http', undefined, httpCaller)
+        siblingRanDuringSleep = true
+        await sleep(30)
+        siblingLease.release()
+      })
+      resumedBeforeSiblingDone = !siblingRanDuringSleep
+    }),
+  )
+  await sleepingWork
+  sleepingLease.release()
+  assert(siblingRanDuringSleep, 'a sibling call from the same HTTP caller should run while the first call sleeps')
+  assert(!resumedBeforeSiblingDone, 'resumed call should wait for capacity and run cleanly')
+  assert(
+    yielder.snapshot().activeWeight === 0 &&
+      yielder.snapshot().activeCalls === 0 &&
+      yielder.snapshot().queuedCalls === 0,
+    'suspend/resume accounting should return to zero',
+  )
+
+  // Tools waiting on a shared lookup that enters backoff sleep must also yield
+  // their admission slots so unrelated lookups do not starve with overloaded.
+  let releaseSharedBackoff!: () => void
+  const sharedBackoffGate = new Promise<void>((resolve) => {
+    releaseSharedBackoff = resolve
+  })
+  const sharedLookup = runAsSharedPortalWork(async () =>
+    withPortalFetchAdmissionTracking(async () => {
+      await runWhilePortalBackoffSleep(() => sharedBackoffGate)
+      return 'head-ok'
+    }),
+  )
+  const waitingHeavy = await yielder.acquire(analytics, 'http', undefined, httpCaller)
+  const waitingPromise = runWithToolAdmissionLease(waitingHeavy, () => waitForSharedPortalWork(sharedLookup))
+  await sleep(10)
+  assert(
+    yielder.snapshot().activeWeight === 0,
+    'a tool waiting on sleeping shared work should yield its weighted admission slot',
+  )
+  const unrelatedLookup = await yielder.acquire(lookup, 'http', undefined, httpCaller)
+  assert(unrelatedLookup.waitMs < 50, 'unrelated lookups should run immediately while shared work sleeps')
+  unrelatedLookup.release()
+  releaseSharedBackoff()
+  assert((await waitingPromise) === 'head-ok', 'waiting tool should resume and receive the shared lookup value')
+  waitingHeavy.release()
+  assert(
+    yielder.snapshot().activeWeight === 0 &&
+      yielder.snapshot().activeCalls === 0 &&
+      yielder.snapshot().queuedCalls === 0,
+    'shared-work backoff yield accounting should return to zero',
+  )
+
+  // Releasing a lease while suspended must not double-decrement active weight
+  const releaseSuspended = await yielder.acquire(raw, 'http', undefined, httpCaller)
+  releaseSuspended.suspend()
+  releaseSuspended.release()
+  assert(
+    yielder.snapshot().activeWeight === 0 && yielder.snapshot().activeCalls === 0,
+    'releasing a suspended lease must keep accounting exact',
+  )
+
   console.log('PASS  weighted profiles preserve capacity for low-cost discovery')
   console.log('PASS  fair promotion avoids head-of-line blocking without starving analytics')
   console.log('PASS  queued cancellation, timeout, and overload release all scheduler state')
@@ -231,6 +305,7 @@ async function main() {
   console.log(
     'PASS  a flooding caller is bounded to its share with reason client_share while a quiet caller never waits',
   )
+  console.log('PASS  backoff sleeps yield tool admission slots so parallel HTTP calls do not starve')
 }
 
 main().catch((error) => {

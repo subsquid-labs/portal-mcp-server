@@ -87,7 +87,14 @@ import {
 // ============================================================================
 
 const WALLET_QUERY_TIMEOUT_MS = 8_000
-const WALLET_QUERY_RETRIES = 0
+// EVM runs up to three optional sections in parallel and degrades cleanly to a
+// partial result when more than one section is active. Single-section queries
+// use a bounded 8s retry window so short 429/5xx blips recover while persistent
+// 10s overloads surface a truthful rate_limited error well under the 12s
+// interactive ceiling instead of burning into the 25s tool timeout.
+const WALLET_EVM_SECTION_RETRIES = 0
+const WALLET_PRIMARY_QUERY_RETRIES = 2
+const WALLET_PRIMARY_RETRY_BUDGET_MS = 8_000
 const WALLET_SECTION_DEADLINE_MS = 10_000
 const WALLET_TOOL_DEADLINE_MS = 25_000
 const SAFE_WALLET_PAGE_SIZE = 4
@@ -352,8 +359,23 @@ async function fetchCachedWalletSection(params: {
   chunkSize: number
   concurrency: number
   initialSequentialChunks: number
+  retries: number
+  retryBudgetMs: number
+  respectCooldown: boolean
 }) {
-  const { dataset, section, query, itemKeys, limit, chunkSize, concurrency, initialSequentialChunks } = params
+  const {
+    dataset,
+    section,
+    query,
+    itemKeys,
+    limit,
+    chunkSize,
+    concurrency,
+    initialSequentialChunks,
+    retries,
+    retryBudgetMs,
+    respectCooldown,
+  } = params
   const cacheKey = stableCacheKey('wallet-section', {
     dataset,
     section,
@@ -375,7 +397,9 @@ async function fetchCachedWalletSection(params: {
           concurrency,
           initialSequentialChunks,
           timeout: WALLET_QUERY_TIMEOUT_MS,
-          retries: WALLET_QUERY_RETRIES,
+          retries,
+          retryBudgetMs,
+          respectCooldown,
         }),
       ),
     { tool: 'portal_get_wallet_summary', stage: section },
@@ -1675,6 +1699,13 @@ export function registerGetWalletSummaryTool(server: McpServer) {
         token_transfers: include_tokens ? undefined : null,
         nft_transfers: include_nfts ? undefined : null,
       }
+      const plannedEnabledSections =
+        Number(sectionCursors.transactions !== null) +
+        Number(include_tokens && sectionCursors.token_transfers !== null) +
+        Number(include_nfts && sectionCursors.nft_transfers !== null)
+      const evmSectionRetries = plannedEnabledSections <= 1 ? WALLET_PRIMARY_QUERY_RETRIES : WALLET_EVM_SECTION_RETRIES
+      const evmSectionRetryBudgetMs =
+        plannedEnabledSections <= 1 ? WALLET_PRIMARY_RETRY_BUDGET_MS : WALLET_SECTION_DEADLINE_MS
 
       // Query 1: Transactions
       // Use minimal transaction fields for summary (avoid context bloat)
@@ -1733,6 +1764,9 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           chunkSize: 1_000,
           concurrency: 6,
           initialSequentialChunks: 1,
+          retries: evmSectionRetries,
+          retryBudgetMs: evmSectionRetryBudgetMs,
+          respectCooldown: true,
         })
 
         const pagedTransactions = paginateAscendingItems(
@@ -1816,6 +1850,9 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           chunkSize: 1_000,
           concurrency: 6,
           initialSequentialChunks: 1,
+          retries: evmSectionRetries,
+          retryBudgetMs: evmSectionRetryBudgetMs,
+          respectCooldown: true,
         })
 
         let tokenMetadataByAddress = new Map<string, { symbol?: string; name?: string; decimals?: number }>()
@@ -1940,6 +1977,9 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           chunkSize: 1_000,
           concurrency: 6,
           initialSequentialChunks: 1,
+          retries: evmSectionRetries,
+          retryBudgetMs: evmSectionRetryBudgetMs,
+          respectCooldown: true,
         })
 
         const pagedNfts = paginateAscendingItems(
@@ -2559,7 +2599,8 @@ async function buildNonEvmWalletSummary(params: {
       concurrency: 6,
       initialSequentialChunks: 1,
       timeout: WALLET_QUERY_TIMEOUT_MS,
-      retries: WALLET_QUERY_RETRIES,
+      retries: WALLET_PRIMARY_QUERY_RETRIES,
+      retryBudgetMs: WALLET_PRIMARY_RETRY_BUDGET_MS,
     })
 
     const allItems = sortTransactions(
@@ -2844,8 +2885,10 @@ async function buildNonEvmWalletSummary(params: {
               limit: limit_per_type + (outputCursor?.skip_inclusive_block ?? 0) + 1,
               chunkSize: 100,
               concurrency: 2,
+              initialSequentialChunks: 1,
               timeout: WALLET_QUERY_TIMEOUT_MS,
-              retries: WALLET_QUERY_RETRIES,
+              retries: WALLET_PRIMARY_QUERY_RETRIES,
+              retryBudgetMs: WALLET_PRIMARY_RETRY_BUDGET_MS,
             },
           ),
       inputsExhausted
@@ -2879,8 +2922,10 @@ async function buildNonEvmWalletSummary(params: {
               limit: limit_per_type + (inputCursor?.skip_inclusive_block ?? 0) + 1,
               chunkSize: 100,
               concurrency: 2,
+              initialSequentialChunks: 1,
               timeout: WALLET_QUERY_TIMEOUT_MS,
-              retries: WALLET_QUERY_RETRIES,
+              retries: WALLET_PRIMARY_QUERY_RETRIES,
+              retryBudgetMs: WALLET_PRIMARY_RETRY_BUDGET_MS,
             },
           ),
     ])
@@ -3289,7 +3334,8 @@ async function buildNonEvmWalletSummary(params: {
       chunkSize: Math.max(500, Math.min(2_000, limit_per_type * 200)),
       maxBytes: 25 * 1024 * 1024,
       timeout: WALLET_QUERY_TIMEOUT_MS,
-      retries: WALLET_QUERY_RETRIES,
+      retries: WALLET_PRIMARY_QUERY_RETRIES,
+      retryBudgetMs: WALLET_PRIMARY_RETRY_BUDGET_MS,
     },
   )
 

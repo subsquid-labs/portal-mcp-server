@@ -12,7 +12,12 @@ import { RequestCancelledError } from './helpers/errors.js'
 import { attachEvidenceReceipt } from './helpers/evidence-receipt.js'
 import { runWithGuardrailScope } from './helpers/guardrails.js'
 import { PORTAL_TOOL_NAMES, listsOutputSchemaFor, runWithOutputSchemaListing } from './helpers/mcp-registration.js'
-import { runWithPortalRequestSignal } from './helpers/request-context.js'
+import {
+  combineAbortSignals,
+  getPortalRequestSignal,
+  runWithPortalRequestSignal,
+  runWithToolAdmissionLease,
+} from './helpers/request-context.js'
 import { getToolWorkProfile, toolAdmission } from './helpers/tool-admission.js'
 import { formatToolError } from './helpers/tool-error.js'
 import { registerInvestigationPromptsAndResources } from './investigations.js'
@@ -171,7 +176,7 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
       const toolArgs = (
         handlerArgs.length > 1 && handlerArgs[0] && typeof handlerArgs[0] === 'object' ? handlerArgs[0] : {}
       ) as Record<string, unknown>
-      const requestSignal = requestContext?.mcpReq.signal
+      const requestSignal = combineAbortSignals(getPortalRequestSignal(), requestContext?.mcpReq.signal)
       const envelope = requestContext?.mcpReq.envelope as Record<string, unknown> | undefined
       const envelopeClient = envelope?.[CLIENT_INFO_META_KEY]
       const declaredClient =
@@ -239,10 +244,15 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
             /* Handlers run outside the factory's scope, so the connection's
                app choice is re-entered here for the result formatters. */
             const handlerResult = await runWithActivityExplorerSurface(appEnabled, () =>
-              runWithPortalRequestSignal(requestSignal, () =>
-                runWithGuardrailScope({ tool: toolName, workClass: getToolWorkProfile(toolName).class }, () =>
-                  handler(...handlerArgs),
-                ),
+              runWithToolAdmissionLease(
+                lease,
+                () =>
+                  runWithPortalRequestSignal(requestSignal, () =>
+                    runWithGuardrailScope({ tool: toolName, workClass: getToolWorkProfile(toolName).class }, () =>
+                      handler(...handlerArgs),
+                    ),
+                  ),
+                requestSignal,
               ),
             )
             /* Hashing the result for the evidence receipt is real work on a
