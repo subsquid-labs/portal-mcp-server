@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.8.7] - Unreleased
+
+Portal requests now absorb transient `429`, `529`, and `5xx` errors with bounded exponential retries, admission-slot yielding, and shared metadata/timestamp caching before surfacing errors to clients. This release also adds a browser setup page on the MCP endpoint, trims `tools/list` tokens for hosts that ignore the shared output schema, fixes timestamp-window spans and per-platform Gemini release archives, and refreshes bundled guidance and starter prompts.
+
 ### Improvements
 
 - **Endpoint page for browsers.** Opening the MCP endpoint, such as `https://portal.sqd.dev/mcp`, in a browser now shows a short page with the server name, version and links to the setup guides, instead of a JSON-RPC 405 error. MCP clients see no change: a GET that asks for `text/event-stream`, and any GET whose `Accept` header does not list `text/html`, still gets the 405 the Streamable HTTP transport specifies.
