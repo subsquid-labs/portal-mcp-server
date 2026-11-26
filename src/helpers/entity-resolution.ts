@@ -12,6 +12,7 @@ import {
   getDexScreenerPair,
   getDexScreenerTokenPairs,
 } from './external-apis.js'
+import { tronHexToBase58 } from './tron.js'
 import { isValidEvmAddress, normalizeEvmAddress } from './validation.js'
 
 export type TokenListSource = 'coingecko_token_list'
@@ -35,7 +36,7 @@ export type ResolvedTokenEntity = {
   symbol: string
   name: string
   decimals: number
-  chain_id: number
+  chain_id?: number
   source: TokenListSource
 }
 
@@ -112,6 +113,8 @@ const TOKEN_LIST_CHAIN_BY_DATASET: Record<string, string> = {
   'avalanche-mainnet': 'avalanche',
   'binance-mainnet': 'bsc',
   'bsc-mainnet': 'bsc',
+  'solana-mainnet': 'solana',
+  'tron-mainnet': 'tron',
 }
 
 const KNOWN_CONTRACT_ALIASES: Record<string, Record<string, { address: string; name: string; aliases: string[] }>> = {
@@ -159,15 +162,16 @@ export function normalizeEntityAlias(value: string): string {
 }
 
 function asResolvedToken(dataset: string, tokenListChain: string, token: CoinGeckoToken): ResolvedTokenEntity {
+  const isEvmAddress = /^0x[0-9a-fA-F]{40}$/.test(token.address)
   return {
     kind: 'token',
     network: dataset,
     token_list_chain: tokenListChain,
-    address: token.address.toLowerCase(),
+    address: isEvmAddress ? token.address.toLowerCase() : token.address,
     symbol: token.symbol,
     name: token.name,
     decimals: token.decimals,
-    chain_id: token.chainId,
+    ...(typeof token.chainId === 'number' ? { chain_id: token.chainId } : {}),
     source: 'coingecko_token_list',
   }
 }
@@ -202,6 +206,22 @@ function filterTokensByQuery(tokens: CoinGeckoToken[], query: string) {
     return tokens.filter((token) => token.address.toLowerCase() === normalizedAddress)
   }
 
+  /* Support Tron 41-prefixed hex addresses against Base58 CoinGecko token lists. */
+  if (/^(?:0x)?41[0-9a-fA-F]{40}$/.test(trimmed)) {
+    const hex41 = trimmed.replace(/^0x/i, '').toLowerCase()
+    try {
+      const base58 = tronHexToBase58(hex41)
+      const matchedTron = tokens.filter((token) => token.address === base58)
+      if (matchedTron.length > 0) return matchedTron
+    } catch {
+      // Fall through to symbol/name matching if hex conversion fails.
+    }
+  }
+
+  /* Support direct Base58 mint / TRC-20 address lookups on Solana and Tron. */
+  const exactAddress = tokens.filter((token) => token.address === trimmed)
+  if (exactAddress.length > 0) return exactAddress
+
   const normalizedSymbol = trimmed.toUpperCase()
   const exactSymbol = tokens.filter((token) => token.symbol.toUpperCase() === normalizedSymbol)
   if (exactSymbol.length > 0) return exactSymbol
@@ -231,21 +251,18 @@ export function getDexScreenerChainForDataset(dataset: string): string | undefin
 export async function getTokenListForDatasetWithStatus(
   dataset: string,
 ): Promise<{ tokens: ResolvedTokenEntity[]; lookup: TokenListLookupMetadata }> {
-  if (detectChainType(dataset) !== 'evm') {
-    recordUnsupportedTokenListNetwork(dataset)
-    throw new ActionableError(`Token-list resolution is only supported for EVM datasets. Got ${dataset}.`, [
-      'Use Solana, Bitcoin, Substrate, or Hyperliquid-specific tools for non-EVM assets.',
-      'Call portal_list_networks if you are unsure which network name to use.',
-    ])
-  }
-
   const tokenListChain = getTokenListChainForDataset(dataset)
   if (!tokenListChain) {
     recordUnsupportedTokenListNetwork(dataset)
-    throw new ActionableError(`No open token list is configured for ${dataset}.`, [
-      'Use token_addresses directly for this network.',
-      'Use portal_list_networks to check whether another network alias maps to a supported EVM mainnet.',
-    ])
+    throw new ActionableError(
+      `No open token list is configured for ${dataset}.`,
+      [
+        'Pass token_addresses directly for this network.',
+        'Token lists are available for ethereum-mainnet, base-mainnet, arbitrum-one, optimism-mainnet, polygon-mainnet, avalanche-mainnet, binance-mainnet, solana-mainnet, and tron-mainnet.',
+      ],
+      { network: dataset },
+      { code: 'unsupported_operation', origin: 'client_input', retryable: false },
+    )
   }
 
   const result = await getCoinGeckoTokenListWithStatus(tokenListChain)
@@ -265,7 +282,12 @@ export async function getTokenMetadataMapForDatasetWithStatus(
 ): Promise<{ metadata: Map<string, ResolvedTokenEntity>; lookup: TokenListLookupMetadata }> {
   const result = await getTokenListForDatasetWithStatus(dataset)
   return {
-    metadata: new Map(result.tokens.map((token) => [token.address.toLowerCase(), token])),
+    metadata: new Map(
+      result.tokens.map((token) => [
+        /^0x[0-9a-fA-F]{40}$/.test(token.address) ? token.address.toLowerCase() : token.address,
+        token,
+      ]),
+    ),
     lookup: result.lookup,
   }
 }
@@ -294,8 +316,21 @@ export async function resolveTokenByAddressFromListWithStatus(
   }
 
   const result = await getCoinGeckoTokenListWithStatus(tokenListChain)
-  const normalizedAddress = normalizeEvmAddress(address)
-  const token = result.tokens.find((entry) => entry.address.toLowerCase() === normalizedAddress)
+  const trimmed = address.trim()
+  let token: CoinGeckoToken | undefined
+  if (/^0x[0-9a-fA-F]{40}$/.test(trimmed)) {
+    const normalizedAddress = normalizeEvmAddress(trimmed)
+    token = result.tokens.find((entry) => entry.address.toLowerCase() === normalizedAddress)
+  } else if (tokenListChain === 'tron' && /^(?:0x)?41[0-9a-fA-F]{40}$/.test(trimmed)) {
+    try {
+      const base58 = tronHexToBase58(trimmed.replace(/^0x/i, '').toLowerCase())
+      token = result.tokens.find((entry) => entry.address === base58)
+    } catch {
+      token = undefined
+    }
+  } else {
+    token = result.tokens.find((entry) => entry.address === trimmed)
+  }
   return {
     match: token ? asResolvedToken(dataset, tokenListChain, token) : undefined,
     lookup: lookupFromTokenListResult(result),
@@ -322,10 +357,15 @@ export async function resolveTokenQueryFromList({
   const tokenListChain = getTokenListChainForDataset(dataset)
   if (!tokenListChain) {
     recordUnsupportedTokenListNetwork(dataset)
-    throw new ActionableError(`No open token list is configured for ${dataset}.`, [
-      'Use token_addresses directly for this network.',
-      'Try a supported EVM mainnet such as ethereum-mainnet, base-mainnet, arbitrum-one, optimism-mainnet, polygon-mainnet, avalanche-mainnet, or binance-mainnet.',
-    ])
+    throw new ActionableError(
+      `No open token list is configured for ${dataset}.`,
+      [
+        'Use token_addresses directly for this network.',
+        'Try a supported mainnet such as ethereum-mainnet, base-mainnet, arbitrum-one, optimism-mainnet, polygon-mainnet, avalanche-mainnet, binance-mainnet, solana-mainnet, or tron-mainnet.',
+      ],
+      { network: dataset },
+      { code: 'unsupported_operation', origin: 'client_input', retryable: false },
+    )
   }
 
   const trimmed = query.trim()
@@ -368,10 +408,15 @@ export async function resolveTokenSymbolsForQuery({
   const tokenListChain = getTokenListChainForDataset(dataset)
   if (!tokenListChain) {
     recordUnsupportedTokenListNetwork(dataset)
-    throw new ActionableError(`No open token list is configured for ${dataset}.`, [
-      'Use token_addresses directly for this network.',
-      'Try a supported EVM mainnet such as ethereum-mainnet, base-mainnet, arbitrum-one, optimism-mainnet, polygon-mainnet, avalanche-mainnet, or binance-mainnet.',
-    ])
+    throw new ActionableError(
+      `No open token list is configured for ${dataset}.`,
+      [
+        'Use token_addresses directly for this network.',
+        'Try a supported mainnet such as ethereum-mainnet, base-mainnet, arbitrum-one, optimism-mainnet, polygon-mainnet, avalanche-mainnet, binance-mainnet, solana-mainnet, or tron-mainnet.',
+      ],
+      { network: dataset },
+      { code: 'unsupported_operation', origin: 'client_input', retryable: false },
+    )
   }
 
   const normalizedMaxMatches = Math.min(Math.max(Math.floor(maxMatchesPerSymbol), 1), 20)

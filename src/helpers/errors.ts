@@ -325,7 +325,15 @@ function inferErrorMetadata(message: string): Required<Omit<ActionableErrorMetad
     normalized.includes('portal server error') ||
     normalized.includes('portal api error (5') ||
     normalized.includes('failed to fetch') ||
-    normalized.includes('fetch failed')
+    normalized.includes('fetch failed') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('other side closed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('etimedout') ||
+    normalized.includes('connect timeout') ||
+    normalized.includes('headers timeout') ||
+    normalized.includes('body timeout')
   ) {
     return { code: 'upstream_error', origin: 'upstream', retryable: true }
   }
@@ -459,13 +467,20 @@ export function parsePortalError(
   status: number,
   errorText: string,
   context?: { url?: string; query?: unknown },
+  options?: { retryAfterMs?: number },
 ): ActionableError {
   const suggestions: string[] = []
   let message = `Portal API Error (${status})`
+  const explicitRetryAfterMs =
+    typeof options?.retryAfterMs === 'number' && Number.isFinite(options.retryAfterMs) && options.retryAfterMs >= 0
+      ? Math.round(options.retryAfterMs)
+      : undefined
   let metadata: ActionableErrorMetadata = {
     code: 'upstream_error',
     origin: 'upstream',
-    retryable: status >= 500,
+    retryable:
+      (status >= 500 && status !== 501 && status !== 505) || status === 408 || status === 409 || status === 429,
+    ...(explicitRetryAfterMs !== undefined ? { retryAfterMs: explicitRetryAfterMs } : {}),
   }
   const upstreamOverloaded =
     status === 529 ||
@@ -547,10 +562,28 @@ export function parsePortalError(
     }
   }
 
+  // 408 Request Timeout
+  if (status === 408) {
+    message = errorText ? `Portal request timed out (408): ${errorText}` : 'Portal request timed out (408)'
+    metadata = {
+      code: 'upstream_timeout',
+      origin: 'upstream',
+      retryable: true,
+      ...(explicitRetryAfterMs !== undefined ? { retryAfterMs: explicitRetryAfterMs } : {}),
+    }
+    suggestions.push('Retry the same request')
+    suggestions.push('Try a smaller block range if timeouts continue')
+  }
+
   // 409 Conflict (Chain Reorg)
   if (status === 409) {
     message = 'Chain reorganization detected'
-    metadata = { code: 'upstream_reorg', origin: 'upstream', retryable: true }
+    metadata = {
+      code: 'upstream_reorg',
+      origin: 'upstream',
+      retryable: true,
+      ...(explicitRetryAfterMs !== undefined ? { retryAfterMs: explicitRetryAfterMs } : {}),
+    }
     suggestions.push('Wait a few seconds and retry with the same parameters')
     suggestions.push("Query finalized blocks only (older blocks that won't reorg)")
     suggestions.push('For recent data, use smaller block ranges (< 100 blocks)')
@@ -558,12 +591,19 @@ export function parsePortalError(
 
   // 429 Rate Limited
   if (status === 429) {
-    const retryAfterMatch = errorText.match(/Retry after (\d+)s/i)
-    const retryAfterMs = retryAfterMatch ? Number(retryAfterMatch[1]) * 1000 : undefined
-    metadata = { code: 'rate_limited', origin: 'upstream', retryable: true, retryAfterMs }
-    if (retryAfterMatch) {
-      message = `Rate limited. Retry after ${retryAfterMatch[1]} seconds`
-      suggestions.push(`Wait ${retryAfterMatch[1]} seconds before retrying`)
+    const retryAfterMatch = errorText.match(/Retry after (\d+(?:\.\d+)?)s/i)
+    const retryAfterMs =
+      explicitRetryAfterMs ?? (retryAfterMatch ? Math.round(Number(retryAfterMatch[1]) * 1000) : undefined)
+    metadata = {
+      code: 'rate_limited',
+      origin: 'upstream',
+      retryable: true,
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    }
+    if (retryAfterMs !== undefined) {
+      const retryAfterSeconds = Math.ceil(retryAfterMs / 1000)
+      message = `Rate limited. Retry after ${retryAfterSeconds} seconds`
+      suggestions.push(`Wait ${retryAfterSeconds} seconds before retrying`)
     } else {
       message = 'Rate limited'
       suggestions.push('Wait a few seconds before retrying')
@@ -576,17 +616,23 @@ export function parsePortalError(
   // Portal may use 529 for capacity overloads. Treat it as an explicit rate
   // limit so clients receive truthful retry guidance instead of a generic 5xx.
   if (upstreamOverloaded) {
-    const retryAfterMs = 5_000
-    message = 'Portal is temporarily overloaded. Retry after 5 seconds'
+    const retryAfterMs = explicitRetryAfterMs ?? 5_000
+    const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000))
+    message = `Portal is temporarily overloaded. Retry after ${retryAfterSeconds} seconds`
     metadata = { code: 'rate_limited', origin: 'upstream', retryable: true, retryAfterMs }
-    suggestions.push('Wait at least 5 seconds before retrying the same request')
+    suggestions.push(`Wait at least ${retryAfterSeconds} seconds before retrying the same request`)
     suggestions.push('Reduce request frequency if overloads continue')
   }
 
   // 503 Worker unavailable
   if (status === 503) {
     message = `Portal worker temporarily unavailable (503): ${errorText}`
-    metadata = { code: 'upstream_unavailable', origin: 'upstream', retryable: true }
+    metadata = {
+      code: 'upstream_unavailable',
+      origin: 'upstream',
+      retryable: true,
+      ...(explicitRetryAfterMs !== undefined ? { retryAfterMs: explicitRetryAfterMs } : {}),
+    }
     suggestions.push('IMPORTANT: This is a transient error — retry the same request immediately')
     suggestions.push('Portal workers rotate frequently; the next attempt will likely hit a different worker')
     suggestions.push('If retries fail, try a slightly different block range (e.g., shift by 100 blocks)')
@@ -596,7 +642,12 @@ export function parsePortalError(
   // Other 5xx Server Errors
   if (status >= 500 && status !== 503 && !upstreamOverloaded) {
     message = `Portal server error (${status}): ${errorText}`
-    metadata = { code: 'upstream_error', origin: 'upstream', retryable: true }
+    metadata = {
+      code: 'upstream_error',
+      origin: 'upstream',
+      retryable: status !== 501 && status !== 505,
+      ...(explicitRetryAfterMs !== undefined ? { retryAfterMs: explicitRetryAfterMs } : {}),
+    }
     suggestions.push('This is a Portal API infrastructure issue')
     suggestions.push('Wait a few minutes and retry')
     suggestions.push('Try a different dataset or smaller block range')
@@ -805,6 +856,67 @@ export function createUnsupportedMetricError(params: {
   )
 }
 
+const PERMANENT_NETWORK_ERROR_CODES = new Set([
+  'ENOTFOUND',
+  'EAI_NONAME',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ERR_INVALID_URL',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+])
+
+const TRANSIENT_NETWORK_ERROR_CODES = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'EAI_AGAIN',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CLOSED',
+])
+
+function isPermanentNetworkError(error: Error): boolean {
+  let current: unknown = error
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth += 1) {
+    const code = (current as { code?: unknown }).code
+    if (typeof code === 'string' && PERMANENT_NETWORK_ERROR_CODES.has(code)) {
+      return true
+    }
+    const message = (current as { message?: unknown }).message
+    if (typeof message === 'string' && /\b(ENOTFOUND|EAI_NONAME|ENETUNREACH|EHOSTUNREACH)\b/i.test(message)) {
+      return true
+    }
+    current = (current as { cause?: unknown }).cause
+  }
+  return false
+}
+
+function isTransientNetworkError(error: Error): boolean {
+  let current: unknown = error
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth += 1) {
+    const code = (current as { code?: unknown }).code
+    if (typeof code === 'string' && TRANSIENT_NETWORK_ERROR_CODES.has(code)) {
+      return true
+    }
+    const message = (current as { message?: unknown }).message
+    if (
+      typeof message === 'string' &&
+      /socket hang up|other side closed|econnreset|econnrefused|etimedout|epipe|eai_again|connect timeout|headers timeout|body timeout|network error/i.test(
+        message,
+      )
+    ) {
+      return true
+    }
+    current = (current as { cause?: unknown }).cause
+  }
+  return false
+}
+
 /**
  * Wrap any error with actionable context
  */
@@ -838,6 +950,24 @@ export function wrapError(error: unknown, context?: Record<string, unknown>): Er
           'If the problem continues, narrow the timeframe or block range',
           'Do not treat any rows from the interrupted response as complete',
         ],
+        context,
+        { code: 'upstream_error', origin: 'upstream', retryable: true },
+      )
+    }
+
+    if (isPermanentNetworkError(error)) {
+      return new ActionableError(
+        error.message,
+        ['Verify the Portal endpoint URL and network connectivity before retrying'],
+        context,
+        { code: 'upstream_error', origin: 'upstream', retryable: false },
+      )
+    }
+
+    if (isTransientNetworkError(error)) {
+      return new ActionableError(
+        error.message,
+        ['Retry the same request', 'If the problem continues, narrow the timeframe or block range'],
         context,
         { code: 'upstream_error', origin: 'upstream', retryable: true },
       )

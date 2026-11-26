@@ -280,25 +280,6 @@ function buildMetricCardHints(payload: RecordLike, ui?: PortalUiSpec): LlmMetric
     })
 }
 
-function buildHeadline(payload: RecordLike, ui?: PortalUiSpec): LlmHeadlineHint | undefined {
-  const title = ui?.headline?.title
-  const subtitle = ui?.headline?.subtitle
-  const summary =
-    typeof payload.answer === 'string'
-      ? payload.answer
-      : typeof payload._summary === 'string'
-        ? payload._summary
-        : undefined
-
-  if (!title && !subtitle && !summary) return undefined
-
-  return {
-    ...(title ? { title } : {}),
-    ...(subtitle ? { subtitle } : {}),
-    ...(summary ? { summary } : {}),
-  }
-}
-
 function buildChartHint(payload: RecordLike): LlmChartHint | undefined {
   const chart = payload.chart
   if (!isRecord(chart) || typeof chart.data_key !== 'string' || typeof chart.kind !== 'string') {
@@ -664,7 +645,7 @@ function buildPrimaryPreview(
           ? [{ row: primaryValue[primaryValue.length - 1] as RecordLike, index: primaryValue.length - 1 }]
           : []
         : primaryValue
-            .slice(0, Math.min(3, primaryValue.length))
+            .slice(0, Math.min(1, primaryValue.length))
             .map((row, index) => ({ row, index }))
             .filter((entry): entry is { row: RecordLike; index: number } => isRecord(entry.row))
 
@@ -731,61 +712,17 @@ function inferNormalizedFields(
   return fields.length > 0 ? fields : undefined
 }
 
-function buildParserNotes(
-  payload: RecordLike,
-  normalizedOutput: boolean,
-  metricCards: LlmMetricCardHint[],
-  chartHint: LlmChartHint | undefined,
-  tableHints: LlmTableHint[],
-  overrides?: LlmOverrides,
-): string[] | undefined {
-  const pagination = isRecord(payload._pagination) ? payload._pagination : undefined
-  const paginationNote = pagination
-    ? pagination.continuation_scope === 'adjacent_window'
-      ? 'A pagination cursor loads an older adjacent window; use _coverage to judge the completeness of the current window.'
-      : 'Check _pagination before assuming the returned list is complete.'
-    : undefined
-  const notes = [
-    metricCards.length > 0
-      ? 'Use _llm.metric_cards for headline numbers before recomputing values from arrays.'
-      : undefined,
-    chartHint
-      ? 'Use _llm.chart plus chart.tooltip and chart.interactions metadata for plotting and hover labels instead of inferring series structure.'
-      : undefined,
-    tableHints.length > 0
-      ? 'Use _llm.tables columns for labels, ordering, and value formats instead of guessing from field names.'
-      : undefined,
-    normalizedOutput
-      ? 'When present, prefer normalized aliases like primary_id, record_type, timestamp_human, sender, and recipient for cross-chain answers.'
-      : undefined,
-    paginationNote,
-    ...(overrides?.parser_notes ?? []),
-  ].filter((note): note is string => Boolean(note))
-
-  return notes.length > 0 ? Array.from(new Set(notes)).slice(0, 6) : undefined
-}
-
 export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): PortalLlmHints {
   const ui = isRecord(payload._ui) ? (payload._ui as unknown as PortalUiSpec) : undefined
   const toolContract = isRecord(payload._tool_contract) ? payload._tool_contract : undefined
   const normalizedOutput = Boolean(toolContract?.normalized_output)
-  const payloadSize = JSON.stringify(payload).length
-  const compactHints = payloadSize > 12_000
-  const headline = buildHeadline(payload, ui)
   const chartHint = buildChartHint(payload)
   const tableHints = buildTableHints(payload)
   const metricCards = buildMetricCardHints(payload, ui)
   const sections = buildSections(payload, chartHint, tableHints)
   const { primaryPath, primaryKind } = inferPrimaryPath(payload, chartHint, tableHints, sections, overrides)
-  const llmMetricCards = compactHints ? metricCards.slice(0, 4) : metricCards
-  const llmTableHints = compactHints
-    ? tableHints.slice(0, 2).map((table) => ({
-        ...table,
-        columns: table.columns.slice(0, 4),
-      }))
-    : tableHints
-  const answerSequence = buildAnswerSequence(payload, llmMetricCards, primaryPath, overrides)
-  const recommendedViews = buildRecommendedViews(ui, chartHint, llmTableHints, llmMetricCards)
+  const answerSequence = buildAnswerSequence(payload, metricCards.slice(0, 4), primaryPath, overrides)
+  const recommendedViews = buildRecommendedViews(ui, chartHint, tableHints.slice(0, 2), metricCards.slice(0, 4))
   if (recommendedViews.length === 0) {
     const primarySection = sections.find((section) => section.path === primaryPath)
     recommendedViews.push({
@@ -796,78 +733,54 @@ export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): Po
       emphasis: 'primary',
     })
   }
-  const primaryPreview = buildPrimaryPreview(
-    payload,
-    primaryPath,
-    primaryKind,
-    llmTableHints.length > 0 ? llmTableHints : tableHints,
-  )
   const annotatedSections = annotateSections(sections, primaryPath, answerSequence, recommendedViews)
-  const llmSections = compactHints ? annotatedSections.slice(0, 5) : annotatedSections
-  const llmRecommendedViews = compactHints ? recommendedViews.slice(0, 3) : recommendedViews
+  const primaryPreview = overrides?.compact
+    ? undefined
+    : buildPrimaryPreview(payload, primaryPath, overrides?.primary_kind ?? primaryKind, tableHints)
   const normalizedFields = inferNormalizedFields(payload, primaryPath, normalizedOutput)
-  const parserNotes = buildParserNotes(payload, normalizedOutput, llmMetricCards, chartHint, llmTableHints, overrides)
-  const llmParserNotes = compactHints ? parserNotes?.slice(0, 3) : parserNotes
-  const nextSteps = isRecord(payload.next_steps) ? payload.next_steps : undefined
-  const followUpActions = asArray<UiFollowUpAction>(nextSteps?.actions ?? ui?.follow_up_actions)
-  const llmFollowUpActions = compactHints ? followUpActions.slice(0, 2) : followUpActions.slice(0, 6)
+  const hasNextCursor = isRecord(payload._pagination) && typeof payload._pagination.next_cursor === 'string'
 
-  if (overrides?.compact) {
-    const primarySection = annotatedSections.find((section) => section.path === primaryPath) ?? {
-      path: primaryPath,
-      kind: primaryKind,
-      priority: 'primary' as const,
-    }
-    const compactParserNotes = overrides.parser_notes?.slice(0, 1)
-    return {
-      version: 'portal_llm_v1',
-      primary_path: primaryPath,
-      primary_kind: overrides.primary_kind ?? primaryKind,
-      answer_sequence: answerSequence.slice(0, 4),
-      sections: [primarySection],
-      recommended_views: [],
-      ...(normalizedFields ? { normalized_fields: normalizedFields } : {}),
-      ...(isRecord(payload._pagination) && typeof payload._pagination.next_cursor === 'string'
-        ? { follow_up: { continue_cursor_path: '_pagination.next_cursor' } }
-        : {}),
-      ...(compactParserNotes ? { parser_notes: compactParserNotes } : {}),
-    }
-  }
+  /* Emit compact structural pointers instead of re-copying full charts,
+     tables, metric cards, and follow-up actions that already live at top level
+     (chart, tables, _ui, next_steps, items). Keep primary_preview when present
+     so exact identifiers and tiny amounts remain lossless in model previews. */
+  const compactSections: LlmSectionHint[] = (
+    overrides?.compact
+      ? [
+          annotatedSections.find((section) => section.path === primaryPath) ?? {
+            path: primaryPath,
+            kind: primaryKind,
+            priority: 'primary' as const,
+          },
+        ]
+      : annotatedSections.slice(0, 4)
+  ).map((section) => ({
+    path: section.path,
+    kind: section.kind,
+    ...(section.row_count !== undefined ? { row_count: section.row_count } : {}),
+    ...(section.priority ? { priority: section.priority } : {}),
+  }))
+
+  const compactViews: LlmViewHint[] = overrides?.compact
+    ? []
+    : recommendedViews.slice(0, 3).map((view) => ({
+        kind: view.kind,
+        ...(view.data_path ? { data_path: view.data_path } : view.source_path ? { source_path: view.source_path } : {}),
+        ...(view.emphasis ? { emphasis: view.emphasis } : {}),
+      }))
+
+  const customNotes = overrides?.parser_notes?.slice(0, 1)
 
   return {
     version: 'portal_llm_v1',
     primary_path: primaryPath,
     primary_kind: overrides?.primary_kind ?? primaryKind,
-    answer_sequence: answerSequence,
-    ...(headline ? { headline } : {}),
-    ...(llmMetricCards.length > 0 ? { metric_cards: llmMetricCards } : {}),
-    ...(chartHint ? { chart: chartHint } : {}),
-    ...(llmTableHints.length > 0 ? { tables: llmTableHints } : {}),
-    sections: llmSections,
-    recommended_views: llmRecommendedViews,
+    answer_sequence: overrides?.compact ? answerSequence.slice(0, 4) : answerSequence,
+    sections: compactSections,
+    recommended_views: compactViews,
     ...(primaryPreview ? { primary_preview: primaryPreview } : {}),
     ...(normalizedFields ? { normalized_fields: normalizedFields } : {}),
-    ...((typeof payload._pagination === 'object' && payload._pagination !== null) || llmFollowUpActions.length > 0
-      ? {
-          follow_up: {
-            ...(isRecord(payload._pagination) && typeof payload._pagination.next_cursor === 'string'
-              ? { continue_cursor_path: '_pagination.next_cursor' }
-              : {}),
-            ...(llmFollowUpActions.length > 0
-              ? {
-                  actions: llmFollowUpActions.map((action) => ({
-                    label: action.label,
-                    intent: action.intent,
-                    ...(action.target ? { target: action.target } : {}),
-                    executable: action.executable === true,
-                    ...(action.executable === true && action.tool ? { tool: action.tool } : {}),
-                    ...(action.cursor_path ? { cursor_path: action.cursor_path } : {}),
-                  })),
-                }
-              : {}),
-          },
-        }
-      : {}),
-    ...(llmParserNotes ? { parser_notes: llmParserNotes } : {}),
+    ...(hasNextCursor ? { follow_up: { continue_cursor_path: '_pagination.next_cursor' } } : {}),
+    ...(customNotes && customNotes.length > 0 ? { parser_notes: customNotes } : {}),
   }
 }

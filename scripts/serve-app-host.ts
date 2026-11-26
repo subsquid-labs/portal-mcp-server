@@ -11,7 +11,11 @@ import { Client } from '@modelcontextprotocol/client'
 import { InMemoryTransport } from '@modelcontextprotocol/server'
 import { build } from 'esbuild'
 
-import { ACTIVITY_EXPLORER_RESOURCE_URI } from '../src/apps/activity-explorer.ts'
+import {
+  ACTIVITY_EXPLORER_RESOURCE_URI,
+  MCP_APP_EXTENSION_ID,
+  MCP_APP_MIME_TYPE,
+} from '../src/apps/activity-explorer.ts'
 import { createPortalServer } from '../src/server.ts'
 
 const PORT = Number(process.env.PORT || 4174)
@@ -74,6 +78,21 @@ const PRESETS: Array<{ label: string; name: string; arguments: Record<string, un
       token0_symbol: 'cbETH',
       token1_symbol: 'WETH',
     },
+  },
+  {
+    label: 'Tron transactions · Tron',
+    name: 'portal_tron_query_transactions',
+    arguments: { network: 'tron-mainnet', timeframe: '15m', limit: 10 },
+  },
+  {
+    label: 'Tron activity 15m · Tron',
+    name: 'portal_get_time_series',
+    arguments: { network: 'tron-mainnet', metric: 'transaction_count', duration: '15m', interval: '5m' },
+  },
+  {
+    label: 'EVM traces · Base',
+    name: 'portal_evm_query_traces',
+    arguments: { network: 'base-mainnet', timeframe: '5m', trace_types: ['create'], limit: 8 },
   },
 ]
 
@@ -243,10 +262,25 @@ const page = (presets: typeof PRESETS) => `<!doctype html>
 
 async function main() {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  const portal = createPortalServer({ transport: 'stdio', appEnabled: true })
-  const client = new Client({ name: 'sqd-local-host', version: '1.0.0' })
+  // Leave appEnabled unset so the local host exercises auto mode via declared UI capability.
+  const portal = createPortalServer({ transport: 'stdio' })
+  const client = new Client(
+    { name: 'sqd-local-host', version: '1.0.0' },
+    {
+      capabilities: {
+        extensions: {
+          [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+        },
+      } as any,
+    },
+  )
   await portal.connect(serverTransport)
   await client.connect(clientTransport)
+  const listed = await client.listTools()
+  const uiToolCount = listed.tools.filter((tool) =>
+    Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
+  ).length
+  console.log(`SQD Explorer auto mode active: ${uiToolCount} UI-enabled tools advertised via ${MCP_APP_EXTENSION_ID}`)
 
   const resource = await client.readResource({ uri: ACTIVITY_EXPLORER_RESOURCE_URI })
   const resourceHtml = String((resource.contents[0] as { text?: string }).text ?? '')

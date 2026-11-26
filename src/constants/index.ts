@@ -7,7 +7,7 @@
 export const PORTAL_URL = process.env.PORTAL_URL || 'https://portal.sqd.dev'
 export const DEFAULT_TIMEOUT = 10000 // 10s for regular fetch (Portal API is fast, avg 200ms)
 export const STREAM_TIMEOUT = 15000 // 15s for streaming queries (was 60s, but API responds in <5s for reasonable queries)
-export const DEFAULT_RETRIES = 2 // Reduced from 3 - fail faster
+export const DEFAULT_RETRIES = 5 // Exponential retries within the shared wall-clock budget for transient 429/5xx errors
 
 // Query performance recommendations (based on real-world Portal API benchmarks)
 // Portal API typically responds in <1s for these ranges

@@ -4,12 +4,27 @@
 // prompt count. Needs `npm run build` first; no network.
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
+import { SKILLS_LIST_METHOD } from '@modelcontextprotocol/server/ext/skills'
+import { z } from 'zod'
+
+function listFilesRecursive(dir: string, rootDir = dir): string[] {
+  const results: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      results.push(...listFilesRecursive(full, rootDir))
+    } else {
+      results.push(path.relative(rootDir, full).split(path.sep).join('/'))
+    }
+  }
+  return results.sort()
+}
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -46,6 +61,12 @@ async function main() {
     assert(Array.isArray(manifest.tools) && manifest.tools.length === 31, 'manifest must list the 31 tools')
     assert(statSync(path.join(unpacked, 'icon.png')).size > 0, 'bundle must carry the icon')
     assert(statSync(path.join(unpacked, 'LICENSE')).size > 0, 'bundle must carry the licence')
+    const builtSkills = listFilesRecursive(path.resolve('dist/skills'))
+    const unpackedSkills = listFilesRecursive(path.join(unpacked, 'dist/skills'))
+    assert(
+      builtSkills.length > 0 && JSON.stringify(unpackedSkills) === JSON.stringify(builtSkills),
+      `bundle dist/skills (${unpackedSkills.length} files) must match built dist/skills (${builtSkills.length} files)`,
+    )
     for (const forbidden of ['dist/index.js.map', 'dist/index.d.ts']) {
       let present = true
       try {
@@ -72,6 +93,14 @@ async function main() {
       assert(tools.tools.length === 31, `bundle should list 31 tools, got ${tools.tools.length}`)
       const prompts = await client.listPrompts()
       assert(prompts.prompts.length === 3, `bundle should list 3 prompts, got ${prompts.prompts.length}`)
+      const skillsResult = await client.request(
+        { method: SKILLS_LIST_METHOD, params: {} },
+        z.object({ skills: z.array(z.record(z.string(), z.unknown())) }).passthrough(),
+      )
+      assert(skillsResult.skills.length === 4, `bundle should list 4 skills, got ${skillsResult.skills.length}`)
+      const skillRead = await client.readResource({ uri: 'skill://portal/SKILL.md' })
+      const skillText = skillRead.contents[0] && 'text' in skillRead.contents[0] ? skillRead.contents[0].text : ''
+      assert(skillText.includes('# Portal'), 'bundle should serve skill://portal/SKILL.md')
       assert(
         tools.tools.every((tool) => tool._meta === undefined || !('ui/resourceUri' in (tool._meta as object))),
         'the bundle must not offer the beta app unless the user opts in',

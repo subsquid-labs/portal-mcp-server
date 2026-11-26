@@ -16,7 +16,7 @@ import {
   buildTokenListLookupNotices,
   resolveTokenSymbolsForQuery,
 } from '../../helpers/entity-resolution.js'
-import { createUnsupportedChainError } from '../../helpers/errors.js'
+import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { resolveMethodSighashes } from '../../helpers/evm-aliases.js'
 import { portalFetchRecentRecordsWithScan, portalFetchStreamRange } from '../../helpers/fetch.js'
 import { getTransactionFields } from '../../helpers/field-presets.js'
@@ -107,6 +107,7 @@ type QueryTransactionsRequest = {
   max_token_symbol_matches?: number
   sighash?: string[]
   method?: string | string[]
+  transaction_hash?: string
   transaction_type?: number
   transaction_status?: number
   contract_creation?: boolean
@@ -170,7 +171,9 @@ function buildTokenResolutionNotices(
 ) {
   const notices: string[] = []
   if (unresolvedSymbols.length > 0) {
-    notices.push(`No token-list match found for ${fieldName}: ${unresolvedSymbols.join(', ')}.`)
+    notices.push(
+      `No token-list match found for ${fieldName}: ${unresolvedSymbols.map((symbol) => quoteUntrusted(symbol)).join(', ')}.`,
+    )
   }
   for (const resolution of resolutions) {
     if (resolution.matches.length > 1) {
@@ -297,6 +300,7 @@ function readBigIntField(tx: Record<string, unknown>, field: string): bigint | u
 function matchesClientTransactionFilters(
   tx: Record<string, unknown>,
   filters: {
+    transactionHash?: string
     transactionType?: number
     transactionStatus?: number
     contractCreation?: boolean
@@ -305,6 +309,10 @@ function matchesClientTransactionFilters(
     minEffectiveGasPriceWei?: bigint
   },
 ): boolean {
+  if (filters.transactionHash !== undefined) {
+    const hash = String(tx.hash ?? tx.tx_hash ?? '').toLowerCase()
+    if (hash !== filters.transactionHash) return false
+  }
   if (!matchesTransactionType(tx, filters.transactionType)) return false
 
   if (filters.transactionStatus !== undefined) {
@@ -630,7 +638,13 @@ export function registerQueryTransactionsTool(server: McpServer) {
         .union([z.string(), z.array(z.string())])
         .optional()
         .describe(
-          'FILTER: Common EVM method alias or 4-byte sighash. Examples: "transfer", "approve", "transferFrom", "deposit", "withdraw". Merges with sighash.',
+          'FILTER: Common EVM method alias or 4-byte sighash. Examples: "transfer", "approve", "swap", "transferFrom", "deposit", "withdraw". Merges with sighash.',
+        ),
+      transaction_hash: z
+        .string()
+        .optional()
+        .describe(
+          'FILTER: Exact 32-byte EVM transaction hash (0x...). Combine with from_block/to_block or a narrow timeframe; stops as soon as matched.',
         ),
       transaction_type: z
         .union([z.number(), z.string()])
@@ -738,6 +752,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       max_token_symbol_matches,
       sighash,
       method,
+      transaction_hash,
       transaction_type,
       transaction_status,
       contract_creation,
@@ -797,6 +812,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
         max_token_symbol_matches = paginationCursor.request.max_token_symbol_matches ?? 5
         sighash = paginationCursor.request.sighash
         method = paginationCursor.request.method
+        transaction_hash = paginationCursor.request.transaction_hash
         transaction_type = paginationCursor.request.transaction_type
         transaction_status = paginationCursor.request.transaction_status
         contract_creation = paginationCursor.request.contract_creation
@@ -894,6 +910,15 @@ export function registerQueryTransactionsTool(server: McpServer) {
       const normalizedSighash = Array.from(
         new Set([...(sighash ?? []), ...resolveMethodSighashes(method)].map((value) => value.toLowerCase())),
       )
+      const normalizedTransactionHash = transaction_hash?.trim().toLowerCase()
+      if (normalizedTransactionHash !== undefined && !/^0x[0-9a-f]{64}$/.test(normalizedTransactionHash)) {
+        throw new ActionableError(
+          `Invalid transaction_hash: ${quoteUntrusted(transaction_hash ?? '')}. Expected a 32-byte 0x-prefixed hex hash.`,
+          ['Pass a 66-character transaction hash such as 0x... and narrow the block range or timeframe.'],
+          { field: 'transaction_hash' },
+          { code: 'invalid_request', origin: 'client_input', retryable: false },
+        )
+      }
       const normalizedTransactionType = normalizeTransactionType(transaction_type)
       const normalizedTransactionStatus = normalizeTransactionStatus(transaction_status)
       const normalizedMinValueWei = normalizeBigIntFilter(min_value_wei, 'min_value_wei')
@@ -905,6 +930,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       const effectiveOrderBy = order_by ?? 'chronological'
       const effectiveAggregateMetric = aggregate_metric ?? 'count'
       const hasClientFilters =
+        normalizedTransactionHash !== undefined ||
         normalizedTransactionType !== undefined ||
         normalizedTransactionStatus !== undefined ||
         contract_creation !== undefined ||
@@ -914,7 +940,14 @@ export function registerQueryTransactionsTool(server: McpServer) {
         effectiveOrderBy !== 'chronological' ||
         aggregate_by !== undefined
       const effectiveScanOrder: 'earliest' | 'latest' =
-        scan_order ?? (hasClientFilters && effectiveOrderBy === 'chronological' ? 'earliest' : 'latest')
+        scan_order ??
+        (normalizedTransactionHash !== undefined
+          ? from_block !== undefined && to_block === undefined
+            ? 'earliest'
+            : 'latest'
+          : hasClientFilters && effectiveOrderBy === 'chronological'
+            ? 'earliest'
+            : 'latest')
       const { validatedToBlock: endBlock, head } = await validateBlockRange(
         dataset,
         resolvedFromBlock,
@@ -1059,14 +1092,24 @@ export function registerQueryTransactionsTool(server: McpServer) {
             fromBlock: resolvedFromBlock,
             toBlock: pageToBlock,
             limit,
-            chunkSize: normalizedTransactionType !== undefined ? 100 : adaptiveChunkSize,
+            chunkSize:
+              normalizedTransactionHash && !fromFilters && !toFilters
+                ? 50
+                : normalizedTransactionType !== undefined
+                  ? 100
+                  : adaptiveChunkSize,
             scanOrder: effectiveScanOrder,
             orderBy: effectiveOrderBy,
             maxScanBlocks: Math.max(
               1,
-              Math.min(max_scan_blocks ?? (aggregate_by ? 1000 : 10000), endBlock - resolvedFromBlock + 1),
+              Math.min(
+                max_scan_blocks ??
+                  (normalizedTransactionHash && !fromFilters && !toFilters ? 1000 : aggregate_by ? 1000 : 10000),
+                endBlock - resolvedFromBlock + 1,
+              ),
             ),
             clientFilters: {
+              transactionHash: normalizedTransactionHash,
               transactionType: normalizedTransactionType,
               transactionStatus: normalizedTransactionStatus,
               contractCreation: contract_creation,
@@ -1074,7 +1117,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
               minGasUsed: normalizedMinGasUsed,
               minEffectiveGasPriceWei: normalizedMinEffectiveGasPriceWei,
             },
-            candidateLimit: aggregate_by ? Math.max(limit * 200, 5000) : undefined,
+            candidateLimit: normalizedTransactionHash ? 1 : aggregate_by ? Math.max(limit * 200, 5000) : undefined,
             offset: paginationCursor?.skip_inclusive_block ?? 0,
           })
         : undefined
@@ -1114,6 +1157,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
         ...(max_token_symbol_matches !== undefined ? { max_token_symbol_matches } : {}),
         ...(normalizedSighash.length > 0 ? { sighash: normalizedSighash } : {}),
         ...(method ? { method } : {}),
+        ...(normalizedTransactionHash ? { transaction_hash: normalizedTransactionHash } : {}),
         ...(normalizedTransactionType !== undefined ? { transaction_type: normalizedTransactionType } : {}),
         ...(normalizedTransactionStatus !== undefined ? { transaction_status: normalizedTransactionStatus } : {}),
         ...(contract_creation !== undefined ? { contract_creation } : {}),
@@ -1328,7 +1372,9 @@ export function registerQueryTransactionsTool(server: McpServer) {
           `More matching transactions exist beyond the returned page for scanned blocks ${scanResult.scannedFromBlock}-${scanResult.scannedToBlock}; continue with _pagination.next_cursor.`,
         )
       }
-      const boundedSearchNotice = scanResult ? buildBoundedSearchNotice(scanResult, 'EVM transaction scan') : undefined
+      const exactHashMatched = Boolean(normalizedTransactionHash && page.pageItems.length > 0)
+      const boundedSearchNotice =
+        scanResult && !exactHashMatched ? buildBoundedSearchNotice(scanResult, 'EVM transaction scan') : undefined
       if (boundedSearchNotice) notices.push(boundedSearchNotice)
       const freshness = buildQueryFreshness({
         finality: finalized_only ? 'finalized' : 'latest',
@@ -1343,7 +1389,11 @@ export function registerQueryTransactionsTool(server: McpServer) {
         items: page.pageItems,
         getBlockNumber,
         hasMore: page.hasMore,
-        windowComplete: scanResult ? !scanResult.hasUnscannedBlocks : (recentScan?.exhausted ?? true),
+        windowComplete: exactHashMatched
+          ? true
+          : scanResult
+            ? !scanResult.hasUnscannedBlocks
+            : (recentScan?.exhausted ?? true),
       })
 
       const message =

@@ -25,6 +25,66 @@ type ListNetworksCursorRequest = {
   limit: number
 }
 
+const FEATURED_MAINNET_ORDER = [
+  'ethereum-mainnet',
+  'base-mainnet',
+  'arbitrum-one',
+  'optimism-mainnet',
+  'polygon-mainnet',
+  'solana-mainnet',
+  'bitcoin-mainnet',
+  'hyperliquid-fills',
+  'tron-mainnet',
+  'polkadot',
+  'binance-mainnet',
+  'avalanche-mainnet',
+  'zksync-mainnet',
+  'linea-mainnet',
+  'scroll-mainnet',
+  'gnosis-mainnet',
+  'monad-mainnet',
+  'unichain-mainnet',
+  'hyperliquid-mainnet',
+  'kusama',
+] as const
+
+const FEATURED_MAINNET_RANK = new Map<string, number>(FEATURED_MAINNET_ORDER.map((dataset, index) => [dataset, index]))
+
+function queryRelevanceRank(network: string, lowerQuery: string): number {
+  const lowerNetwork = network.toLowerCase()
+  const hyphenQuery = lowerQuery.replace(/\s+/g, '-')
+  if (lowerNetwork === lowerQuery || lowerNetwork === hyphenQuery) return 0
+  if (lowerNetwork.includes(lowerQuery) || lowerNetwork.includes(hyphenQuery)) return 1
+  const queryTokens = lowerQuery.split(/[\s-]+/).filter(Boolean)
+  if (queryTokens.length > 1 && queryTokens.every((token) => lowerNetwork.includes(token))) return 2
+  return 3
+}
+
+export function compareNetworkRows(
+  left: { network: string; type?: string; real_time?: boolean },
+  right: { network: string; type?: string; real_time?: boolean },
+  query?: string,
+): number {
+  const lowerQuery = query?.trim().toLowerCase()
+  if (lowerQuery) {
+    const relevanceDelta = queryRelevanceRank(left.network, lowerQuery) - queryRelevanceRank(right.network, lowerQuery)
+    if (relevanceDelta !== 0) return relevanceDelta
+  }
+  const leftFeatured = FEATURED_MAINNET_RANK.get(left.network)
+  const rightFeatured = FEATURED_MAINNET_RANK.get(right.network)
+  if (leftFeatured !== undefined || rightFeatured !== undefined) {
+    if (leftFeatured === undefined) return 1
+    if (rightFeatured === undefined) return -1
+    return leftFeatured - rightFeatured
+  }
+  const typeRank = (type?: string) => (type === 'mainnet' ? 0 : type === 'testnet' ? 1 : 2)
+  const typeDelta = typeRank(left.type) - typeRank(right.type)
+  if (typeDelta !== 0) return typeDelta
+  const rtDelta = Number(Boolean(right.real_time)) - Number(Boolean(left.real_time))
+  if (rtDelta !== 0) return rtDelta
+  return left.network.localeCompare(right.network)
+}
+
 export function registerListDatasetsTool(server: McpServer) {
   registerPortalTool(
     server,
@@ -38,7 +98,14 @@ export function registerListDatasetsTool(server: McpServer) {
       network_type: z.enum(['mainnet', 'testnet', 'devnet']).optional().describe('Filter by network type'),
       query: z.string().optional().describe('Search by name, alias, or chain ID'),
       real_time_only: z.boolean().optional().describe('Only show networks with a real-time indexed head'),
-      limit: z.number().max(100).optional().default(25).describe('Max results to return (default: 25, max: 100)'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .optional()
+        .default(25)
+        .describe('Max results to return (default: 25, max: 100)'),
       cursor: z.string().optional().describe('Continuation cursor from a previous network catalog page'),
     },
     async ({ vm, network_type, query, real_time_only, limit, cursor }) => {
@@ -54,10 +121,11 @@ export function registerListDatasetsTool(server: McpServer) {
         limit = paginationCursor.request.limit
       }
 
+      const normalizedQuery = query?.trim() || undefined
       const request: ListNetworksCursorRequest = {
         ...(vm ? { vm } : {}),
         ...(network_type ? { network_type } : {}),
-        ...(query ? { query } : {}),
+        ...(normalizedQuery ? { query: normalizedQuery } : {}),
         ...(real_time_only !== undefined ? { real_time_only } : {}),
         limit,
       }
@@ -111,18 +179,23 @@ export function registerListDatasetsTool(server: McpServer) {
         datasets = datasets.filter((d) => d.real_time)
       }
 
-      if (query) {
-        const lower = query.toLowerCase()
+      if (normalizedQuery) {
+        const lower = normalizedQuery.toLowerCase()
+        const hyphenated = lower.replace(/\s+/g, '-')
+        const queryTokens = lower.split(/[\s-]+/).filter(Boolean)
         datasets = datasets.filter((d) => {
-          if (d.dataset.toLowerCase().includes(lower)) return true
+          const nameLower = d.dataset.toLowerCase()
+          if (nameLower.includes(lower) || nameLower.includes(hyphenated)) return true
           if (d.aliases.some((a) => a.toLowerCase().includes(lower))) return true
           // The resolver accepts these nicknames, so the catalog must find them too.
           if (getChainAliases(d.dataset).some((a) => a === lower || a.includes(lower))) return true
           if (d.metadata?.display_name?.toLowerCase().includes(lower)) return true
           // Search by chain ID
           if (d.metadata?.evm?.chain_id?.toString() === lower) return true
+          // Multi-word queries like "base sepolia" should match datasets containing all tokens
+          if (queryTokens.length > 1 && queryTokens.every((token) => nameLower.includes(token))) return true
           // Fuzzy: match parts
-          const parts = d.dataset.toLowerCase().split('-')
+          const parts = nameLower.split('-')
           if (parts.some((part) => part.includes(lower) || lower.includes(part))) return true
           return false
         })
@@ -166,6 +239,8 @@ export function registerListDatasetsTool(server: McpServer) {
         }
       })
 
+      results.sort((left, right) => compareNetworkRows(left, right, normalizedQuery))
+
       const totalAvailable = results.length
       const { pageItems, hasMore, nextOffset } = paginateOffsetItems(results, limit, currentOffset)
       const nextCursor = hasMore
@@ -195,8 +270,8 @@ export function registerListDatasetsTool(server: McpServer) {
           pagination: buildPaginationInfo(limit, pageItems.length, nextCursor),
           ordering: {
             kind: 'catalog',
-            page_order: 'portal_catalog_order',
-            sorted_by: 'portal_catalog',
+            page_order: normalizedQuery ? 'relevance_ranked_catalog_order' : 'featured_catalog_order',
+            sorted_by: normalizedQuery ? 'query_relevance' : 'featured_mainnet_rank',
             direction: 'asc',
             continuation: nextCursor ? 'next_page' : 'none',
           },

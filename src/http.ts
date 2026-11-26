@@ -1,16 +1,25 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http'
 
 import { toNodeHandler } from '@modelcontextprotocol/node'
-import { type McpRequestContext, createMcpHandler } from '@modelcontextprotocol/server'
+import { type McpHandlerRequestOptions, type McpRequestContext, createMcpHandler } from '@modelcontextprotocol/server'
 
-import { isActivityExplorerEnabledByDeployment, resolveActivityExplorerSurface } from './apps/activity-explorer.js'
+import {
+  extractDeclaredUiCapabilityFromBody,
+  getActivityExplorerDeploymentMode,
+  isActivityExplorerEnabledByDeployment,
+  parseExplicitActivityExplorerQueryFlag,
+  resolveActivityExplorerSurface,
+} from './apps/activity-explorer.js'
 import { ENDPOINT_PAGE_HEADERS, renderEndpointPage, wantsEndpointPage } from './endpoint-page.js'
 import { hasConfiguredCursorSecret } from './helpers/pagination.js'
+import { runWithPortalRequestSignal } from './helpers/request-context.js'
 import {
   connectionKeyFromRequest,
   evaluateBodyLimit,
   evaluateRequestGuard,
+  isTrustedPeer,
   parseTrustedProxyPrefixes,
   readPositiveInt,
   readTrustedProxyCount,
@@ -20,6 +29,7 @@ import { register } from './metrics.js'
 import { type RuntimeRequestContext, getObservabilityStatus } from './observability.js'
 import { createReadinessTracker } from './readiness.js'
 import { createPortalServer } from './server.js'
+import { SERVER_CARD_HEADERS, buildServerCard } from './server-card.js'
 import { requestedToolsetsFromRequest } from './toolsets.js'
 import { recordRequestSpan, startTracing, stopTracing, tracingStatus } from './tracing.js'
 import { gitCommit, npmVersion } from './version.js'
@@ -42,6 +52,32 @@ const READY_PROBE_INTERVAL_MS = readPositiveInt(process.env.MCP_READY_PROBE_INTE
 const READY_MAX_AGE_MS = readPositiveInt(process.env.MCP_READY_MAX_AGE_MS, 90_000)
 const TRUSTED_PROXIES = readTrustedProxyCount(process.env.MCP_TRUST_PROXY)
 const TRUSTED_PROXY_PREFIXES = parseTrustedProxyPrefixes(process.env.MCP_TRUSTED_PROXY_PREFIXES)
+const SAFE_HOST_AUTHORITY = /^(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(?::\d{1,5})?$/
+
+function parseConfiguredPublicOrigin(raw: string | undefined): string | undefined {
+  if (!raw?.trim()) return undefined
+  try {
+    const parsed = new URL(raw.trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+    return parsed.origin
+  } catch {
+    return undefined
+  }
+}
+
+const PUBLIC_ORIGIN = parseConfiguredPublicOrigin(process.env.MCP_PUBLIC_ORIGIN)
+
+function resolveServerCardOrigin(req: IncomingMessage): string | undefined {
+  if (PUBLIC_ORIGIN) return PUBLIC_ORIGIN
+  const rawHost = readHeader(req, 'host')?.trim()
+  if (!rawHost || !SAFE_HOST_AUTHORITY.test(rawHost)) return undefined
+  const trustedProxy = TRUSTED_PROXIES > 0 && isTrustedPeer(req.socket.remoteAddress, TRUSTED_PROXY_PREFIXES)
+  const forwardedProto = trustedProxy
+    ? readHeader(req, 'x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+    : undefined
+  const scheme = forwardedProto === 'https' ? 'https' : 'http'
+  return `${scheme}://${rawHost}`
+}
 // Internal header carrying the hashed connection key from the Node layer to the
 // MCP handler; any client-supplied value is overwritten.
 const CONNECTION_KEY_HEADER = 'x-sqd-connection-key'
@@ -97,14 +133,17 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers: R
   res.end(JSON.stringify(body))
 }
 
+const requestUiDeclaredStorage = new AsyncLocalStorage<boolean>()
+
 function runtimeContextFromRequest(ctx: McpRequestContext): RuntimeRequestContext {
   const headers = ctx.requestInfo?.headers
+  const uiDeclared = requestUiDeclaredStorage.getStore() ?? false
 
   return {
     transport: 'http',
     requestId: headers?.get('x-request-id') || undefined,
     protocolVersion: ctx.era === 'modern' ? '2026-07-28' : undefined,
-    appEnabled: resolveActivityExplorerSurface(ctx.requestInfo),
+    appEnabled: resolveActivityExplorerSurface(ctx.requestInfo, { uiDeclared }),
     toolsets: requestedToolsetsFromRequest(ctx.requestInfo),
     connectionKey: headers?.get(CONNECTION_KEY_HEADER) || undefined,
     userAgent: headers?.get('user-agent') || undefined,
@@ -114,16 +153,40 @@ function runtimeContextFromRequest(ctx: McpRequestContext): RuntimeRequestContex
 const mcpHandler = createMcpHandler((ctx) => createPortalServer(runtimeContextFromRequest(ctx)), {
   legacy: 'stateless',
   responseMode: 'auto',
+  maxRequestBodySize: MAX_BODY_BYTES,
   onerror(error) {
     console.error('[mcp:http]', error)
   },
 })
 
-const handleMcpRequest = toNodeHandler(mcpHandler, {
-  onerror(error) {
-    console.error('[mcp:http-adapter]', error)
+const handleMcpRequest = toNodeHandler(
+  {
+    async fetch(request: Request, options?: McpHandlerRequestOptions) {
+      let uiDeclared = false
+      const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
+      if (
+        request.method === 'POST' &&
+        contentType.includes('application/json') &&
+        getActivityExplorerDeploymentMode() === 'auto' &&
+        parseExplicitActivityExplorerQueryFlag({ url: request.url }) === undefined
+      ) {
+        try {
+          const body = await request.clone().json()
+          uiDeclared = extractDeclaredUiCapabilityFromBody(body)
+        } catch {
+          uiDeclared = false
+        }
+      }
+      return requestUiDeclaredStorage.run(uiDeclared, () => mcpHandler.fetch(request, options))
+    },
   },
-})
+  {
+    maxRequestBodySize: MAX_BODY_BYTES,
+    onerror(error) {
+      console.error('[mcp:http-adapter]', error)
+    },
+  },
+)
 
 const server = createServer(
   {
@@ -164,8 +227,34 @@ const server = createServer(
            Explorer on or off restarts the process and needs to see whether the
            restart took. A caller's own `?app=1` or `?app=0` is answered on the
            MCP connection, not here. */
-        app: { enabled: isActivityExplorerEnabledByDeployment(), stage: 'beta' },
+        app: {
+          enabled: isActivityExplorerEnabledByDeployment(),
+          mode: getActivityExplorerDeploymentMode(),
+          stage: 'beta',
+        },
       })
+      return
+    }
+
+    if (url.pathname === '/.well-known/mcp/server-card.json' || url.pathname === '/.well-known/mcp') {
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+          'Access-Control-Allow-Headers': 'Accept, Content-Type',
+          'Cache-Control': 'public, max-age=300',
+        })
+        res.end()
+        return
+      }
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { 'Content-Type': 'application/json', Allow: 'GET, HEAD, OPTIONS' })
+        res.end(JSON.stringify({ error: 'Method not allowed' }))
+        return
+      }
+      const payload = JSON.stringify(buildServerCard({ origin: resolveServerCardOrigin(req) }), null, 2)
+      res.writeHead(200, SERVER_CARD_HEADERS)
+      res.end(req.method === 'HEAD' ? undefined : payload)
       return
     }
 
@@ -240,18 +329,31 @@ const server = createServer(
         )
         return
       }
-      /* One span per MCP request, parented to the caller's own trace when the
-         header carries one. Tool spans hang off it, so a batched request is a
-         single tree rather than a handful of unrelated roots. */
-      await recordRequestSpan(
-        {
-          method: req.method ?? 'POST',
-          transport: 'http',
-          traceparent: readHeader(req, 'traceparent'),
-          tracestate: readHeader(req, 'tracestate'),
-        },
-        () => handleMcpRequest(req, res),
-      )
+      /* Propagate client socket disconnects to in-flight Portal fetches and
+         retry waits so abandoned HTTP requests stop consuming upstream work. */
+      const disconnectController = new AbortController()
+      const onResponseClose = () => {
+        if (!res.writableEnded) disconnectController.abort()
+      }
+      res.once('close', onResponseClose)
+      try {
+        /* One span per MCP request, parented to the caller's own trace when the
+           header carries one. Tool spans hang off it, so a batched request is a
+           single tree rather than a handful of unrelated roots. */
+        await runWithPortalRequestSignal(disconnectController.signal, () =>
+          recordRequestSpan(
+            {
+              method: req.method ?? 'POST',
+              transport: 'http',
+              traceparent: readHeader(req, 'traceparent'),
+              tracestate: readHeader(req, 'tracestate'),
+            },
+            () => handleMcpRequest(req, res),
+          ),
+        )
+      } finally {
+        res.off('close', onResponseClose)
+      }
       return
     }
 

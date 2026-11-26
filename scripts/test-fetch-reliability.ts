@@ -13,6 +13,7 @@ import { scanBoundedBlockRange } from '../src/helpers/bounded-search.js'
 import { ActionableError, RequestCancelledError, parsePortalError } from '../src/helpers/errors.js'
 import { fetchExternalJson, getCoinGeckoTokenListWithStatus } from '../src/helpers/external-apis.js'
 import {
+  MAX_RETRY_WALL_CLOCK_MS,
   computeRetryAttemptTimeoutMs,
   computeRetryDelayMs,
   portalFetch,
@@ -309,22 +310,24 @@ async function main() {
     'retry jitter must not violate Retry-After',
   )
   assert(
-    computeRetryAttemptTimeoutMs(30_000, 2, 1_000, 1_000) === 15_000,
+    computeRetryAttemptTimeoutMs(60_000, 2, 1_000, 1_000) === MAX_RETRY_WALL_CLOCK_MS,
     'retry-enabled requests should cap their first attempt to the total wall-clock budget',
   )
   assert(
-    computeRetryAttemptTimeoutMs(30_000, 2, 1_000, 13_000) === 3_000,
+    computeRetryAttemptTimeoutMs(60_000, 2, 1_000, 1_000 + MAX_RETRY_WALL_CLOCK_MS - 3_000) === 3_000,
     'later retry attempts should receive only the remaining wall-clock budget',
   )
   assert(
-    computeRetryAttemptTimeoutMs(30_000, 2, 1_000, 16_000) === 0,
+    computeRetryAttemptTimeoutMs(60_000, 2, 1_000, 1_000 + MAX_RETRY_WALL_CLOCK_MS + 1_000) === 0,
     'retry attempts should stop after the wall-clock budget is exhausted',
   )
   assert(
-    computeRetryAttemptTimeoutMs(30_000, 0, 1_000, 16_000) === 30_000,
+    computeRetryAttemptTimeoutMs(60_000, 0, 1_000, 1_000 + MAX_RETRY_WALL_CLOCK_MS + 1_000) === 60_000,
     'single-attempt callers should retain their explicit request timeout',
   )
-  console.log('PASS  retry request attempts share one enforced 15-second wall-clock budget')
+  console.log(
+    `PASS  retry request attempts share one enforced ${MAX_RETRY_WALL_CLOCK_MS / 1000}-second wall-clock budget`,
+  )
 
   try {
     formatResult(
@@ -469,6 +472,19 @@ async function main() {
       return
     }
 
+    if (req.url === '/server-error-once') {
+      const attempt = (failureRequests.get(req.url) ?? 0) + 1
+      failureRequests.set(req.url, attempt)
+      if (attempt === 1) {
+        res.writeHead(502, { 'Content-Type': 'application/json', 'Retry-After': '0' })
+        res.end(JSON.stringify({ error: 'transient gateway failure' }))
+      } else {
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
+        res.end('{"number":1}\n')
+      }
+      return
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
     res.flushHeaders()
     res.write('{"number":1}\n')
@@ -523,6 +539,9 @@ async function main() {
     const rateLimitRecovery = await portalFetch<{ ok: boolean }>(`${baseUrl}/rate-limit-once`, { retries: 1 })
     assert(rateLimitRecovery.ok, 'rate-limited requests should recover within their retry budget')
     assert(failureRequests.get('/rate-limit-once') === 2, 'rate-limit recovery should use one bounded retry')
+    const serverErrorRecovery = await portalFetchStream(`${baseUrl}/server-error-once`, {}, { retries: 1 })
+    assert(serverErrorRecovery.length === 1, 'transient 5xx stream requests should recover within their retry budget')
+    assert(failureRequests.get('/server-error-once') === 2, '5xx recovery should use one bounded retry')
     await expectFastFailure(
       'final rate-limit attempt returns immediately with retry metadata',
       () => portalFetch(`${baseUrl}/rate-limit-final`, { retries: 0 }),
@@ -842,6 +861,7 @@ async function main() {
       assert(closedRequests > closedBeforeMcpCancellation, 'MCP cancellation should close the upstream request')
 
       const noArgsCancellation = new AbortController()
+      const closedBeforeNoArgsCancellation = closedRequests
       setTimeout(() => noArgsCancellation.abort(), 50)
       await expectFastFailure(
         'no-argument MCP tools also propagate client cancellation',
@@ -861,7 +881,23 @@ async function main() {
         750,
       )
 
-      const toolMetrics = await toolCallsTotal.get()
+      const noArgsCancellationDeadline = Date.now() + 750
+      while (closedRequests <= closedBeforeNoArgsCancellation && Date.now() < noArgsCancellationDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      assert(
+        closedRequests > closedBeforeNoArgsCancellation,
+        'no-argument MCP cancellation should close the upstream request',
+      )
+
+      let toolMetrics = await toolCallsTotal.get()
+      while (
+        !toolMetrics.values.some((value) => value.labels.tool === '__test_cancel_no_args') &&
+        Date.now() < noArgsCancellationDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        toolMetrics = await toolCallsTotal.get()
+      }
       assert(
         toolMetrics.values.some(
           (value) =>

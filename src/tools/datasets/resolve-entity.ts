@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
+import { detectChainType } from '../../helpers/chain.js'
 import {
   buildTokenListLookupNotices,
   resolveContractQuery,
@@ -59,12 +60,27 @@ export function registerResolveEntityTool(server: McpServer) {
         | ReturnType<typeof resolveHyperliquidCoinQuery>
 
       if (effectiveKind === 'token') {
-        result = await resolveTokenQueryFromList({ network: network!, query, limit })
+        if (!network) {
+          throw new ActionableError('token resolution requires network.', [
+            'Pass network for chain-scoped entities, for example "base-mainnet" or "ethereum-mainnet".',
+          ])
+        }
+        result = await resolveTokenQueryFromList({ network, query, limit })
         notices.push(...buildTokenListLookupNotices(result.lookup))
       } else if (effectiveKind === 'contract') {
-        result = await resolveContractQuery({ network: network!, query, limit })
+        if (!network) {
+          throw new ActionableError('contract resolution requires network.', [
+            'Pass network for chain-scoped entities, for example "base-mainnet" or "ethereum-mainnet".',
+          ])
+        }
+        result = await resolveContractQuery({ network, query, limit })
       } else if (effectiveKind === 'pool') {
-        result = await resolvePoolQuery({ network: network!, query, limit })
+        if (!network) {
+          throw new ActionableError('pool resolution requires network.', [
+            'Pass network for chain-scoped entities, for example "base-mainnet" or "ethereum-mainnet".',
+          ])
+        }
+        result = await resolvePoolQuery({ network, query, limit })
       } else if (effectiveKind === 'protocol') {
         result = await resolveProtocolQuery({ query, limit })
       } else {
@@ -106,14 +122,32 @@ export function registerResolveEntityTool(server: McpServer) {
       const protocolSlugs =
         effectiveKind === 'protocol' ? matches.flatMap((match) => ('slug' in match ? [match.slug] : [])) : []
 
+      const resolvedNetwork = 'dataset' in result ? result.dataset : undefined
+      const resolvedChainType = resolvedNetwork ? detectChainType(resolvedNetwork) : undefined
+      const isEnsName =
+        (effectiveKind === 'token' || effectiveKind === 'contract') &&
+        resolvedChainType === 'evm' &&
+        /^[a-z0-9-]+(\.[a-z0-9-]+)*\.eth$/i.test(result.query.trim())
+
       const suggestedArguments =
         matches.length > 0
           ? effectiveKind === 'token'
-            ? {
-                token_addresses: tokenAddresses,
-                token_symbols: [result.query],
-                note: 'Use token_addresses when you need a deterministic contract filter; token_symbols can be used by supported EVM token/log tools.',
-              }
+            ? resolvedChainType === 'solana'
+              ? {
+                  mentions_account: tokenAddresses,
+                  note: 'Use these SPL mint addresses as mentions_account with portal_solana_query_transactions or portal_solana_query_instructions.',
+                }
+              : resolvedChainType === 'tron'
+                ? {
+                    portal_tron_query_transactions: { contract_addresses: tokenAddresses },
+                    portal_tron_query_logs: { addresses: tokenAddresses },
+                    note: 'Use contract_addresses on portal_tron_query_transactions or addresses on portal_tron_query_logs.',
+                  }
+                : {
+                    token_addresses: tokenAddresses,
+                    token_symbols: [result.query],
+                    note: 'Use token_addresses when you need a deterministic contract filter; token_symbols can be used by supported EVM token/log tools.',
+                  }
             : effectiveKind === 'contract'
               ? {
                   contract_address: contractAddresses[0],
@@ -154,17 +188,23 @@ export function registerResolveEntityTool(server: McpServer) {
           : undefined
 
       if (matches.length === 0) {
-        notices.push(
-          effectiveKind === 'token'
-            ? 'No token-list match found. Check the network, use the exact token contract address, or try a canonical symbol.'
-            : effectiveKind === 'contract'
-              ? 'No built-in contract alias match found. Pass the exact contract address for deterministic EVM queries.'
-              : effectiveKind === 'pool'
-                ? 'No pool match found. Use a pair such as "WETH/USDC uniswap", or pass a 20-byte EVM pool address or 32-byte pool id.'
-                : effectiveKind === 'hyperliquid_coin'
-                  ? 'No Hyperliquid coin candidate could be normalized from the query.'
-                  : 'No protocol match found from DeFi Llama protocol metadata.',
-        )
+        if (isEnsName) {
+          notices.push(
+            `${quoteUntrusted(result.query)} looks like an ENS name. SQD Portal indexes raw on-chain records without off-chain ENS forward resolution; pass the resolved 0x address directly to wallet or query tools.`,
+          )
+        } else {
+          notices.push(
+            effectiveKind === 'token'
+              ? 'No token-list match found. Check the network, use the exact token contract address, or try a canonical symbol.'
+              : effectiveKind === 'contract'
+                ? 'No built-in contract alias match found. Pass the exact contract address for deterministic EVM queries.'
+                : effectiveKind === 'pool'
+                  ? 'No pool match found. Use a pair such as "WETH/USDC uniswap", or pass a 20-byte EVM pool address or 32-byte pool id.'
+                  : effectiveKind === 'hyperliquid_coin'
+                    ? 'No Hyperliquid coin candidate could be normalized from the query.'
+                    : 'No protocol match found from DeFi Llama protocol metadata.',
+          )
+        }
       }
       if (truncated) {
         notices.push(
@@ -177,9 +217,15 @@ export function registerResolveEntityTool(server: McpServer) {
         )
       }
       if (matches.length > 1) {
+        const tokenFilterGuidance =
+          resolvedChainType === 'solana'
+            ? 'Pick one explicit mint address and pass it in mentions_account when querying Solana tools.'
+            : resolvedChainType === 'tron'
+              ? 'Pick one explicit TRC-20 contract address and pass it in contract_addresses (transactions) or addresses (logs).'
+              : 'Use token_addresses for deterministic queries when bridged variants matter.'
         notices.push(
           effectiveKind === 'token'
-            ? 'Multiple token-list matches were found. Use token_addresses for deterministic queries when bridged variants matter.'
+            ? `Multiple token-list matches were found. ${tokenFilterGuidance}`
             : `Multiple ${effectiveKind} matches were found. Pick one explicit identifier before issuing a chain query.`,
         )
       }

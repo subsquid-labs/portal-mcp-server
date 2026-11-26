@@ -62,22 +62,34 @@ const CASES: NegativeCase[] = [
       assert(/Tron network/i.test(text), 'Unsupported flow should identify the native Tron query family')
     },
   },
-  ...['portal_get_recent_activity', 'portal_get_time_series', 'portal_get_wallet_summary'].map((tool) => ({
-    name: `Unsupported Tron ${tool}`,
-    tool,
+  {
+    name: 'Unsupported Tron gas metric on portal_get_time_series',
+    tool: 'portal_get_time_series',
     expectedCode: 'unsupported_operation',
-    args:
-      tool === 'portal_get_time_series'
-        ? { network: 'tron-mainnet', metric: 'transaction_count', duration: '1h', interval: '5m' }
-        : tool === 'portal_get_wallet_summary'
-          ? { network: 'tron-mainnet', address: 'TExampleAddress', timeframe: '1h' }
-          : { network: 'tron-mainnet', timeframe: '1h', limit: 5 },
+    args: { network: 'tron-mainnet', metric: 'avg_gas_price', duration: '1h', interval: '5m' },
     expect: (text: string) => {
-      assert(/does not support network 'tron-mainnet'/i.test(text), `${tool} should identify unsupported Tron input`)
-      assert(/Tron network/i.test(text), `${tool} should identify the native Tron query family`)
-      assert(!/malformed_request/i.test(text), `${tool} should not leak an upstream malformed request`)
+      assert(/gas metrics are available only on evm/i.test(text), 'Tron gas metric should be refused clearly')
+      assert(!/malformed_request/i.test(text), 'Should not leak an upstream malformed request')
     },
-  })),
+  },
+  {
+    name: 'Malformed Tron address on portal_get_wallet_summary',
+    tool: 'portal_get_wallet_summary',
+    expectedCode: 'invalid_request',
+    args: { network: 'tron-mainnet', address: 'TExampleAddress', timeframe: '1h' },
+    expect: (text: string) => {
+      assert(/Invalid tron wallet address/i.test(text), 'Malformed Tron wallet address should be named')
+    },
+  },
+  {
+    name: 'Malformed Tron address on portal_get_recent_activity',
+    tool: 'portal_get_recent_activity',
+    expectedCode: 'invalid_request',
+    args: { network: 'tron-mainnet', from_addresses: ['TExampleAddress'], timeframe: '1h', limit: 5 },
+    expect: (text: string) => {
+      assert(/Invalid Tron address/i.test(text), 'Malformed Tron filter address should be named')
+    },
+  },
   {
     name: 'Malformed Tron address on the native tool',
     tool: 'portal_tron_query_transactions',

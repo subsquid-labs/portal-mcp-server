@@ -90,6 +90,10 @@ const requiredFiles = [
   'dist/index.js',
   'dist/http.js',
   'dist/server.js',
+  'dist/skills/portal/SKILL.md',
+  'dist/skills/pipes-sdk/SKILL.md',
+  'dist/skills/migrate-to-portal/SKILL.md',
+  'dist/skills/squid-perf/SKILL.md',
 ]
 
 const forbiddenPrefixes = ['src/', 'scripts/', 'plans/', '.github/', 'grafana/', 'node_modules/']

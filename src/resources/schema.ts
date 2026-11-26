@@ -4,6 +4,10 @@ import { getDatasets, resolveDataset } from '../cache/datasets.js'
 import { EVENT_SIGNATURES, PORTAL_URL } from '../constants/index.js'
 import { portalFetch } from '../helpers/fetch.js'
 import {
+  buildBitcoinBlockFields,
+  buildBitcoinInputFields,
+  buildBitcoinOutputFields,
+  buildBitcoinTransactionFields,
   buildEvmBlockFields,
   buildEvmLogFields,
   buildEvmStateDiffFields,
@@ -15,6 +19,14 @@ import {
   buildSolanaRewardFields,
   buildSolanaTokenBalanceFields,
   buildSolanaTransactionFields,
+  buildSubstrateBlockFields,
+  buildSubstrateCallFields,
+  buildSubstrateEventFields,
+  buildSubstrateExtrinsicFields,
+  buildTronBlockFields,
+  buildTronInternalTransactionFields,
+  buildTronLogFields,
+  buildTronTransactionFields,
 } from '../helpers/fields.js'
 import { type ToolGuideEntry, getToolGuideEntries, getToolGuideEntry } from '../helpers/tool-ux.js'
 import { captureToolActivePredicate } from '../toolsets.js'
@@ -413,6 +425,221 @@ export function registerSchemaResource(server: McpServer) {
             description: 'Query block rewards',
             fields: Object.keys(buildSolanaRewardFields()),
             filters: ['pubkey'],
+          },
+        },
+      }
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(schema, null, 2),
+          },
+        ],
+      }
+    },
+  )
+
+  // Resource: Bitcoin API Schema
+  server.registerResource(
+    'schema-bitcoin',
+    'sqd://schema/bitcoin',
+    { mimeType: 'application/json', cacheHint: { ttlMs: 300_000, cacheScope: 'public' } },
+    async (uri) => {
+      const schema = {
+        description: 'SQD Portal Bitcoin API Documentation',
+        version: npmVersion,
+        queryType: 'bitcoin',
+        endpoints: {
+          blocks: {
+            description: 'Query Bitcoin block headers',
+            fields: Object.keys(buildBitcoinBlockFields()),
+          },
+          transactions: {
+            description: 'Query Bitcoin transactions',
+            fields: Object.keys(buildBitcoinTransactionFields()),
+            relatedData: ['inputs', 'outputs'],
+          },
+          inputs: {
+            description: 'Query spent transaction inputs (prevouts)',
+            fields: Object.keys(buildBitcoinInputFields()),
+            filters: ['type', 'prevoutScriptPubKeyAddress', 'prevoutScriptPubKeyType'],
+            relatedData: ['transaction', 'transactionOutputs'],
+          },
+          outputs: {
+            description: 'Query transaction outputs (UTXOs)',
+            fields: Object.keys(buildBitcoinOutputFields()),
+            filters: ['scriptPubKeyAddress', 'scriptPubKeyType'],
+            relatedData: ['transaction', 'transactionInputs'],
+          },
+        },
+      }
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(schema, null, 2),
+          },
+        ],
+      }
+    },
+  )
+
+  // Resource: Substrate API Schema
+  server.registerResource(
+    'schema-substrate',
+    'sqd://schema/substrate',
+    { mimeType: 'application/json', cacheHint: { ttlMs: 300_000, cacheScope: 'public' } },
+    async (uri) => {
+      const schema = {
+        description: 'SQD Portal Substrate API Documentation',
+        version: npmVersion,
+        queryType: 'substrate',
+        endpoints: {
+          blocks: {
+            description: 'Query Substrate block headers',
+            fields: Object.keys(buildSubstrateBlockFields()),
+          },
+          extrinsics: {
+            description: 'Query Substrate extrinsics',
+            fields: Object.keys(buildSubstrateExtrinsicFields()),
+          },
+          calls: {
+            description: 'Query runtime calls',
+            fields: Object.keys(buildSubstrateCallFields()),
+            filters: ['name'],
+            relatedData: ['extrinsic', 'events', 'stack'],
+          },
+          events: {
+            description: 'Query runtime events',
+            fields: Object.keys(buildSubstrateEventFields()),
+            filters: ['name'],
+            relatedData: ['extrinsic', 'call', 'stack'],
+          },
+        },
+      }
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(schema, null, 2),
+          },
+        ],
+      }
+    },
+  )
+
+  // Resource: Hyperliquid API Schema
+  server.registerResource(
+    'schema-hyperliquid',
+    'sqd://schema/hyperliquid',
+    { mimeType: 'application/json', cacheHint: { ttlMs: 300_000, cacheScope: 'public' } },
+    async (uri) => {
+      const schema = {
+        description: 'SQD Portal Hyperliquid API Documentation',
+        version: npmVersion,
+        datasets: {
+          'hyperliquid-fills': {
+            queryType: 'hyperliquidFills',
+            endpoints: {
+              fills: {
+                description: 'Query perpetual trade fills',
+                fields: [
+                  'fillIndex',
+                  'user',
+                  'coin',
+                  'px',
+                  'sz',
+                  'side',
+                  'time',
+                  'startPosition',
+                  'dir',
+                  'closedPnl',
+                  'hash',
+                  'oid',
+                  'crossed',
+                  'fee',
+                  'tid',
+                  'feeToken',
+                  'builderFee',
+                ],
+                filters: ['user', 'coin', 'dir', 'cloid', 'feeToken'],
+              },
+            },
+          },
+          'hyperliquid-replica-cmds': {
+            queryType: 'hyperliquidReplicaCmds',
+            endpoints: {
+              actions: {
+                description: 'Query signed Hyperliquid L1 replica actions',
+                fields: ['actionIndex', 'user', 'action', 'nonce', 'signature', 'status'],
+                filters: ['user', 'actionType'],
+              },
+            },
+          },
+        },
+      }
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(schema, null, 2),
+          },
+        ],
+      }
+    },
+  )
+
+  // Resource: Tron API Schema
+  server.registerResource(
+    'schema-tron',
+    'sqd://schema/tron',
+    { mimeType: 'application/json', cacheHint: { ttlMs: 300_000, cacheScope: 'public' } },
+    async (uri) => {
+      const schema = {
+        description: 'SQD Portal Tron API Documentation',
+        version: npmVersion,
+        queryType: 'tron',
+        addressNote:
+          'Portal Tron uses three hex encodings by context: transaction filters (owner, to, contract) use 41-prefixed 21-byte hex without 0x; log emitter filters (address) use bare 20-byte hex without 0x or 41 prefix; indexed log address topics (topic1/topic2) use 32-byte (64-char) left-padded hex without 0x. MCP tools accept Base58 (T...), 41-hex, or 0x/bare 20-byte hex and convert automatically.',
+        endpoints: {
+          blocks: {
+            description: 'Query Tron block headers (millisecond timestamps)',
+            fields: Object.keys(buildTronBlockFields()),
+          },
+          transactions: {
+            description:
+              'Query all Tron transactions or narrow families via transferTransactions, transferAssetTransactions, and triggerSmartContractTransactions',
+            addressFormat: '41-prefixed 21-byte hex without 0x for owner, to, and contract filters',
+            fields: Object.keys(buildTronTransactionFields()),
+            requestKeys: [
+              'transactions',
+              'transferTransactions',
+              'transferAssetTransactions',
+              'triggerSmartContractTransactions',
+            ],
+            filters: {
+              transactions: ['type'],
+              transferTransactions: ['owner', 'to'],
+              transferAssetTransactions: ['owner', 'to', 'asset'],
+              triggerSmartContractTransactions: ['owner', 'contract', 'sighash'],
+            },
+            relatedData: ['logs', 'internalTransactions'],
+          },
+          logs: {
+            description: 'Query TRC-20 and smart-contract event logs',
+            addressFormat:
+              'Bare 20-byte hex (no 0x, no 41 prefix) for address (emitting contract); 32-byte left-padded hex (no 0x) for topic1/topic2 addresses',
+            fields: Object.keys(buildTronLogFields()),
+            filters: ['address', 'topic0', 'topic1', 'topic2', 'topic3'],
+            relatedData: ['transaction'],
+          },
+          internalTransactions: {
+            description: 'Query internal calls and value transfers',
+            fields: Object.keys(buildTronInternalTransactionFields()),
           },
         },
       }

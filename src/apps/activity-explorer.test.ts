@@ -4,10 +4,18 @@ import { describe, it } from 'node:test'
 import { Client } from '@modelcontextprotocol/client'
 import { App } from '@modelcontextprotocol/ext-apps'
 import { AppBridge } from '@modelcontextprotocol/ext-apps/app-bridge'
-import { InMemoryTransport } from '@modelcontextprotocol/server'
+import { CLIENT_CAPABILITIES_META_KEY, InMemoryTransport } from '@modelcontextprotocol/server'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 
 import { createPortalServer } from '../server.js'
-import { MCP_APP_MIME_TYPE } from './activity-explorer.js'
+import {
+  ACTIVITY_EXPLORER_TOOLS,
+  MCP_APP_EXTENSION_ID,
+  MCP_APP_MIME_TYPE,
+  extractDeclaredUiCapabilityFromBody,
+  getActivityExplorerDeploymentMode,
+  resolveActivityExplorerSurface,
+} from './activity-explorer.js'
 
 async function connectedClient() {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -116,4 +124,109 @@ it('exchanges App data and follow-up requests through the current SDK host bridg
   const contents = [{ type: 'resource' as const, resource: { uri: 'file:///evidence.json', text: '{"count":2}' } }]
   await app.downloadFile({ contents })
   assert.deepEqual(downloadedContents, contents)
+})
+
+describe('SQD Explorer auto mode and tool coverage', () => {
+  it('activates automatically for hosts that declare io.modelcontextprotocol/ui and respects opt-out', () => {
+    const previous = process.env.MCP_APP_ENABLED
+    try {
+      delete process.env.MCP_APP_ENABLED
+      assert.equal(getActivityExplorerDeploymentMode(), 'auto')
+      assert.equal(resolveActivityExplorerSurface({ url: 'https://portal.sqd.dev/mcp' }, { uiDeclared: false }), false)
+      assert.equal(resolveActivityExplorerSurface({ url: 'https://portal.sqd.dev/mcp' }, { uiDeclared: true }), true)
+      assert.equal(
+        resolveActivityExplorerSurface({ url: 'https://portal.sqd.dev/mcp?app=0' }, { uiDeclared: true }),
+        false,
+      )
+
+      process.env.MCP_APP_ENABLED = 'false'
+      assert.equal(getActivityExplorerDeploymentMode(), 'disabled')
+      assert.equal(resolveActivityExplorerSurface({ url: 'https://portal.sqd.dev/mcp' }, { uiDeclared: true }), false)
+
+      const envelopeBody = {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/list',
+        params: {
+          _meta: {
+            [CLIENT_CAPABILITIES_META_KEY]: {
+              extensions: {
+                [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+              },
+            },
+          },
+        },
+      }
+      assert.equal(extractDeclaredUiCapabilityFromBody(envelopeBody), true)
+      assert.equal(
+        extractDeclaredUiCapabilityFromBody({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }),
+        false,
+      )
+    } finally {
+      if (previous === undefined) delete process.env.MCP_APP_ENABLED
+      else process.env.MCP_APP_ENABLED = previous
+    }
+  })
+
+  it('includes Tron query tools and EVM traces in ACTIVITY_EXPLORER_TOOLS', () => {
+    assert.ok(ACTIVITY_EXPLORER_TOOLS.has('portal_tron_query_transactions'))
+    assert.ok(ACTIVITY_EXPLORER_TOOLS.has('portal_tron_query_logs'))
+    assert.ok(ACTIVITY_EXPLORER_TOOLS.has('portal_evm_query_traces'))
+  })
+
+  it('auto-enables SQD Explorer on both legacy and modern 2026-07-28 stdio when io.modelcontextprotocol/ui is declared', async () => {
+    const previous = process.env.MCP_APP_ENABLED
+    delete process.env.MCP_APP_ENABLED
+    try {
+      for (const mode of ['legacy', 'modern'] as const) {
+        const [uiClientTransport, uiServerTransport] = InMemoryTransport.createLinkedPair()
+        const [plainClientTransport, plainServerTransport] = InMemoryTransport.createLinkedPair()
+        const uiHandle = serveStdio(() => createPortalServer({ transport: 'stdio' }), {
+          legacy: 'serve',
+          transport: uiServerTransport,
+        })
+        const plainHandle = serveStdio(() => createPortalServer({ transport: 'stdio' }), {
+          legacy: 'serve',
+          transport: plainServerTransport,
+        })
+        const negotiation =
+          mode === 'modern' ? { versionNegotiation: { mode: 'auto' as const, probe: { timeoutMs: 5_000 } } } : {}
+        const uiClient = new Client(
+          { name: `sqd-stdio-ui-host-${mode}`, version: '1.0.0' },
+          {
+            ...negotiation,
+            capabilities: {
+              extensions: {
+                [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+              },
+            } as any,
+          },
+        )
+        const plainClient = new Client({ name: `sqd-stdio-plain-host-${mode}`, version: '1.0.0' }, negotiation)
+        await Promise.all([uiClient.connect(uiClientTransport), plainClient.connect(plainClientTransport)])
+        try {
+          if (mode === 'modern') {
+            assert.equal(uiClient.getProtocolEra(), 'modern')
+            assert.equal(uiClient.getNegotiatedProtocolVersion(), '2026-07-28')
+          }
+          const uiTools = (await uiClient.listTools()).tools.filter((tool) =>
+            Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
+          )
+          assert.equal(uiTools.length, ACTIVITY_EXPLORER_TOOLS.size, `${mode} stdio should attach Explorer metadata`)
+          assert.ok(uiTools.some((tool) => tool.name === 'portal_tron_query_transactions'))
+          assert.ok(uiTools.some((tool) => tool.name === 'portal_evm_query_traces'))
+
+          const plainTools = (await plainClient.listTools()).tools.filter((tool) =>
+            Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
+          )
+          assert.equal(plainTools.length, 0, `${mode} plain stdio client should not receive Explorer metadata`)
+        } finally {
+          await Promise.all([uiClient.close(), plainClient.close(), uiHandle.close(), plainHandle.close()])
+        }
+      }
+    } finally {
+      if (previous === undefined) delete process.env.MCP_APP_ENABLED
+      else process.env.MCP_APP_ENABLED = previous
+    }
+  })
 })

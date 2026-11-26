@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { Buffer } from 'node:buffer'
 
 import { CLIENT_CAPABILITIES_META_KEY, type McpServer } from '@modelcontextprotocol/server'
 
@@ -25,6 +26,7 @@ export const ACTIVITY_EXPLORER_TOOLS = new Set([
   'portal_substrate_get_analytics',
   'portal_evm_query_transactions',
   'portal_evm_query_logs',
+  'portal_evm_query_traces',
   'portal_evm_query_token_transfers',
   'portal_evm_get_contract_deployment',
   'portal_evm_get_contract_activity',
@@ -38,16 +40,23 @@ export const ACTIVITY_EXPLORER_TOOLS = new Set([
   'portal_hyperliquid_query_fills',
   'portal_hyperliquid_get_analytics',
   'portal_hyperliquid_get_ohlc',
+  'portal_tron_query_transactions',
+  'portal_tron_query_logs',
 ])
 
 export type UiCapabilityStatus = 'declared' | 'unsupported' | 'undeclared'
+export type ActivityExplorerDeploymentMode = 'auto' | 'enabled' | 'disabled'
 
 /**
- * SQD Explorer is a beta surface, so hosts never render it unless someone opts
- * in: a deployment through MCP_APP_ENABLED, or a single connection through the
- * ?app= query parameter. The resource stays registered either way, so a host
- * that wants the beta can still read it, but no tool result asks a host to open
- * it on its own.
+ * SQD Explorer activates automatically when a connecting host explicitly
+ * declares the MCP Apps UI capability (`io.modelcontextprotocol/ui` with
+ * `text/html;profile=mcp-app`) over stdio (`2025` or `2026-07-28`) or modern
+ * `2026-07-28` HTTP per-request envelopes, and stays off for data-only clients
+ * unless enabled explicitly via `MCP_APP_ENABLED=true` or `?app=1`. Legacy
+ * stateless 2025 HTTP clients that send capabilities only on `initialize` can
+ * opt in with `?app=1` (or `MCP_APP_ENABLED=true`). A connection can always
+ * opt out with `?app=0`, or a deployment can force off with
+ * `MCP_APP_ENABLED=false`.
  */
 const appSurfaceStorage = new AsyncLocalStorage<boolean>()
 
@@ -58,20 +67,60 @@ function parseAppFlag(value: string | undefined | null): boolean | undefined {
   return undefined
 }
 
-export function isActivityExplorerEnabledByDeployment(): boolean {
-  return parseAppFlag(process.env.MCP_APP_ENABLED) ?? false
+export function getActivityExplorerDeploymentMode(): ActivityExplorerDeploymentMode {
+  const normalized = process.env.MCP_APP_ENABLED?.trim().toLowerCase()
+  if (normalized === 'true' || normalized === '1') return 'enabled'
+  if (normalized === 'false' || normalized === '0') return 'disabled'
+  return 'auto'
 }
 
-/** An explicit ?app= on the connection wins over the deployment default, in both directions. */
-export function resolveActivityExplorerSurface(request: { url?: string } | undefined): boolean {
-  if (!request?.url) return isActivityExplorerEnabledByDeployment()
-  let requested: boolean | undefined
+export function isActivityExplorerEnabledByDeployment(): boolean {
+  return getActivityExplorerDeploymentMode() === 'enabled'
+}
+
+export function parseExplicitActivityExplorerQueryFlag(request: { url?: string } | undefined): boolean | undefined {
+  if (!request?.url) return undefined
   try {
-    requested = parseAppFlag(new URL(request.url).searchParams.get('app'))
+    return parseAppFlag(new URL(request.url).searchParams.get('app'))
   } catch {
-    requested = undefined
+    return undefined
   }
-  return requested ?? isActivityExplorerEnabledByDeployment()
+}
+
+/** An explicit ?app= on the connection wins over deployment mode and capability detection. */
+export function resolveActivityExplorerSurface(
+  request: { url?: string } | undefined,
+  options?: { uiDeclared?: boolean },
+): boolean {
+  const requested = parseExplicitActivityExplorerQueryFlag(request)
+  if (requested !== undefined) return requested
+  const mode = getActivityExplorerDeploymentMode()
+  if (mode === 'enabled') return true
+  if (mode === 'disabled') return false
+  return options?.uiDeclared === true
+}
+
+const MAX_UI_CAPABILITY_BATCH_SCAN = 100
+
+/**
+ * Inspect a parsed JSON-RPC request body (either a single message or batch) to
+ * detect whether the caller explicitly declared MCP Apps UI support via the
+ * 2026-07-28 per-request envelope or a 2025 `initialize` capabilities block.
+ */
+export function extractDeclaredUiCapabilityFromBody(body: unknown): boolean {
+  const messages = Array.isArray(body) ? body : [body]
+  const limit = Math.min(messages.length, MAX_UI_CAPABILITY_BATCH_SCAN)
+  for (let i = 0; i < limit; i++) {
+    const message = asRecord(messages[i])
+    const params = asRecord(message?.params)
+    if (!params) continue
+    const meta = asRecord(params._meta)
+    const capabilities = params.capabilities
+    if (classifyUiCapability(meta, capabilities) === 'declared') {
+      return true
+    }
+  }
+  return false
 }
 
 export function runWithActivityExplorerSurface<T>(enabled: boolean, callback: () => T): T {
@@ -174,7 +223,7 @@ export function registerActivityExplorerResource(server: McpServer, runtime: Run
         title: 'SQD Explorer',
         description:
           index === 0
-            ? 'Beta. Interactive evidence views for blockchain activity, wallets, contracts, token flows, markets, and network analytics. Opt in per deployment with MCP_APP_ENABLED=true or per connection with ?app=1; ?app=0 opts a connection out.'
+            ? 'Beta. Interactive evidence views for blockchain activity, wallets, contracts, token flows, markets, and network analytics. Activates automatically for MCP Apps hosts; override per deployment with MCP_APP_ENABLED=true|false or per connection with ?app=1|?app=0.'
             : 'Retained SQD Explorer URI for installed-client compatibility.',
         mimeType: MCP_APP_MIME_TYPE,
         cacheHint: { ttlMs: 86_400_000, cacheScope: 'public' },

@@ -1,4 +1,6 @@
 import { EVENT_SIGNATURES } from '../constants/index.js'
+import { ActionableError } from './errors.js'
+import { quoteUntrusted } from './untrusted-text.js'
 
 const METHOD_ALIASES: Record<string, string[]> = {
   approve: ['0x095ea7b3'],
@@ -10,8 +12,19 @@ const METHOD_ALIASES: Record<string, string[]> = {
   safetransferfrom: ['0x42842e0e', '0xb88d4fde'],
   deposit: ['0xd0e30db0'],
   withdraw: ['0x2e1a7d4d'],
-  exact_input_single: ['0x414bf389'],
-  exactinputsingle: ['0x414bf389'],
+  swap: [
+    '0x414bf389', // Uniswap V3 exactInputSingle
+    '0x04e45aaf', // Uniswap SwapRouter02 exactInputSingle
+    '0xc04b8d59', // Uniswap V3 exactInput
+    '0x3593564c', // Uniswap Universal Router execute
+    '0x38ed1739', // Uniswap V2 swapExactTokensForTokens
+    '0x7ff36ab5', // Uniswap V2 swapExactETHForTokens
+    '0x18cbafe5', // Uniswap V2 swapExactTokensForETH
+  ],
+  execute: ['0x3593564c'],
+  multicall: ['0xac9650d8', '0x5ae401dc'],
+  exact_input_single: ['0x414bf389', '0x04e45aaf'],
+  exactinputsingle: ['0x414bf389', '0x04e45aaf'],
   exact_input: ['0xc04b8d59'],
   exactinput: ['0xc04b8d59'],
   swap_exact_tokens_for_tokens: ['0x38ed1739'],
@@ -65,8 +78,11 @@ function normalizeAlias(value: string): string {
 function normalizeHex4(value: string): string {
   const trimmed = value.trim().toLowerCase()
   if (!/^0x[0-9a-f]{8}$/.test(trimmed)) {
-    throw new Error(
-      `Invalid method sighash: ${value}. Use a 4-byte hex string like 0xa9059cbb or a known method alias.`,
+    throw new ActionableError(
+      `Invalid method sighash: ${quoteUntrusted(value)}. Use a 4-byte hex string like 0xa9059cbb or a known method alias.`,
+      [`Available method aliases: ${listMethodAliases().join(', ')}.`],
+      { method: value, available_aliases: listMethodAliases() },
+      { code: 'invalid_request', origin: 'client_input', retryable: false },
     )
   }
   return trimmed
@@ -75,7 +91,12 @@ function normalizeHex4(value: string): string {
 function normalizeTopic0(value: string): string {
   const trimmed = value.trim().toLowerCase()
   if (!/^0x[0-9a-f]{64}$/.test(trimmed)) {
-    throw new Error(`Invalid event topic0: ${value}. Use a 32-byte topic hash or a known event alias.`)
+    throw new ActionableError(
+      `Invalid event topic0: ${quoteUntrusted(value)}. Use a 32-byte topic hash or a known event alias.`,
+      [`Available event aliases: ${listEventAliases().join(', ')}.`],
+      { event: value, available_aliases: listEventAliases() },
+      { code: 'invalid_request', origin: 'client_input', retryable: false },
+    )
   }
   return trimmed
 }

@@ -34,6 +34,9 @@ const EXCLUDED =
 function filter(source) {
   const relative = path.relative(root, source)
   if (relative === '') return true
+  const normalized = relative.split(path.sep).join('/')
+  // Bundled MCP skills ship markdown playbooks and references under dist/skills/.
+  if (normalized === 'dist/skills' || normalized.startsWith('dist/skills/')) return true
   const base = path.basename(relative)
   if (/^LICEN[CS]E/i.test(base)) return true
   return !EXCLUDED.test(relative)
@@ -159,6 +162,10 @@ const manifest = {
   },
 }
 writeFileSync(path.join(stage, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+// Override mcpb pack's default `*.log` exclusion for bundled skill fixtures
+// under dist/skills/ (e.g., squid-perf benchmark sample logs). `.mcpbignore`
+// itself remains excluded from the packed archive.
+writeFileSync(path.join(stage, '.mcpbignore'), '!dist/skills/**\n!dist/skills/**/*.log\n')
 
 // 5. Validate and pack with the official CLI.
 const mcpbCli = path.join(root, 'node_modules/@anthropic-ai/mcpb/dist/cli/cli.js')

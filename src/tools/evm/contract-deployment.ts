@@ -13,11 +13,12 @@ import { resolveKnownContractReference } from '../../helpers/entity-resolution.j
 import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { buildEvmTransactionFields } from '../../helpers/fields.js'
-import { formatResult, formatTimestamp } from '../../helpers/format.js'
+import { formatDuration, formatResult, formatTimestamp } from '../../helpers/format.js'
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
 import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { estimateBlockTime, getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { quoteUntrusted } from '../../helpers/untrusted-text.js'
 
 const DEFAULT_RECENT_SEARCH_DEPTH_BLOCKS = 100_000
 const DEFAULT_MAX_SCAN_BLOCKS = 1_000_000
@@ -275,14 +276,14 @@ export function registerContractDeploymentTool(server: McpServer) {
         1,
         Math.min(max_scan_blocks ?? DEFAULT_MAX_SCAN_BLOCKS, MAX_SCAN_BLOCKS, requestedBlocks),
       )
-      let deployment: DeploymentTrace | undefined
       const scanResult = await scanBoundedBlockRange<DeploymentTrace>({
         fromBlock: resolvedBlocks.from_block,
         toBlock: endBlock,
         chunkSize,
+        concurrency: 2,
         scanOrder: scan_order,
         maxScanBlocks,
-        shouldContinue: () => !deployment,
+        shouldContinue: (state) => state.items.length === 0,
         fetchChunk: async (chunkBounds) => {
           const records = await portalFetchStreamRange(portalUrl, {
             ...query,
@@ -290,22 +291,27 @@ export function registerContractDeploymentTool(server: McpServer) {
             toBlock: chunkBounds.toBlock,
           })
           const matches = flattenCreateTraces(records, normalizedContract)
-          deployment = scan_order === 'earliest' ? matches[0] : matches.at(-1)
-          return deployment ? [deployment] : []
+          const chunkMatch = scan_order === 'earliest' ? matches[0] : matches.at(-1)
+          return chunkMatch ? [chunkMatch] : []
         },
       })
+      const deployment = scanResult.items[0]
       const scannedFromBlock = scanResult.scannedFromBlock
       const scannedToBlock = scanResult.scannedToBlock
       const scannedBlocks = scanResult.scannedBlocks
+      const approxWindowSeconds = Math.round(scannedBlocks * estimateBlockTime(dataset, chainType))
+      const approxSpan = approxWindowSeconds > 0 ? formatDuration(approxWindowSeconds) : undefined
 
       const items = deployment ? [deployment] : []
       const notices = [...getTimestampWindowNotices(resolvedBlocks)]
       if (resolvedContract.alias) {
-        notices.push(`Resolved contract alias "${resolvedContract.alias}" to ${normalizedContract} on ${dataset}.`)
+        notices.push(
+          `Resolved contract alias ${quoteUntrusted(resolvedContract.alias)} to ${normalizedContract} on ${dataset}.`,
+        )
       }
       if (!hasExplicitWindow) {
         notices.push(
-          `Searched the most recent ${search_depth_blocks.toLocaleString()} blocks. For older contracts, pass from_block or from_timestamp.`,
+          `Searched the most recent ${search_depth_blocks.toLocaleString()} blocks${approxSpan ? ` (~${approxSpan} on ${dataset})` : ''}. For older contracts, pass from_block or from_timestamp near the deployment date.`,
         )
       }
       const scanHasMore = !deployment && scanResult.reachedMaxScanBlocks && scanResult.hasUnscannedBlocks

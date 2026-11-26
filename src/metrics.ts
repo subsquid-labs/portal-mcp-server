@@ -130,6 +130,13 @@ export const portalRequestsTotal = new Counter({
   registers: [register],
 })
 
+export const portalRetriesTotal = new Counter({
+  name: 'mcp_portal_api_retries_total',
+  help: 'Total Portal API retry attempts by bounded failure reason',
+  labelNames: ['method', 'reason'] as const,
+  registers: [register],
+})
+
 export const portalUpstreamActive = new Gauge({
   name: 'mcp_portal_upstream_active',
   help: 'Current Portal API requests admitted for execution',

@@ -3,8 +3,9 @@ import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
+import { scanBoundedBlockRange } from '../../helpers/bounded-search.js'
 import { detectChainType } from '../../helpers/chain.js'
-import { createUnsupportedChainError } from '../../helpers/errors.js'
+import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchRecentRecordsWithScan, portalFetchStreamRange } from '../../helpers/fetch.js'
 import { buildBitcoinBlockFields, buildBitcoinTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
@@ -28,6 +29,8 @@ import {
 } from '../../helpers/result-metadata.js'
 import { type TimestampInput, getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { quoteUntrusted } from '../../helpers/untrusted-text.js'
+import { isValidBitcoinAddress, normalizeBitcoinAddressForPortal } from '../../helpers/validation.js'
 
 export function registerQueryBitcoinTransactionsTool(server: McpServer) {
   type BitcoinTransactionsRequest = {
@@ -36,6 +39,8 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
     to_timestamp?: TimestampInput
     limit: number
     finalized_only: boolean
+    address?: string
+    txid?: string
     include_inputs: boolean
     include_outputs: boolean
     response_format: ResponseFormat
@@ -123,6 +128,16 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
           'Ending timestamp. Accepts Unix seconds, Unix milliseconds, ISO datetime, or relative input like "now".',
         ),
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized blocks'),
+      address: z
+        .string()
+        .optional()
+        .describe('FILTER: Bitcoin address (bc1..., 1..., 3...) appearing in transaction inputs or outputs.'),
+      txid: z
+        .string()
+        .optional()
+        .describe(
+          'FILTER: Exact 64-character hex Bitcoin transaction ID (txid/hash). Combine with from_block/to_block or timeframe; stops as soon as matched.',
+        ),
       include_inputs: z.boolean().optional().default(false).describe('Attach transaction inputs inline'),
       include_outputs: z.boolean().optional().default(false).describe('Attach transaction outputs inline'),
       response_format: z
@@ -151,6 +166,8 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
       from_timestamp,
       to_timestamp,
       finalized_only,
+      address,
+      txid,
       include_inputs,
       include_outputs,
       response_format,
@@ -183,10 +200,40 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
         to_timestamp = paginationCursor.request.to_timestamp
         limit = paginationCursor.request.limit
         finalized_only = paginationCursor.request.finalized_only
+        address = paginationCursor.request.address
+        txid = paginationCursor.request.txid
         include_inputs = paginationCursor.request.include_inputs
         include_outputs = paginationCursor.request.include_outputs
         response_format = paginationCursor.request.response_format
       }
+      let normalizedAddress: string | undefined
+      if (address !== undefined) {
+        const trimmed = address.trim()
+        if (!trimmed || !isValidBitcoinAddress(trimmed)) {
+          throw new ActionableError(
+            `Invalid Bitcoin address: ${quoteUntrusted(address)}.`,
+            ['Provide a valid Bitcoin address starting with bc1, 1, or 3.'],
+            { field: 'address' },
+            { code: 'invalid_request', origin: 'client_input', retryable: false },
+          )
+        }
+        normalizedAddress = normalizeBitcoinAddressForPortal(trimmed)
+      }
+
+      let normalizedTxid: string | undefined
+      if (txid !== undefined) {
+        const cleaned = txid.trim().toLowerCase().replace(/^0x/, '')
+        if (!/^[0-9a-f]{64}$/.test(cleaned)) {
+          throw new ActionableError(
+            `Invalid Bitcoin txid: ${quoteUntrusted(txid)}. Expected a 64-character hex transaction ID.`,
+            ['Provide a 64-character hex Bitcoin txid/hash and narrow the block window or timeframe.'],
+            { field: 'txid' },
+            { code: 'invalid_request', origin: 'client_input', retryable: false },
+          )
+        }
+        normalizedTxid = cleaned
+      }
+
       const effectiveResponseFormat = resolveDefaultResponseFormat(response_format)
 
       const resolvedBlocks = paginationCursor
@@ -220,29 +267,155 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
       )
       const pageToBlock = paginationCursor?.page_to_block ?? endBlock
 
-      const query = {
-        type: 'bitcoin',
-        fromBlock: resolvedFromBlock,
-        toBlock: pageToBlock,
-        fields: {
-          block: buildBitcoinBlockFields(),
-          transaction: buildBitcoinTransactionFields(),
-        },
-        transactions: [{}],
-      }
-
       const cursorSkip = paginationCursor?.skip_inclusive_block ?? 0
       const fetchLimit = limit + cursorSkip + 1
-      const { records: results, scan: recentScan } = await portalFetchRecentRecordsWithScan(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-        {
+      let results: unknown[] = []
+      let recentScan: { exhausted: boolean } | undefined
+      let txidScannedBlocks: number | undefined
+
+      if (normalizedTxid) {
+        const matchedBlocks: unknown[] = []
+        let foundMatch = false
+        const txidScan = await scanBoundedBlockRange<unknown>({
+          fromBlock: resolvedFromBlock,
+          toBlock: pageToBlock,
+          chunkSize: 10,
+          scanOrder: from_block !== undefined && to_block === undefined ? 'earliest' : 'latest',
+          maxScanBlocks: Math.min(200, pageToBlock - resolvedFromBlock + 1),
+          shouldContinue: () => !foundMatch,
+          fetchChunk: async (chunk) => {
+            const chunkBlocks = await portalFetchStreamRange(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+              type: 'bitcoin',
+              fromBlock: chunk.fromBlock,
+              toBlock: chunk.toBlock,
+              fields: {
+                block: buildBitcoinBlockFields(),
+                transaction: buildBitcoinTransactionFields(),
+                ...(normalizedAddress
+                  ? {
+                      input: { transactionIndex: true, prevoutScriptPubKeyAddress: true },
+                      output: { transactionIndex: true, scriptPubKeyAddress: true },
+                    }
+                  : {}),
+              },
+              transactions: [{}],
+              ...(normalizedAddress
+                ? {
+                    inputs: [{ prevoutScriptPubKeyAddress: [normalizedAddress] }],
+                    outputs: [{ scriptPubKeyAddress: [normalizedAddress] }],
+                  }
+                : {}),
+            })
+            const matching = chunkBlocks
+              .map((rawBlock) => {
+                const block = rawBlock as Record<string, unknown> & {
+                  transactions?: Record<string, unknown>[]
+                  inputs?: Array<{ transactionIndex?: number; prevoutScriptPubKeyAddress?: string }>
+                  outputs?: Array<{ transactionIndex?: number; scriptPubKeyAddress?: string }>
+                }
+                const addressTxIndices = normalizedAddress
+                  ? new Set<number>([
+                      ...(block.inputs ?? [])
+                        .filter((inp) => inp.prevoutScriptPubKeyAddress === normalizedAddress)
+                        .map((inp) => inp.transactionIndex)
+                        .filter((idx): idx is number => typeof idx === 'number'),
+                      ...(block.outputs ?? [])
+                        .filter((out) => out.scriptPubKeyAddress === normalizedAddress)
+                        .map((out) => out.transactionIndex)
+                        .filter((idx): idx is number => typeof idx === 'number'),
+                    ])
+                  : undefined
+                const matchingTxs = (block.transactions ?? []).filter((tx) => {
+                  const rawTxid = String(tx.txid ?? '').toLowerCase()
+                  const rawHash = String(tx.hash ?? '').toLowerCase()
+                  if (rawTxid !== normalizedTxid && rawHash !== normalizedTxid) return false
+                  if (addressTxIndices) {
+                    const idx = typeof tx.transactionIndex === 'number' ? tx.transactionIndex : undefined
+                    return idx !== undefined && addressTxIndices.has(idx)
+                  }
+                  return true
+                })
+                if (matchingTxs.length === 0) return undefined
+                foundMatch = true
+                return { ...block, transactions: matchingTxs }
+              })
+              .filter(Boolean)
+            matchedBlocks.push(...matching)
+            return matching
+          },
+        })
+        results = matchedBlocks
+        txidScannedBlocks = txidScan.scannedBlocks
+        recentScan = { exhausted: !txidScan.hasUnscannedBlocks || foundMatch }
+      } else if (normalizedAddress) {
+        const streamUrl = `${PORTAL_URL}/datasets/${dataset}/stream`
+        const [outputFetch, inputFetch] = await Promise.all([
+          portalFetchRecentRecordsWithScan(
+            streamUrl,
+            {
+              type: 'bitcoin',
+              fromBlock: resolvedFromBlock,
+              toBlock: pageToBlock,
+              fields: {
+                block: buildBitcoinBlockFields(),
+                output: { transactionIndex: true, scriptPubKeyAddress: true },
+                transaction: buildBitcoinTransactionFields(),
+              },
+              outputs: [{ scriptPubKeyAddress: [normalizedAddress], transaction: true }],
+            },
+            {
+              itemKeys: ['transactions'],
+              limit: fetchLimit,
+              chunkSize: 50,
+              maxChunks: 40,
+            },
+          ),
+          portalFetchRecentRecordsWithScan(
+            streamUrl,
+            {
+              type: 'bitcoin',
+              fromBlock: resolvedFromBlock,
+              toBlock: pageToBlock,
+              fields: {
+                block: buildBitcoinBlockFields(),
+                input: { transactionIndex: true, prevoutScriptPubKeyAddress: true },
+                transaction: buildBitcoinTransactionFields(),
+              },
+              inputs: [{ prevoutScriptPubKeyAddress: [normalizedAddress], transaction: true }],
+            },
+            {
+              itemKeys: ['transactions'],
+              limit: fetchLimit,
+              chunkSize: 50,
+              maxChunks: 40,
+            },
+          ),
+        ])
+        results = [...outputFetch.records, ...inputFetch.records]
+        recentScan = {
+          exhausted: (outputFetch.scan?.exhausted ?? true) && (inputFetch.scan?.exhausted ?? true),
+        }
+      } else {
+        const query = {
+          type: 'bitcoin',
+          fromBlock: resolvedFromBlock,
+          toBlock: pageToBlock,
+          fields: {
+            block: buildBitcoinBlockFields(),
+            transaction: buildBitcoinTransactionFields(),
+          },
+          transactions: [{}],
+        }
+        const fetched = await portalFetchRecentRecordsWithScan(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
           itemKeys: ['transactions'],
           limit: fetchLimit,
           chunkSize: 20,
-        },
-      )
+        })
+        results = fetched.records
+        recentScan = fetched.scan
+      }
 
+      const seenTxKeys = new Set<string>()
       const allTxs = sortTransactions(
         results.flatMap((block: unknown) => {
           const typedBlock = block as {
@@ -254,14 +427,21 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
           const blockNumber = typedBlock.number ?? typedBlock.header?.number
           const timestamp = typedBlock.timestamp ?? typedBlock.header?.timestamp
 
-          return (typedBlock.transactions || []).map(
-            (tx) =>
-              normalizeBitcoinTransactionResult({
-                ...tx,
-                ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
-                ...(timestamp !== undefined ? { timestamp } : {}),
-              }) as BitcoinTransactionItem,
-          )
+          return (typedBlock.transactions || [])
+            .map(
+              (tx) =>
+                normalizeBitcoinTransactionResult({
+                  ...tx,
+                  ...(blockNumber !== undefined ? { block_number: blockNumber } : {}),
+                  ...(timestamp !== undefined ? { timestamp } : {}),
+                }) as BitcoinTransactionItem,
+            )
+            .filter((tx) => {
+              const dedupeKey = `${tx.block_number ?? ''}:${tx.transactionIndex ?? ''}:${tx.txid ?? tx.tx_hash ?? ''}`
+              if (seenTxKeys.has(dedupeKey)) return false
+              seenTxKeys.add(dedupeKey)
+              return true
+            })
         }),
       )
       const page = paginateAscendingItems(
@@ -286,6 +466,8 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
                 ...(to_timestamp !== undefined ? { to_timestamp } : {}),
                 limit,
                 finalized_only,
+                ...(normalizedAddress ? { address: normalizedAddress } : {}),
+                ...(normalizedTxid ? { txid: normalizedTxid } : {}),
                 include_inputs,
                 include_outputs,
                 response_format: effectiveResponseFormat,
@@ -298,7 +480,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
           : undefined
       let pageItems = page.pageItems
       let inlineHydratedBlockCount = 0
-      if ((include_inputs || include_outputs) && pageItems.length > 0) {
+      if ((include_inputs || include_outputs) && effectiveResponseFormat !== 'summary' && pageItems.length > 0) {
         const txKeys = new Set(
           pageItems
             .map((item) => {
@@ -417,6 +599,11 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
 
       const formattedData = applyResponseFormat(pageItems, effectiveResponseFormat, 'bitcoin_transactions')
       const notices = getTimestampWindowNotices(resolvedBlocks)
+      if (normalizedTxid && pageItems.length === 0 && recentScan?.exhausted === false) {
+        notices.push(
+          `Transaction lookup stopped after scanning ${txidScannedBlocks ?? 0} Bitcoin blocks without a match. Pass from_block/to_block around the target block to search an older window.`,
+        )
+      }
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
         finality: finalized_only ? 'finalized' : 'latest',

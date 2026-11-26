@@ -12,6 +12,11 @@ import {
   buildTimeSeriesChart,
   buildTimeSeriesTable,
 } from '../../helpers/chart-metadata.js'
+import {
+  buildFormElicitationResult,
+  readFormElicitationOutcome,
+  supportsFormElicitation,
+} from '../../helpers/elicitation.js'
 import { ActionableError, createUnsupportedChainError, createUnsupportedMetricError } from '../../helpers/errors.js'
 import {
   EXACT_DECIMAL_ZERO,
@@ -38,10 +43,21 @@ import {
   resolveTimeframeOrBlocks,
 } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { normalizeTronAddress } from '../../helpers/tron.js'
 import { buildChartPanel, buildMetricCard, buildPortalUi, buildTablePanel } from '../../helpers/ui-metadata.js'
+import { quoteUntrusted } from '../../helpers/untrusted-text.js'
 import { visitHyperliquidFillBlocks } from '../hyperliquid/fill-stream.js'
 import { computeSolanaTimeSeries } from '../solana/time-series-shared.js'
+import { toTronInputError } from '../tron/shared.js'
 import { computeWindowSeries } from './compare-periods.js'
+import {
+  MAX_SERIES_SCAN_BLOCKS,
+  assertSeriesDurationScannable,
+  assertSeriesWindowScannable,
+  getSafeSeriesDurationPresets,
+} from './time-series-bounds.js'
+
+export { MAX_SERIES_SCAN_BLOCKS, assertSeriesDurationScannable, assertSeriesWindowScannable }
 
 // ============================================================================
 // Tool: Get Time Series Data
@@ -74,7 +90,7 @@ type TimeSeriesMetric =
  * because the enum is the union of every family's metrics, and a request is
  * only meaningful against one family at a time.
  */
-type SupportedFamily = 'evm' | 'solana' | 'bitcoin' | 'hyperliquid'
+type SupportedFamily = 'evm' | 'solana' | 'bitcoin' | 'hyperliquid' | 'tron'
 
 const SUPPORTED_METRICS: Record<SupportedFamily, readonly TimeSeriesMetric[]> = {
   evm: [
@@ -88,6 +104,7 @@ const SUPPORTED_METRICS: Record<SupportedFamily, readonly TimeSeriesMetric[]> = 
   solana: ['transaction_count', 'unique_addresses', 'tps', 'avg_fee', 'success_rate', 'slots_per_hour'],
   bitcoin: ['transaction_count', 'unique_addresses', 'fees_btc', 'block_size_bytes'],
   hyperliquid: ['volume', 'fill_count', 'unique_traders'],
+  tron: ['transaction_count', 'unique_addresses'],
 }
 
 /* The schema enum has to list every metric; which ones a chain family
@@ -114,6 +131,14 @@ type TimeSeriesBlock = {
     feePayer?: string
     from?: string
     to?: string
+    parameter?: {
+      value?: {
+        owner_address?: string
+        to_address?: string
+        contract_address?: string
+        receiver_address?: string
+      }
+    }
   }>
 }
 
@@ -152,104 +177,6 @@ const SOLANA_GENERIC_MAX_BYTES = 150 * 1024 * 1024
 const FAST_EVM_TIME_SERIES_BLOCK_CAP = 1500
 /* Bitcoin inputs and outputs weigh about a megabyte per block; a fee series
    scans at most this many of the newest requested blocks and says so. */
-/*
- * How many blocks one series call may read before it refuses.
- *
- * The cost of this tool is linear in blocks, not in buckets: every block in the
- * window is streamed and folded into its bucket, so a coarser interval reads
- * exactly as much as a fine one. A previous Base benchmark took up to 26.6s
- * for 10,800 blocks and 112s for 43,200. Keep the ceiling just above the scan
- * that finished comfortably within the client's timeout.
- */
-export const MAX_SERIES_SCAN_BLOCKS = 12_000
-
-export function assertSeriesWindowScannable(params: {
-  dataset: string
-  chainType: string
-  fromBlock: number
-  toBlock: number
-  duration: string
-}) {
-  const blocks = Math.max(0, params.toBlock - params.fromBlock + 1)
-  if (blocks <= MAX_SERIES_SCAN_BLOCKS) return
-  throw seriesWindowTooLargeError({ ...params, blocks, estimated: false })
-}
-
-/*
- * The exact check needs the window's block numbers, and those cost timestamp
- * lookups against the Portal: on Ethereum that was ten seconds spent deciding
- * to refuse. A duration that is far over the bound by the chain's own block
- * time is refused before any lookup. A borderline one waits for the exact
- * count, because a block-time estimate is not a block count.
- */
-export function assertSeriesDurationScannable(params: { dataset: string; chainType: string; duration: string }) {
-  let seconds: number
-  try {
-    seconds = parseTimeframeToSeconds(params.duration)
-  } catch {
-    return
-  }
-  const secondsPerBlock = estimateBlockTime(params.dataset, params.chainType)
-  if (!(secondsPerBlock > 0)) return
-  const blocks = Math.ceil(seconds / secondsPerBlock)
-  if (blocks <= MAX_SERIES_SCAN_BLOCKS * 1.5) return
-  throw seriesWindowTooLargeError({ ...params, blocks, estimated: true })
-}
-
-function seriesWindowTooLargeError(params: {
-  dataset: string
-  chainType: string
-  duration: string
-  blocks: number
-  estimated: boolean
-}): ActionableError {
-  const { blocks } = params
-  const secondsPerBlock = estimateBlockTime(params.dataset, params.chainType)
-  const affordableSeconds = MAX_SERIES_SCAN_BLOCKS * secondsPerBlock
-  const affordableWindow =
-    affordableSeconds >= 3600
-      ? `${Math.floor(affordableSeconds / 3600)} hours`
-      : `${Math.floor(affordableSeconds / 60)} minutes`
-  /* Suggest a real preset rather than a computed number nobody can type. */
-  const presets: [string, number][] = [
-    ['30d', 2_592_000],
-    ['14d', 1_209_600],
-    ['7d', 604_800],
-    ['3d', 259_200],
-    ['24h', 86_400],
-    ['12h', 43_200],
-    ['6h', 21_600],
-    ['1h', 3_600],
-    ['30m', 1_800],
-    ['15m', 900],
-  ]
-  const largest = presets.find(([, seconds]) => seconds <= affordableSeconds)
-
-  return new ActionableError(
-    `A ${params.duration} window is ${params.estimated ? 'about ' : ''}${blocks.toLocaleString()} blocks on ${params.dataset}${params.estimated ? ' by its typical block time' : ''}, and portal_get_time_series reads every block in the window. It stops at ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()} blocks so a call cannot outlast the client waiting for it.`,
-    [
-      largest
-        ? `Try duration '${largest[0]}' or less on ${params.dataset}. At its typical block rate, the limit covers roughly ${affordableWindow}.`
-        : `Ask for a window under ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()} blocks on ${params.dataset}.`,
-      'Use from_timestamp and to_timestamp to specify a narrower interval.',
-      'The same duration costs less on a slower chain: the limit is blocks, not time.',
-      'Use the analytics tool for this chain if you want one aggregate over a wider window instead of a series.',
-    ],
-    {
-      requested_duration: params.duration,
-      requested_blocks: blocks,
-      ...(params.estimated ? { requested_blocks_estimated: true } : {}),
-      max_scan_blocks: MAX_SERIES_SCAN_BLOCKS,
-      seconds_per_block: secondsPerBlock,
-      ...(largest ? { largest_supported_duration: largest[0] } : {}),
-    },
-    /* The caller asked for more than the tool serves and can ask for less.
-       That is their input, not a server fault, and retrying it unchanged will
-       fail exactly the same way. */
-    { code: 'unsupported_operation', origin: 'client_input', retryable: false },
-  )
-}
-
 const BITCOIN_FEE_SERIES_MAX_BLOCKS = 144
 const TIME_SERIES_CACHE_TTL_MS = 30_000
 const TIME_SERIES_CACHE_MAX_ENTRIES = 16
@@ -334,7 +261,10 @@ function getBlockNumber(block: TimeSeriesBlock): number | undefined {
 }
 
 function getBlockTimestamp(block: TimeSeriesBlock): number | undefined {
-  return block.timestamp ?? block.header?.timestamp
+  const raw = block.timestamp ?? block.header?.timestamp
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined
+  /* Tron block headers carry Unix millisecond timestamps; normalize to seconds. */
+  return raw > 1e12 ? Math.floor(raw / 1000) : raw
 }
 
 function getBlockBigIntString(
@@ -544,6 +474,21 @@ function formatBucketTime(timestamp: unknown): string | undefined {
   return `${hh}:${mm} UTC`
 }
 
+export function formatMetricWithNoun(
+  value: number,
+  metric: TimeSeriesMetric,
+  metricNoun: string,
+  opts?: { compact?: boolean; unit?: string },
+): string {
+  const amount = formatMetricAmount(value, metric, opts)
+  const unit = opts?.unit?.trim()
+  if (unit && metricNoun.toLowerCase().startsWith(unit.toLowerCase())) {
+    const suffix = metricNoun.slice(unit.length).trim()
+    return suffix ? `${amount} ${suffix}` : amount
+  }
+  return `${amount} ${metricNoun}`
+}
+
 function buildTimeSeriesAnswer(params: {
   dataset: string
   metric: TimeSeriesMetric
@@ -598,7 +543,7 @@ function buildTimeSeriesAnswer(params: {
       : ''
 
   const firstSentence = isAdditiveMetric(params.metric)
-    ? `${coveragePrefix}~${formatMetricAmount(total, params.metric, { compact: true, unit: params.unit })} ${metricNoun} on ${network} over ${spanLabel} (${bucketCount} x ${params.interval} buckets, avg ${formatMetricAmount(avg, params.metric, { unit: params.unit })}/bucket).`
+    ? `${coveragePrefix}~${formatMetricWithNoun(total, params.metric, metricNoun, { compact: true, unit: params.unit })} on ${network} over ${spanLabel} (${bucketCount} x ${params.interval} buckets, avg ${formatMetricAmount(avg, params.metric, { unit: params.unit })}/bucket).`
     : `${coveragePrefix}${network} ${metricNoun} averaged ${formatMetricAmount(avg, params.metric, { unit: params.unit })} over ${spanLabel} (${bucketCount} x ${params.interval} buckets).`
 
   if (!Number.isFinite(peak.value) || peak.value <= 0 || avg <= 0) {
@@ -609,8 +554,8 @@ function buildTimeSeriesAnswer(params: {
   const multiplier = peak.value / avg
   const spikeSentence =
     multiplier >= 1.5
-      ? ` Notable spike${peakTime ? ` at ${peakTime}` : ''} with ${formatMetricAmount(peak.value, params.metric, { unit: params.unit })} ${metricNoun} in a single ${params.interval} window - roughly ${trimFixed(multiplier, 1)}x the average.`
-      : ` Peak bucket${peakTime ? ` at ${peakTime}` : ''}: ${formatMetricAmount(peak.value, params.metric, { unit: params.unit })} ${metricNoun}.`
+      ? ` Notable spike${peakTime ? ` at ${peakTime}` : ''} with ${formatMetricWithNoun(peak.value, params.metric, metricNoun, { unit: params.unit })} in a single ${params.interval} window - roughly ${trimFixed(multiplier, 1)}x the average.`
+      : ` Peak bucket${peakTime ? ` at ${peakTime}` : ''}: ${formatMetricWithNoun(peak.value, params.metric, metricNoun, { unit: params.unit })}.`
 
   return `${firstSentence}${spikeSentence}${blocks}`.trim()
 }
@@ -898,24 +843,27 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           'Execution depth. Defaults to complete requested-window analysis; the optional fast value is only for explicitly bounded previews.',
         ),
     },
-    async ({
-      network,
-      metric,
-      interval,
-      duration: requestedDuration,
-      address,
-      from_timestamp,
-      to_timestamp,
-      compare_previous,
-      group_by,
-      group_limit,
-      mode,
-    }) => {
+    async (
+      {
+        network,
+        metric,
+        interval,
+        duration: requestedDuration,
+        address,
+        from_timestamp,
+        to_timestamp,
+        compare_previous,
+        group_by,
+        group_limit,
+        mode,
+      },
+      context,
+    ) => {
       const queryStartTime = Date.now()
       let dataset = await resolveDataset(network)
       const chainType = detectChainType(dataset)
       const hasTimestamps = from_timestamp !== undefined || to_timestamp !== undefined
-      const { duration, windowLabel } = resolveSeriesWindow({
+      let { duration, windowLabel } = resolveSeriesWindow({
         dataset,
         requestedDuration,
         from_timestamp,
@@ -923,7 +871,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       })
       const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
       const notices: string[] = []
-      const pipesRecipe = buildTimeSeriesPipesRecipe({
+      let pipesRecipe = buildTimeSeriesPipesRecipe({
         network: dataset,
         metric,
         interval,
@@ -932,23 +880,9 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         compare_previous,
         group_by,
       })
-      const longWindowNotice = hasTimestamps ? undefined : buildLongWindowNotice(duration)
+      let longWindowNotice = hasTimestamps ? undefined : buildLongWindowNotice(duration)
       if (longWindowNotice) {
         notices.push(longWindowNotice)
-      }
-
-      if (chainType === 'tron') {
-        throw createUnsupportedChainError({
-          toolName: 'portal_get_time_series',
-          dataset,
-          actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
-          suggestions: [
-            'Use portal_get_network_info for Tron availability and freshness.',
-            'Use portal_debug_resolve_time_to_block for Tron timestamp-to-block lookups.',
-            'Use portal_tron_query_transactions or portal_tron_query_logs with response_format=summary for bounded Tron counts, or the Stream API examples in the bundled SQD Portal skill for custom time series.',
-          ],
-        })
       }
 
       if (compare_previous && group_by === 'contract') {
@@ -960,7 +894,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           toolName: 'portal_get_time_series',
           dataset,
           actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
+          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills', 'tron'],
           suggestions: [
             'Use portal_debug_query_blocks for block-by-block Substrate inspection right now.',
             'Add a Substrate time-series implementation with event, call, or extrinsic metrics before using this chart tool on Substrate networks.',
@@ -1032,6 +966,10 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             ],
             reason: 'compare_previous currently supports the core scalar metrics only.',
           })
+        }
+
+        if (chainType !== 'solana') {
+          assertSeriesDurationScannable({ dataset, chainType, duration })
         }
 
         const durationSeconds = parseTimeframeToSeconds(duration)
@@ -2453,7 +2391,56 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       }
 
       if (from_timestamp === undefined && to_timestamp === undefined) {
-        assertSeriesDurationScannable({ dataset, chainType, duration })
+        const safePresets = getSafeSeriesDurationPresets(dataset, chainType)
+        if (safePresets.length > 0 && supportsFormElicitation(context, server.server?.getClientCapabilities?.())) {
+          const choiceSchema = z.object({
+            duration: z.enum(safePresets as [string, ...string[]]).describe('Supported window duration'),
+          })
+          const outcome = readFormElicitationOutcome(context, 'series_duration', choiceSchema)
+          if (outcome.state === 'invalid') {
+            throw new ActionableError(
+              `Invalid duration selection returned for ${dataset}.`,
+              [`Choose one of the supported durations (${safePresets.join(', ')}) or pass duration directly.`],
+              { dataset, supported_durations: safePresets },
+            )
+          }
+          if (outcome.state === 'accepted') {
+            duration = outcome.value.duration
+            windowLabel = duration
+            if (longWindowNotice) {
+              const previousIndex = notices.indexOf(longWindowNotice)
+              if (previousIndex !== -1) notices.splice(previousIndex, 1)
+            }
+            longWindowNotice = buildLongWindowNotice(duration)
+            if (longWindowNotice) {
+              notices.push(longWindowNotice)
+            }
+            pipesRecipe = buildTimeSeriesPipesRecipe({
+              network: dataset,
+              metric,
+              interval,
+              duration,
+              address,
+              compare_previous,
+              group_by,
+            })
+          } else {
+            try {
+              assertSeriesDurationScannable({ dataset, chainType, duration })
+            } catch (error) {
+              if (outcome.state === 'missing') {
+                return buildFormElicitationResult(
+                  'series_duration',
+                  `${quoteUntrusted(duration)} exceeds the ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()}-block time-series scan cap on ${dataset}. Pick a supported duration to run now:`,
+                  choiceSchema,
+                )
+              }
+              throw error
+            }
+          }
+        } else {
+          assertSeriesDurationScannable({ dataset, chainType, duration })
+        }
       }
       // Get block range using Portal's /timestamps/ API
       const resolvedWindow = await resolveTimeframeOrBlocks({
@@ -2477,13 +2464,15 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const expectedBuckets = Math.ceil(durationSeconds / intervalSeconds)
 
       // Build chain-specific query
-      const queryType = chainType === 'solana' ? 'solana' : chainType === 'bitcoin' ? 'bitcoin' : 'evm'
+      const queryType =
+        chainType === 'solana' ? 'solana' : chainType === 'bitcoin' ? 'bitcoin' : chainType === 'tron' ? 'tron' : 'evm'
       const blockFieldKey = 'block'
 
       const baseFields: any = {
         [blockFieldKey]: { number: true, timestamp: true },
       }
       const queryExtras: any = {}
+      let normalizedAddressForCache = address
 
       if (metric === 'transaction_count' || metric === 'transactions_per_block' || metric === 'unique_addresses') {
         baseFields.transaction =
@@ -2491,13 +2480,27 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         if (metric === 'unique_addresses') {
           if (chainType === 'solana') {
             baseFields.transaction.feePayer = true
+          } else if (chainType === 'tron') {
+            baseFields.transaction.parameter = true
           } else {
             baseFields.transaction.from = true
             baseFields.transaction.to = true
           }
         }
         if (address && chainType === 'evm') {
-          queryExtras.transactions = [{ to: [address.toLowerCase()] }]
+          normalizedAddressForCache = address.toLowerCase()
+          queryExtras.transactions = [{ to: [normalizedAddressForCache] }]
+        } else if (address && chainType === 'tron') {
+          let hex41: string
+          try {
+            hex41 = normalizeTronAddress(address, 'transaction')
+          } catch (error) {
+            throw toTronInputError(error)
+          }
+          normalizedAddressForCache = hex41
+          queryExtras.transferTransactions = [{ owner: [hex41] }, { to: [hex41] }]
+          queryExtras.transferAssetTransactions = [{ owner: [hex41] }, { to: [hex41] }]
+          queryExtras.triggerSmartContractTransactions = [{ owner: [hex41] }, { contract: [hex41] }]
         } else {
           queryExtras.transactions = [{}]
         }
@@ -2518,9 +2521,13 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             ? address
               ? 750
               : (EVM_GENERIC_TIME_SERIES_CHUNK_SIZE[metric] ?? 250)
-            : hasTxData
-              ? 5000
-              : 10000
+            : chainType === 'tron' && hasTxData
+              ? metric === 'unique_addresses'
+                ? 200
+                : 1000
+              : hasTxData
+                ? 5000
+                : 10000
       let adaptiveChunkReduced = false
       const sortResults = (items: TimeSeriesBlock[]) =>
         items.sort((left, right) => (getBlockNumber(left) || 0) - (getBlockNumber(right) || 0))
@@ -2533,7 +2540,6 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         const results: TimeSeriesBlock[] = []
         let currentFrom = rangeFrom
         let chunkSize = initialChunkSize
-        let chunkSizeReduced = false
 
         while (currentFrom <= rangeTo) {
           const plannedTo = Math.min(currentFrom + chunkSize - 1, rangeTo)
@@ -2561,14 +2567,16 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
 
             if (chainType === 'solana' && shouldReduceChunkSize && chunkSize > MIN_SOLANA_GENERIC_CHUNK_SIZE) {
               chunkSize = Math.max(MIN_SOLANA_GENERIC_CHUNK_SIZE, Math.floor(chunkSize / 2))
-              chunkSizeReduced = true
               adaptiveChunkReduced = true
               continue
             }
 
-            if (chainType === 'evm' && shouldReduceChunkSize && chunkSize > MIN_EVM_GENERIC_CHUNK_SIZE) {
+            if (
+              (chainType === 'evm' || chainType === 'tron') &&
+              shouldReduceChunkSize &&
+              chunkSize > MIN_EVM_GENERIC_CHUNK_SIZE
+            ) {
               chunkSize = Math.max(MIN_EVM_GENERIC_CHUNK_SIZE, Math.floor(chunkSize / 2))
-              chunkSizeReduced = true
               adaptiveChunkReduced = true
               continue
             }
@@ -2608,7 +2616,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         metric,
         interval,
         duration,
-        address,
+        address: normalizedAddressForCache,
         mode,
         from_block: effectiveFromBlock,
         to_block: toBlock,
@@ -2762,6 +2770,19 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               if (tx.feePayer) bucket.addresses.add(tx.feePayer)
               if (tx.from) bucket.addresses.add(tx.from.toLowerCase())
               if (tx.to) bucket.addresses.add(tx.to.toLowerCase())
+              const tronValue = tx.parameter?.value
+              if (typeof tronValue?.owner_address === 'string') {
+                bucket.addresses.add(tronValue.owner_address.toLowerCase())
+              }
+              if (typeof tronValue?.to_address === 'string') {
+                bucket.addresses.add(tronValue.to_address.toLowerCase())
+              }
+              if (typeof tronValue?.contract_address === 'string') {
+                bucket.addresses.add(tronValue.contract_address.toLowerCase())
+              }
+              if (typeof tronValue?.receiver_address === 'string') {
+                bucket.addresses.add(tronValue.receiver_address.toLowerCase())
+              }
             })
           }
         })

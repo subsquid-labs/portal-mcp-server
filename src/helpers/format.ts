@@ -905,10 +905,8 @@ function buildNextSteps(payload: RecordLike): RecordLike | undefined {
           continuation: {
             available: true,
             label: continuationLabel,
-            how_to_continue: 'Call the same tool again with the next cursor from _pagination.next_cursor.',
-            note: adjacentWindow
-              ? 'The requested window is complete; the cursor opens the immediately preceding window.'
-              : 'This response is a preview page, so more matching results remain in the same requested window.',
+            how_to_continue: 'Reuse _pagination.next_cursor on the same tool.',
+            note: adjacentWindow ? 'Cursor opens the preceding window.' : 'More matching rows remain in this window.',
           },
         }
       : {}),
@@ -920,25 +918,11 @@ function buildNextSteps(payload: RecordLike): RecordLike | undefined {
             note:
               typeof pipesHandoff.summary === 'string'
                 ? pipesHandoff.summary
-                : 'Use Pipes SDK plus SQD agent skills when you need custom indexing or protocol-specific depth.',
+                : 'Use Pipes SDK when you need custom indexing or backfill depth.',
           },
         }
       : {}),
   }
-}
-
-function buildTechnicalDetails(payload: RecordLike): RecordLike | undefined {
-  const technicalDetails: RecordLike = {}
-
-  if (payload._meta !== undefined) technicalDetails.meta = payload._meta
-  if (payload._freshness !== undefined) technicalDetails.freshness = payload._freshness
-  if (payload._coverage !== undefined) technicalDetails.coverage = payload._coverage
-  if (payload._execution !== undefined) technicalDetails.execution = payload._execution
-  if (payload._pagination !== undefined) technicalDetails.pagination = payload._pagination
-  if (payload._ordering !== undefined) technicalDetails.ordering = payload._ordering
-  if (payload._tool_contract !== undefined) technicalDetails.tool_contract = payload._tool_contract
-
-  return Object.keys(technicalDetails).length > 0 ? technicalDetails : undefined
 }
 
 function buildDefaultFreshness(): RecordLike {
@@ -1118,18 +1102,18 @@ function collectInvestigationPivots(payload: RecordLike): RecordLike[] {
   const seen = new Set<string>()
   const pivots: RecordLike[] = []
 
-  for (const { path, row } of collectCandidateRows(payload)) {
+  for (const { row } of collectCandidateRows(payload)) {
     if (blockResult && typeof row.number === 'number') {
       const text = String(row.number)
-      const dedupeKey = `number:${text}`
+      const dedupeKey = `from_block/to_block:${text}`
       if (!seen.has(dedupeKey)) {
         seen.add(dedupeKey)
         pivots.push({
           field: 'number',
-          path: `${path}.number`,
           value: text,
           use_as: 'from_block/to_block',
         })
+        if (pivots.length >= 5) return pivots
       }
     }
 
@@ -1138,16 +1122,19 @@ function collectInvestigationPivots(payload: RecordLike): RecordLike[] {
       if (typeof value !== 'string' && typeof value !== 'number') continue
       const text = String(value)
       if (!text || text === '0x') continue
-      const dedupeKey = `${key}:${text}`
+      /* Deduplicate by target role + normalized value so alias pairs like
+         from/sender, to/recipient, and hash/tx_hash/primary_id do not repeat
+         the exact same identifier multiple times. */
+      const normalizedRole = useAs === 'primary_id' ? 'transaction_hash' : useAs
+      const dedupeKey = `${normalizedRole}:${text.toLowerCase()}`
       if (seen.has(dedupeKey)) continue
       seen.add(dedupeKey)
       pivots.push({
         field: key,
-        path: `${path}.${key}`,
         value: text,
         use_as: useAs,
       })
-      if (pivots.length >= 10) return pivots
+      if (pivots.length >= 5) return pivots
     }
   }
 
@@ -1157,14 +1144,13 @@ function collectInvestigationPivots(payload: RecordLike): RecordLike[] {
 function buildInvestigationGuide(payload: RecordLike): RecordLike | undefined {
   const toolContract = isRecord(payload._tool_contract) ? payload._tool_contract : undefined
   const intent = typeof toolContract?.intent === 'string' ? toolContract.intent : undefined
-  const meta = isRecord(payload._meta) ? payload._meta : undefined
   const pagination = isRecord(payload._pagination) ? payload._pagination : undefined
   const coverage = isRecord(payload._coverage) ? payload._coverage : undefined
   const execution = isRecord(payload._execution) ? payload._execution : undefined
   const notices = [
     ...asArray<string>(payload._notices),
     ...(typeof payload._notice === 'string' ? [payload._notice] : []),
-  ].slice(0, 4)
+  ].slice(0, 3)
   const primaryPath =
     inferPrimaryEvidencePath(payload) ?? (typeof payload.answer === 'string' ? 'answer' : undefined) ?? '_summary'
   const primaryKind = inferPrimaryEvidenceKind(payload, primaryPath)
@@ -1180,50 +1166,43 @@ function buildInvestigationGuide(payload: RecordLike): RecordLike | undefined {
       continuationScope !== 'adjacent_window' &&
       typeof pagination?.next_cursor === 'string')
 
-  if (typeof meta?.queried_blocks === 'string') {
-    limitations.push(`Evidence is limited to queried blocks ${meta.queried_blocks}.`)
-  }
   if (typeof pagination?.next_cursor === 'string') {
     limitations.push(
       continuationScope === 'adjacent_window'
-        ? 'The cursor loads an older adjacent window; use _coverage to judge completeness of this requested window.'
-        : 'This is a preview page. Continue with _pagination.next_cursor before treating the history as complete.',
+        ? 'Cursor loads an older adjacent window.'
+        : 'Preview page; continue with _pagination.next_cursor.',
     )
-  }
-  if (coverage?.has_more === true || coverage?.result_complete === false || coverage?.window_complete === false) {
-    limitations.push('Coverage metadata says more matching data may exist outside this response.')
+  } else if (
+    coverage?.has_more === true ||
+    coverage?.result_complete === false ||
+    coverage?.window_complete === false
+  ) {
+    limitations.push('Window or result coverage is partial; inspect _coverage.')
   }
   if (typeof execution?.max_scan_blocks === 'number' && typeof execution?.scanned_blocks === 'number') {
     limitations.push(
-      `Bounded scan covered ${execution.scanned_blocks.toLocaleString('en-US')} of up to ${execution.max_scan_blocks.toLocaleString('en-US')} allowed blocks.`,
+      `Scanned ${execution.scanned_blocks.toLocaleString('en-US')}/${execution.max_scan_blocks.toLocaleString('en-US')} blocks.`,
     )
   }
   limitations.push(...notices)
 
   const followUpFilters: RecordLike[] = []
-  const pivotFields = new Set(pivots.map((pivot) => (typeof pivot.field === 'string' ? pivot.field : undefined)))
   if (typeof pagination?.next_cursor === 'string') {
     followUpFilters.push({
-      goal: 'Continue the timeline',
-      use: 'Call the same tool with cursor from _pagination.next_cursor.',
+      goal: 'Continue timeline',
+      use: 'Reuse _pagination.next_cursor.',
     })
   }
-  if (pivotFields.has('block_number')) {
+  if (pivots.length > 0) {
     followUpFilters.push({
-      goal: 'Anchor a block window',
-      use: 'Use the block_number pivot as from_block/to_block, or expand around it for incident context.',
+      goal: 'Pivot on returned entity',
+      use: 'Reuse values from investigation.pivots as exact filters.',
     })
   }
-  if (pivots.some((pivot) => pivot.field !== 'block_number')) {
+  if (followUpFilters.length === 0) {
     followUpFilters.push({
-      goal: 'Pivot from a concrete entity',
-      use: 'Reuse values from investigation.pivots as exact filters in wallet, transaction, log, transfer, fill, or instruction queries.',
-    })
-  }
-  if (typeof meta?.queried_blocks === 'string' || execution?.range_kind !== undefined) {
-    followUpFilters.push({
-      goal: 'Expand or narrow the time window',
-      use: 'Adjust timeframe/from_block/to_block/from_timestamp/to_timestamp and compare results.',
+      goal: 'Adjust scope',
+      use: 'Refine network, timeframe, or block bounds.',
     })
   }
 
@@ -1231,18 +1210,13 @@ function buildInvestigationGuide(payload: RecordLike): RecordLike | undefined {
     version: 'portal_investigation_v1',
     status: resultIncomplete ? 'partial_page' : intent === 'discover' ? 'reference_result' : 'bounded_result',
     evidence: {
-      ...(typeof toolContract?.name === 'string' ? { tool: toolContract.name } : {}),
       ...(primaryPath ? { primary_path: primaryPath } : {}),
       ...(primaryKind ? { primary_kind: primaryKind } : {}),
-      ...(typeof meta?.network === 'string' ? { network: meta.network } : {}),
-      ...(typeof meta?.dataset === 'string' ? { dataset: meta.dataset } : {}),
-      ...(typeof meta?.queried_blocks === 'string' ? { queried_blocks: meta.queried_blocks } : {}),
-      ...(typeof meta?.response_time_ms === 'number' ? { response_time_ms: meta.response_time_ms } : {}),
       ...(returned !== undefined ? { returned } : {}),
     },
     pivots,
     follow_up_filters: followUpFilters,
-    limitations: Array.from(new Set(limitations)).slice(0, 6),
+    limitations: Array.from(new Set(limitations)).slice(0, 4),
   }
 }
 
@@ -1406,7 +1380,13 @@ export function formatResult(data: unknown, message?: string, options?: FormatOp
       payloadRecord._summary = message.trim()
     }
     if (toolContract) {
-      payloadRecord._tool_contract = { ...toolContract, untrusted_fields: UNTRUSTED_FIELDS }
+      payloadRecord._tool_contract = {
+        name: toolContract.name,
+        intent: toolContract.intent,
+        vm: toolContract.vm,
+        ...(toolContract.normalized_output ? { normalized_output: true } : {}),
+        untrusted_fields: UNTRUSTED_FIELDS,
+      }
     }
     payloadRecord._server = {
       name: 'SQD',
@@ -1496,12 +1476,8 @@ export function formatResult(data: unknown, message?: string, options?: FormatOp
     // the compact JSON form below.
     jsonString = JSON.stringify(responsePayload)
   } catch {
-    try {
-      jsonString = JSON.stringify(responsePayload)
-    } catch {
-      return {
-        content: [{ type: 'text', text: 'Error: Unable to serialize response.' }],
-      }
+    return {
+      content: [{ type: 'text', text: 'Error: Unable to serialize response.' }],
     }
   }
 

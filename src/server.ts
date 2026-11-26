@@ -1,7 +1,10 @@
-import { CLIENT_INFO_META_KEY, McpServer, type ServerContext } from '@modelcontextprotocol/server'
+import { CLIENT_INFO_META_KEY, McpServer, type RegisteredTool, type ServerContext } from '@modelcontextprotocol/server'
 
 import {
+  ACTIVITY_EXPLORER_TOOLS,
   classifyUiCapability,
+  getActivityExplorerDeploymentMode,
+  getActivityExplorerToolMeta,
   isActivityExplorerEnabled,
   isActivityExplorerEnabledByDeployment,
   recordActivityExplorerResult,
@@ -12,9 +15,16 @@ import { RequestCancelledError } from './helpers/errors.js'
 import { attachEvidenceReceipt } from './helpers/evidence-receipt.js'
 import { runWithGuardrailScope } from './helpers/guardrails.js'
 import { PORTAL_TOOL_NAMES, listsOutputSchemaFor, runWithOutputSchemaListing } from './helpers/mcp-registration.js'
-import { runWithPortalRequestSignal } from './helpers/request-context.js'
+import { runWithPortalProgress } from './helpers/progress.js'
+import {
+  combineAbortSignals,
+  getPortalRequestSignal,
+  runWithPortalRequestSignal,
+  runWithToolAdmissionLease,
+} from './helpers/request-context.js'
 import { getToolWorkProfile, toolAdmission } from './helpers/tool-admission.js'
 import { formatToolError } from './helpers/tool-error.js'
+import { SQD_SERVER_ICONS } from './icons.js'
 import { registerInvestigationPromptsAndResources } from './investigations.js'
 import { toolCallDuration, toolCallsActive, toolCallsTotal } from './metrics.js'
 import {
@@ -27,6 +37,7 @@ import {
   recordToolOutcome,
 } from './observability.js'
 import { registerSchemaResource } from './resources/schema.js'
+import { attachPortalSkills } from './skills.js'
 import { registerAllTools } from './tools/index.js'
 import {
   type ToolSelection,
@@ -146,10 +157,25 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
   const server = new McpServer(
     {
       name: 'sqd-portal-mcp-server',
+      title: 'SQD',
       version: npmVersion,
+      description:
+        'Read-only blockchain data from SQD Portal across EVM, Solana, Bitcoin, Substrate, Hyperliquid, and Tron datasets.',
+      websiteUrl: 'https://docs.sqd.dev/en/ai/mcp-server',
+      icons: SQD_SERVER_ICONS,
     },
     {
       instructions: getPortalServerInstructions(),
+      /* Private 5-minute cache hints let stateless 2026-07-28 clients reuse
+         discovery and catalog listings across turns without leaking per-caller
+         toolset or User-Agent variations across different clients. */
+      cacheHints: {
+        'server/discover': { ttlMs: 300_000, cacheScope: 'private' },
+        'tools/list': { ttlMs: 300_000, cacheScope: 'private' },
+        'prompts/list': { ttlMs: 300_000, cacheScope: 'private' },
+        'resources/list': { ttlMs: 300_000, cacheScope: 'private' },
+        'resources/templates/list': { ttlMs: 300_000, cacheScope: 'private' },
+      },
     },
   )
 
@@ -171,7 +197,7 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
       const toolArgs = (
         handlerArgs.length > 1 && handlerArgs[0] && typeof handlerArgs[0] === 'object' ? handlerArgs[0] : {}
       ) as Record<string, unknown>
-      const requestSignal = requestContext?.mcpReq.signal
+      const requestSignal = combineAbortSignals(getPortalRequestSignal(), requestContext?.mcpReq.signal)
       const envelope = requestContext?.mcpReq.envelope as Record<string, unknown> | undefined
       const envelopeClient = envelope?.[CLIENT_INFO_META_KEY]
       const declaredClient =
@@ -237,12 +263,25 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
             admitted = true
             toolCallsActive.inc({ tool: toolName, transport: runtimeContext.transport })
             /* Handlers run outside the factory's scope, so the connection's
-               app choice is re-entered here for the result formatters. */
-            const handlerResult = await runWithActivityExplorerSurface(appEnabled, () =>
-              runWithPortalRequestSignal(requestSignal, () =>
-                runWithGuardrailScope({ tool: toolName, workClass: getToolWorkProfile(toolName).class }, () =>
-                  handler(...handlerArgs),
-                ),
+               app choice is re-entered here for the result formatters. In auto
+               mode, a host that explicitly declared MCP Apps UI capability gets
+               the App surface automatically unless it opted out. */
+            const callAppEnabled =
+              runtimeContext.appEnabled !== undefined
+                ? appEnabled
+                : appEnabled || (getActivityExplorerDeploymentMode() === 'auto' && uiCapability === 'declared')
+            const handlerResult = await runWithActivityExplorerSurface(callAppEnabled, () =>
+              runWithToolAdmissionLease(
+                lease,
+                () =>
+                  runWithPortalRequestSignal(requestSignal, () =>
+                    runWithPortalProgress(requestContext, () =>
+                      runWithGuardrailScope({ tool: toolName, workClass: getToolWorkProfile(toolName).class }, () =>
+                        handler(...handlerArgs),
+                      ),
+                    ),
+                  ),
+                requestSignal,
               ),
             )
             /* Hashing the result for the evidence receipt is real work on a
@@ -319,6 +358,7 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
 
   // Instrument the single MCP SDK v2 registration surface used by every tool.
   const originalRegisterTool = server.registerTool.bind(server)
+  const registeredTools = new Map<string, RegisteredTool>()
 
   ;(server as any).registerTool = (...args: any[]) => {
     const toolName = args[0] as string
@@ -328,18 +368,82 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
       args[2] = instrumentToolHandler(toolName, handler)
     }
 
-    return originalRegisterTool(
+    const registered = originalRegisterTool(
       ...(args as [string, Parameters<typeof server.registerTool>[1], Parameters<typeof server.registerTool>[2]]),
     )
+    registeredTools.set(toolName, registered)
+    return registered
   }
 
-  // Register resources
+  // Register resources and bundled MCP Skills (SEP-2640)
   registerSchemaResource(server)
   registerInvestigationPromptsAndResources(server)
   registerActivityExplorerResource(server, runtimeContext)
+  attachPortalSkills(server)
+
+  // Capture the SDK's own tools/list handler while registering tools so auto mode
+  // can attach SQD Explorer metadata per request (2026-07-28 envelopes and legacy).
+  let sdkListToolsHandler: ((request: any, ctx: ServerContext) => Promise<any> | any) | undefined
+  const originalSetRequestHandler = server.server.setRequestHandler.bind(server.server)
+  ;(server.server as any).setRequestHandler = (...args: any[]) => {
+    if (args[0] === 'tools/list') {
+      sdkListToolsHandler = args[1]
+    }
+    return (originalSetRequestHandler as (...callArgs: any[]) => unknown)(...args)
+  }
 
   // Register all tools
   registerAllTools(server)
+  ;(server.server as any).setRequestHandler = originalSetRequestHandler
+
+  /* In auto mode without an explicit ?app= override, resolve SQD Explorer
+     metadata dynamically on tools/list from either the 2026-07-28 per-request
+     capability envelope or legacy 2025 initialize capabilities. This ensures
+     both modern server/discover stdio sessions and legacy stdio sessions
+     receive Explorer metadata automatically. */
+  if (runtimeContext.appEnabled === undefined && !appEnabled && getActivityExplorerDeploymentMode() === 'auto') {
+    if (sdkListToolsHandler) {
+      const baseListTools = sdkListToolsHandler
+      server.server.setRequestHandler('tools/list' as any, async (request: any, ctx: ServerContext) => {
+        const envelope = ctx?.mcpReq?.envelope as Record<string, unknown> | undefined
+        const uiDeclared = classifyUiCapability(envelope, server.server.getClientCapabilities()) === 'declared'
+        const result = await baseListTools(request, ctx)
+        if (!uiDeclared || !result || !Array.isArray(result.tools)) return result
+        return {
+          ...result,
+          tools: result.tools.map((tool: Record<string, unknown>) => {
+            if (tool._meta || typeof tool.name !== 'string' || !ACTIVITY_EXPLORER_TOOLS.has(tool.name)) {
+              return tool
+            }
+            const meta = runWithActivityExplorerSurface(true, () => getActivityExplorerToolMeta(tool.name as string))
+            return meta ? { ...tool, _meta: meta } : tool
+          }),
+        }
+      })
+    }
+
+    const previousOnInitialized = server.server.oninitialized
+    server.server.oninitialized = () => {
+      previousOnInitialized?.()
+      if (classifyUiCapability(undefined, server.server.getClientCapabilities()) !== 'declared') return
+      let updated = false
+      for (const [toolName, registered] of registeredTools) {
+        if (!ACTIVITY_EXPLORER_TOOLS.has(toolName)) continue
+        const meta = runWithActivityExplorerSurface(true, () => getActivityExplorerToolMeta(toolName))
+        if (meta) {
+          registered._meta = meta
+          updated = true
+        }
+      }
+      if (updated) {
+        try {
+          server.sendToolListChanged()
+        } catch {
+          // Ignore send failures if the client disconnected during initialization.
+        }
+      }
+    }
+  }
 
   return server
 }

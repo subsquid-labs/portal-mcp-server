@@ -10,6 +10,11 @@ import {
 } from '../../helpers/bounded-search.js'
 import { detectChainType } from '../../helpers/chain.js'
 import {
+  buildFormElicitationResult,
+  readFormElicitationOutcome,
+  supportsFormElicitation,
+} from '../../helpers/elicitation.js'
+import {
   type TokenListLookupMetadata,
   type TokenSymbolResolution,
   buildTokenListLookupNotices,
@@ -130,7 +135,9 @@ export function registerGetErc20TransfersTool(server: McpServer) {
   const buildTokenResolutionNotices = (resolutions: TokenSymbolResolution[], unresolvedSymbols: string[]) => {
     const notices: string[] = []
     if (unresolvedSymbols.length > 0) {
-      notices.push(`No token-list match found for symbol(s): ${unresolvedSymbols.join(', ')}.`)
+      notices.push(
+        `No token-list match found for symbol(s): ${unresolvedSymbols.map((symbol) => quoteUntrusted(symbol)).join(', ')}.`,
+      )
     }
     for (const resolution of resolutions) {
       if (resolution.matches.length > 1) {
@@ -255,23 +262,26 @@ export function registerGetErc20TransfersTool(server: McpServer) {
         .describe('Include token metadata (symbol, decimals) inline. Avoids separate token metadata lookups.'),
       cursor: z.string().optional().describe('Continuation cursor from a previous response'),
     },
-    async ({
-      network,
-      timeframe,
-      from_block,
-      to_block,
-      from_timestamp,
-      to_timestamp,
-      token_addresses,
-      token_symbols,
-      max_token_symbol_matches,
-      from_addresses,
-      to_addresses,
-      scan_order,
-      limit,
-      include_token_info,
-      cursor,
-    }) => {
+    async (
+      {
+        network,
+        timeframe,
+        from_block,
+        to_block,
+        from_timestamp,
+        to_timestamp,
+        token_addresses,
+        token_symbols,
+        max_token_symbol_matches,
+        from_addresses,
+        to_addresses,
+        scan_order,
+        limit,
+        include_token_info,
+        cursor,
+      },
+      context,
+    ) => {
       const queryStartTime = Date.now()
       const paginationCursor = cursor
         ? decodeRecentPageCursor<Erc20Request>(cursor, 'portal_evm_query_token_transfers')
@@ -346,6 +356,69 @@ export function registerGetErc20TransfersTool(server: McpServer) {
               'Check the network name; supported token symbols differ across chains.',
             ],
           )
+        }
+        /* When a single symbol matches multiple contracts and the host supports
+           MCP form elicitation, let the user pick the exact contract instead of
+           silently merging bridged or lookalike variants. */
+        const ambiguousResolution =
+          normalizedTokenAddressFilters.length === 0 && tokenSymbolResolutions.length === 1
+            ? tokenSymbolResolutions[0]
+            : undefined
+        if (
+          ambiguousResolution &&
+          ambiguousResolution.matches.length > 1 &&
+          supportsFormElicitation(context, server.server?.getClientCapabilities?.())
+        ) {
+          const candidates = ambiguousResolution.matches
+            .filter((match) => /^0x[0-9a-fA-F]{40}$/.test(match.address))
+            .slice(0, 5)
+          if (candidates.length > 1) {
+            const options = ['all', ...candidates.map((match) => match.address)] as [string, ...string[]]
+            const choiceSchema = z.object({
+              token_address: z
+                .enum(options)
+                .describe('Pick one contract address or "all" to include every matching token.'),
+            })
+            const outcome = readFormElicitationOutcome(context, 'token_choice', choiceSchema)
+            if (outcome.state === 'missing') {
+              const candidateSummary = candidates
+                .map((match) => `${quoteUntrusted(match.symbol)} (${quoteUntrusted(match.name)}): ${match.address}`)
+                .join('; ')
+              return buildFormElicitationResult(
+                'token_choice',
+                `Multiple ${quoteUntrusted(ambiguousResolution.symbol)} contracts exist on ${dataset}: ${candidateSummary}. Choose one contract address or "all".`,
+                choiceSchema,
+              )
+            }
+            if (outcome.state === 'declined' || outcome.state === 'cancelled') {
+              throw new ActionableError(
+                `Token selection for ${quoteUntrusted(ambiguousResolution.symbol)} on ${dataset} was ${outcome.state}.`,
+                [
+                  'Pass token_addresses with the exact contract address you want to query.',
+                  'Or call portal_resolve_entity to inspect matching contracts first.',
+                ],
+                { dataset, symbol: ambiguousResolution.symbol, candidates: candidates.map((m) => m.address) },
+              )
+            }
+            if (outcome.state === 'invalid') {
+              throw new ActionableError(
+                `Invalid token selection returned for ${quoteUntrusted(ambiguousResolution.symbol)} on ${dataset}.`,
+                ['Choose one of the listed contract addresses or "all", or pass token_addresses directly.'],
+                { dataset, symbol: ambiguousResolution.symbol, candidates: candidates.map((m) => m.address) },
+              )
+            }
+            if (outcome.value.token_address !== 'all') {
+              resolvedTokenSymbolAddresses = [outcome.value.token_address]
+              tokenSymbolResolutions = [
+                {
+                  ...ambiguousResolution,
+                  matches: candidates.filter((match) => match.address === outcome.value.token_address),
+                  selected_addresses: [outcome.value.token_address],
+                  truncated: false,
+                },
+              ]
+            }
+          }
         }
       }
       const normalizedTokens = uniqueStrings([...normalizedTokenAddressFilters, ...resolvedTokenSymbolAddresses])
