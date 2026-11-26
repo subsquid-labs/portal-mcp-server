@@ -664,7 +664,7 @@ function buildPrimaryPreview(
           ? [{ row: primaryValue[primaryValue.length - 1] as RecordLike, index: primaryValue.length - 1 }]
           : []
         : primaryValue
-            .slice(0, Math.min(3, primaryValue.length))
+            .slice(0, Math.min(1, primaryValue.length))
             .map((row, index) => ({ row, index }))
             .filter((entry): entry is { row: RecordLike; index: number } => isRecord(entry.row))
 
@@ -787,12 +787,16 @@ export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): Po
     })
   }
   const annotatedSections = annotateSections(sections, primaryPath, answerSequence, recommendedViews)
+  const primaryPreview = overrides?.compact
+    ? undefined
+    : buildPrimaryPreview(payload, primaryPath, overrides?.primary_kind ?? primaryKind, tableHints)
   const normalizedFields = inferNormalizedFields(payload, primaryPath, normalizedOutput)
   const hasNextCursor = isRecord(payload._pagination) && typeof payload._pagination.next_cursor === 'string'
 
-  /* Emit compact structural pointers instead of re-copying rows, charts,
+  /* Emit compact structural pointers instead of re-copying full charts,
      tables, metric cards, and follow-up actions that already live at top level
-     (chart, tables, _ui, next_steps, items). */
+     (chart, tables, _ui, next_steps, items). Keep primary_preview when present
+     so exact identifiers and tiny amounts remain lossless in model previews. */
   const compactSections: LlmSectionHint[] = (
     overrides?.compact
       ? [
@@ -827,6 +831,7 @@ export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): Po
     answer_sequence: overrides?.compact ? answerSequence.slice(0, 4) : answerSequence,
     sections: compactSections,
     recommended_views: compactViews,
+    ...(primaryPreview ? { primary_preview: primaryPreview } : {}),
     ...(normalizedFields ? { normalized_fields: normalizedFields } : {}),
     ...(hasNextCursor ? { follow_up: { continue_cursor_path: '_pagination.next_cursor' } } : {}),
     ...(customNotes && customNotes.length > 0 ? { parser_notes: customNotes } : {}),

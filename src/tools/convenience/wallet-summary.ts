@@ -27,7 +27,7 @@ import {
   multiplyExactDecimals,
   parseExactDecimal,
 } from '../../helpers/exact-decimal.js'
-import { portalFetchRecentRecords } from '../../helpers/fetch.js'
+import { portalFetchRecentRecords, portalFetchRecentRecordsWithScan } from '../../helpers/fetch.js'
 import {
   buildEvmLogFields,
   buildTronBlockFields,
@@ -3329,6 +3329,7 @@ async function buildNonEvmWalletSummary(params: {
   }
 
   if (chainType === 'tron') {
+    const base58Address = normalizeTronAddress(address, 'base58')
     const hex41 = normalizeTronAddress(address, 'transaction')
     const topicHex = normalizeTronAddress(address, 'topic')
     const transferTopic0 = stripHexPrefix(EVENT_SIGNATURES.TRANSFER_ERC20).toLowerCase()
@@ -3342,8 +3343,8 @@ async function buildNonEvmWalletSummary(params: {
       retryBudgetMs: WALLET_PRIMARY_RETRY_BUDGET_MS,
     }
 
-    const [trxBlocks, callBlocks, trc20Blocks] = await Promise.all([
-      portalFetchRecentRecords(
+    const [trxFetch, callFetch, trc20Fetch] = await Promise.all([
+      portalFetchRecentRecordsWithScan(
         streamUrl,
         {
           type: 'tron',
@@ -3357,7 +3358,7 @@ async function buildNonEvmWalletSummary(params: {
         },
         { ...fetchOpts, itemKeys: ['transactions'] },
       ),
-      portalFetchRecentRecords(
+      portalFetchRecentRecordsWithScan(
         streamUrl,
         {
           type: 'tron',
@@ -3371,7 +3372,7 @@ async function buildNonEvmWalletSummary(params: {
         },
         { ...fetchOpts, itemKeys: ['transactions'] },
       ),
-      portalFetchRecentRecords(
+      portalFetchRecentRecordsWithScan(
         streamUrl,
         {
           type: 'tron',
@@ -3392,12 +3393,12 @@ async function buildNonEvmWalletSummary(params: {
     ])
 
     const trxTxs = sortTronTransactions(
-      flattenTronTransactions(trxBlocks, { includeLogs: false, includeInternalTransactions: false }),
+      flattenTronTransactions(trxFetch.records, { includeLogs: false, includeInternalTransactions: false }),
     )
     const callTxs = sortTronTransactions(
-      flattenTronTransactions(callBlocks, { includeLogs: false, includeInternalTransactions: false }),
+      flattenTronTransactions(callFetch.records, { includeLogs: false, includeInternalTransactions: false }),
     )
-    const trc20Logs = sortTronLogs(flattenTronLogs(trc20Blocks, { includeTransaction: false }))
+    const trc20Logs = sortTronLogs(flattenTronLogs(trc20Fetch.records, { includeTransaction: false }))
 
     const trxPage = paginateAscendingItems(trxTxs, limit_per_type, (item) =>
       typeof item.block_number === 'number' ? item.block_number : undefined,
@@ -3413,13 +3414,18 @@ async function buildNonEvmWalletSummary(params: {
     let sentSun = 0n
     let inboundCount = 0
     let outboundCount = 0
+    let skippedFailedTrx = 0
     for (const tx of trxPage.pageItems) {
+      if (tx.status === 'failed' || tx.success === false) {
+        skippedFailedTrx += 1
+        continue
+      }
       const sunRaw = typeof tx.amount_sun === 'string' && /^\d+$/.test(tx.amount_sun) ? BigInt(tx.amount_sun) : 0n
-      if (tx.recipient_base58 === address) {
+      if (tx.recipient_base58 === base58Address) {
         receivedSun += sunRaw
         inboundCount += 1
       }
-      if (tx.sender_base58 === address) {
+      if (tx.sender_base58 === base58Address) {
         sentSun += sunRaw
         outboundCount += 1
       }
@@ -3428,6 +3434,17 @@ async function buildNonEvmWalletSummary(params: {
     const totalReceivedTrx = sunToTrx(receivedSun.toString()) ?? '0'
     const totalSentTrx = sunToTrx(sentSun.toString()) ?? '0'
     const netTrx = sunToTrx(netSun.toString()) ?? '0'
+    const trc20Contracts = new Set(
+      trc20Page.pageItems
+        .map((log) =>
+          typeof log.contract_base58 === 'string'
+            ? log.contract_base58
+            : typeof log.address === 'string'
+              ? log.address
+              : undefined,
+        )
+        .filter((addr): addr is string => Boolean(addr)),
+    )
 
     const seenActivityIds = new Set<string>()
     const activityItems = [...trxPage.pageItems, ...callPage.pageItems, ...trc20Page.pageItems]
@@ -3440,16 +3457,32 @@ async function buildNonEvmWalletSummary(params: {
       .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0))
 
     const tronHasMore = trxPage.hasMore || callPage.hasMore || trc20Page.hasMore
-    const tronWindowComplete = fromBlock <= requestedFromBlock
+    const tronWindowComplete =
+      fromBlock <= requestedFromBlock &&
+      (trxFetch.scan?.exhausted ?? true) &&
+      (callFetch.scan?.exhausted ?? true) &&
+      (trc20Fetch.scan?.exhausted ?? true)
     const tronCompleteness = buildWalletCompleteness({
       hasMore: tronHasMore,
       windowComplete: tronWindowComplete,
     })
 
+    if (skippedFailedTrx > 0) {
+      notices.push(
+        `Excluded ${skippedFailedTrx} failed TRX transfer${skippedFailedTrx === 1 ? '' : 's'} from received/sent TRX totals.`,
+      )
+    }
+    if (tronHasMore || !tronWindowComplete) {
+      notices.push(
+        `Tron wallet summary is bounded to ${limit_per_type} rows per section without cursor continuation; use portal_tron_query_transactions or portal_tron_query_logs for full cursor pagination.`,
+      )
+    }
+
     const fundFlow = {
-      definition: 'Native TRX transfers and TRC-20 Transfer logs involving this Tron wallet in the current page.',
+      definition:
+        'Confirmed native TRX transfers and TRC-20 Transfer logs involving this Tron wallet in the current page.',
       summary: {
-        assets_moved: receivedSun > 0n || sentSun > 0n ? 1 : 0,
+        assets_moved: (receivedSun > 0n || sentSun > 0n ? 1 : 0) + trc20Contracts.size,
         inbound_movements: inboundCount,
         outbound_movements: outboundCount,
         trc20_transfer_logs: trc20Page.pageItems.length,
@@ -3610,15 +3643,18 @@ async function buildNonEvmWalletSummary(params: {
           followUpActions: [{ label: 'Show raw activity rows', intent: 'show_raw', target: 'activity.items' }],
         }),
         llm: buildWalletLlmOverrides('tron'),
-        coverage: buildSectionCoverage({
-          windowFromBlock: requestedFromBlock,
-          windowToBlock: toBlock,
-          hasMore: tronHasMore,
-          windowComplete: tronWindowComplete,
-          sections: {
-            activity: buildSectionPagination(activityItems.length, tronHasMore),
-          },
-        }),
+        coverage: {
+          ...buildSectionCoverage({
+            windowFromBlock: requestedFromBlock,
+            windowToBlock: toBlock,
+            hasMore: tronHasMore,
+            windowComplete: tronWindowComplete,
+            sections: {
+              activity: buildSectionPagination(activityItems.length, tronHasMore),
+            },
+          }),
+          ...(tronHasMore || !tronWindowComplete ? { continuation: 'none' } : {}),
+        },
         metadata: {
           network: dataset,
           dataset,

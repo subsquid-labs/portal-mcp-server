@@ -127,6 +127,7 @@ type TimeSeriesBlock = {
         owner_address?: string
         to_address?: string
         contract_address?: string
+        receiver_address?: string
       }
     }
   }>
@@ -2576,6 +2577,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             throw toTronInputError(error)
           }
           queryExtras.transferTransactions = [{ owner: [hex41] }, { to: [hex41] }]
+          queryExtras.transferAssetTransactions = [{ owner: [hex41] }, { to: [hex41] }]
           queryExtras.triggerSmartContractTransactions = [{ owner: [hex41] }, { contract: [hex41] }]
         } else {
           queryExtras.transactions = [{}]
@@ -2845,6 +2847,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               if (tronValue?.owner_address) bucket.addresses.add(tronValue.owner_address.toLowerCase())
               if (tronValue?.to_address) bucket.addresses.add(tronValue.to_address.toLowerCase())
               if (tronValue?.contract_address) bucket.addresses.add(tronValue.contract_address.toLowerCase())
+              if (tronValue?.receiver_address) bucket.addresses.add(tronValue.receiver_address.toLowerCase())
             })
           }
         })

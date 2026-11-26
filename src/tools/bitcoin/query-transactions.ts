@@ -6,11 +6,7 @@ import { PORTAL_URL } from '../../constants/index.js'
 import { scanBoundedBlockRange } from '../../helpers/bounded-search.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
-import {
-  portalFetchRecentRecords,
-  portalFetchRecentRecordsWithScan,
-  portalFetchStreamRange,
-} from '../../helpers/fetch.js'
+import { portalFetchRecentRecordsWithScan, portalFetchStreamRange } from '../../helpers/fetch.js'
 import { buildBitcoinBlockFields, buildBitcoinTransactionFields } from '../../helpers/fields.js'
 import { formatResult } from '../../helpers/format.js'
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
@@ -274,6 +270,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
       const fetchLimit = limit + cursorSkip + 1
       let results: unknown[] = []
       let recentScan: { exhausted: boolean } | undefined
+      let txidScannedBlocks: number | undefined
 
       if (normalizedTxid) {
         const matchedBlocks: unknown[] = []
@@ -293,16 +290,49 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
               fields: {
                 block: buildBitcoinBlockFields(),
                 transaction: buildBitcoinTransactionFields(),
+                ...(normalizedAddress
+                  ? {
+                      input: { transactionIndex: true, prevoutScriptPubKeyAddress: true },
+                      output: { transactionIndex: true, scriptPubKeyAddress: true },
+                    }
+                  : {}),
               },
               transactions: [{}],
+              ...(normalizedAddress
+                ? {
+                    inputs: [{ prevoutScriptPubKeyAddress: [normalizedAddress] }],
+                    outputs: [{ scriptPubKeyAddress: [normalizedAddress] }],
+                  }
+                : {}),
             })
             const matching = chunkBlocks
               .map((rawBlock) => {
-                const block = rawBlock as Record<string, unknown> & { transactions?: Record<string, unknown>[] }
+                const block = rawBlock as Record<string, unknown> & {
+                  transactions?: Record<string, unknown>[]
+                  inputs?: Array<{ transactionIndex?: number; prevoutScriptPubKeyAddress?: string }>
+                  outputs?: Array<{ transactionIndex?: number; scriptPubKeyAddress?: string }>
+                }
+                const addressTxIndices = normalizedAddress
+                  ? new Set<number>([
+                      ...(block.inputs ?? [])
+                        .filter((inp) => inp.prevoutScriptPubKeyAddress === normalizedAddress)
+                        .map((inp) => inp.transactionIndex)
+                        .filter((idx): idx is number => typeof idx === 'number'),
+                      ...(block.outputs ?? [])
+                        .filter((out) => out.scriptPubKeyAddress === normalizedAddress)
+                        .map((out) => out.transactionIndex)
+                        .filter((idx): idx is number => typeof idx === 'number'),
+                    ])
+                  : undefined
                 const matchingTxs = (block.transactions ?? []).filter((tx) => {
                   const rawTxid = String(tx.txid ?? '').toLowerCase()
                   const rawHash = String(tx.hash ?? '').toLowerCase()
-                  return rawTxid === normalizedTxid || rawHash === normalizedTxid
+                  if (rawTxid !== normalizedTxid && rawHash !== normalizedTxid) return false
+                  if (addressTxIndices) {
+                    const idx = typeof tx.transactionIndex === 'number' ? tx.transactionIndex : undefined
+                    return idx !== undefined && addressTxIndices.has(idx)
+                  }
+                  return true
                 })
                 if (matchingTxs.length === 0) return undefined
                 foundMatch = true
@@ -314,11 +344,12 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
           },
         })
         results = matchedBlocks
+        txidScannedBlocks = txidScan.scannedBlocks
         recentScan = { exhausted: !txidScan.hasUnscannedBlocks || foundMatch }
       } else if (normalizedAddress) {
         const streamUrl = `${PORTAL_URL}/datasets/${dataset}/stream`
-        const [outputBlocks, inputBlocks] = await Promise.all([
-          portalFetchRecentRecords(
+        const [outputFetch, inputFetch] = await Promise.all([
+          portalFetchRecentRecordsWithScan(
             streamUrl,
             {
               type: 'bitcoin',
@@ -337,7 +368,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
               chunkSize: 50,
             },
           ),
-          portalFetchRecentRecords(
+          portalFetchRecentRecordsWithScan(
             streamUrl,
             {
               type: 'bitcoin',
@@ -357,7 +388,10 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
             },
           ),
         ])
-        results = [...outputBlocks, ...inputBlocks]
+        results = [...outputFetch.records, ...inputFetch.records]
+        recentScan = {
+          exhausted: (outputFetch.scan?.exhausted ?? true) && (inputFetch.scan?.exhausted ?? true),
+        }
       } else {
         const query = {
           type: 'bitcoin',
@@ -562,6 +596,11 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
 
       const formattedData = applyResponseFormat(pageItems, effectiveResponseFormat, 'bitcoin_transactions')
       const notices = getTimestampWindowNotices(resolvedBlocks)
+      if (normalizedTxid && pageItems.length === 0 && recentScan?.exhausted === false) {
+        notices.push(
+          `Transaction lookup stopped after scanning ${txidScannedBlocks ?? 0} Bitcoin blocks without a match. Pass from_block/to_block around the target block to search an older window.`,
+        )
+      }
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
         finality: finalized_only ? 'finalized' : 'latest',
