@@ -369,14 +369,18 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
       const fetchLimit = limit + cursorSkip + 1
       let results: unknown[] = []
       let recentScan: { exhausted: boolean } | undefined
+      let signatureScannedSlots: number | undefined
       if (normalizedSignature) {
         const matchedBlocks: unknown[] = []
         let foundMatch = false
-        const maxSignatureScanSlots = hasFilters ? 5_000 : 500
+        /* Unfiltered Solana slots carry ~1,500–3,000 transactions each, so cap
+           unfiltered signature scans to 50 slots (~20s of Solana blocks) unless
+           the caller narrows with fee_payer, mentions_account, or slot bounds. */
+        const maxSignatureScanSlots = hasFilters ? 2_000 : 50
         const signatureScan = await scanBoundedBlockRange<unknown>({
           fromBlock: resolvedFromBlock,
           toBlock: pageToBlock,
-          chunkSize: hasFilters ? 200 : 25,
+          chunkSize: hasFilters ? 100 : 10,
           scanOrder: 'latest',
           maxScanBlocks: Math.min(maxSignatureScanSlots, pageToBlock - resolvedFromBlock + 1),
           shouldContinue: () => !foundMatch,
@@ -403,6 +407,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
           },
         })
         results = matchedBlocks
+        signatureScannedSlots = signatureScan.scannedBlocks
         recentScan = { exhausted: !signatureScan.hasUnscannedBlocks || foundMatch }
       } else {
         const fetched = await portalFetchRecentRecordsWithScan(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
@@ -497,6 +502,11 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
 
       const formattedData = applyResponseFormat(page.pageItems, effectiveResponseFormat, 'solana_transactions')
       const notices = [...getTimestampWindowNotices(resolvedBlocks), ...getValidationNotices(validation)]
+      if (normalizedSignature && page.pageItems.length === 0 && recentScan?.exhausted === false) {
+        notices.push(
+          `Signature lookup stopped after scanning ${signatureScannedSlots ?? 0} Solana slots without a match. Pass from_block/to_block around the transaction slot or add fee_payer/mentions_account to widen the search.`,
+        )
+      }
       if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
       const freshness = buildQueryFreshness({
         finality: finalized_only ? 'finalized' : 'latest',
