@@ -50,9 +50,12 @@ export type ActivityExplorerDeploymentMode = 'auto' | 'enabled' | 'disabled'
 /**
  * SQD Explorer activates automatically when a connecting host explicitly
  * declares the MCP Apps UI capability (`io.modelcontextprotocol/ui` with
- * `text/html;profile=mcp-app`), and stays off for data-only clients unless
- * enabled explicitly via `MCP_APP_ENABLED=true` or `?app=1`. A connection can
- * always opt out with `?app=0`, or a deployment can force off with
+ * `text/html;profile=mcp-app`) over stdio (`2025` or `2026-07-28`) or modern
+ * `2026-07-28` HTTP per-request envelopes, and stays off for data-only clients
+ * unless enabled explicitly via `MCP_APP_ENABLED=true` or `?app=1`. Legacy
+ * stateless 2025 HTTP clients that send capabilities only on `initialize` can
+ * opt in with `?app=1` (or `MCP_APP_ENABLED=true`). A connection can always
+ * opt out with `?app=0`, or a deployment can force off with
  * `MCP_APP_ENABLED=false`.
  */
 const appSurfaceStorage = new AsyncLocalStorage<boolean>()

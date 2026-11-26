@@ -1235,6 +1235,19 @@ export function applyWalletSummaryResponseFormat<T extends Record<string, unknow
   }
 }
 
+/**
+ * Distinguish standard TRC-20 Transfer(address,address,uint256) logs from
+ * TRC-721 NFT Transfer(address,address,uint256) logs that share the same
+ * topic0 signature: TRC-20 encodes 3 topics and a 32-byte amount in `data`,
+ * while TRC-721 puts tokenId in topic3 (4 topics) with empty `data`.
+ */
+export function isTrc20TransferLog(log: Record<string, unknown>): boolean {
+  const topics = Array.isArray(log.topics) ? log.topics : undefined
+  if (!topics || topics.length !== 3) return false
+  if (typeof log.data !== 'string') return false
+  return /^(?:0x)?[0-9a-fA-F]{64}$/.test(log.data.trim())
+}
+
 export function bitcoinValueToSats(value: unknown): bigint {
   let text =
     typeof value === 'string'
@@ -3412,7 +3425,7 @@ async function buildNonEvmWalletSummary(params: {
                 { topic0: [transferTopic0], topic2: [topicHex], transaction: true },
               ],
             },
-            { ...fetchOpts, itemKeys: ['logs'] },
+            { ...fetchOpts, limit: Math.min(20, (limit_per_type + 1) * 4), itemKeys: ['logs'] },
           )
         : Promise.resolve(emptyFetchResult),
     ])
@@ -3449,7 +3462,9 @@ async function buildNonEvmWalletSummary(params: {
     const callTxs = sortTronTransactions(
       flattenTronTransactions(callFetch.records, { includeLogs: false, includeInternalTransactions: false }),
     )
-    const trc20Logs = sortTronLogs(flattenTronLogs(trc20Fetch.records, { includeTransaction: false }))
+    const trc20Logs = sortTronLogs(
+      flattenTronLogs(trc20Fetch.records, { includeTransaction: false }).filter(isTrc20TransferLog),
+    )
 
     const trxPage = paginateAscendingItems(trxTxs, limit_per_type, (item) =>
       typeof item.block_number === 'number' ? item.block_number : undefined,
@@ -3582,20 +3597,45 @@ async function buildNonEvmWalletSummary(params: {
       largest_movements: [],
       next_pivots: [
         {
-          goal: 'Inspect full Tron transactions for this wallet',
+          goal: 'Inspect outbound Tron transactions sent by this wallet',
           tool: 'portal_tron_query_transactions',
           suggested_arguments: {
             network: dataset,
             from_addresses: [base58Address],
-            to_addresses: [base58Address],
+            from_block: fromBlock,
+            to_block: toBlock,
           },
         },
         {
-          goal: 'Inspect TRC-20 transfer logs for this wallet',
+          goal: 'Inspect inbound Tron transactions received by this wallet',
+          tool: 'portal_tron_query_transactions',
+          suggested_arguments: {
+            network: dataset,
+            to_addresses: [base58Address],
+            from_block: fromBlock,
+            to_block: toBlock,
+          },
+        },
+        {
+          goal: 'Inspect outbound TRC-20 Transfer logs sent by this wallet',
           tool: 'portal_tron_query_logs',
           suggested_arguments: {
             network: dataset,
-            addresses: [base58Address],
+            event: 'transfer',
+            topic1: [base58Address],
+            from_block: fromBlock,
+            to_block: toBlock,
+          },
+        },
+        {
+          goal: 'Inspect inbound TRC-20 Transfer logs received by this wallet',
+          tool: 'portal_tron_query_logs',
+          suggested_arguments: {
+            network: dataset,
+            event: 'transfer',
+            topic2: [base58Address],
+            from_block: fromBlock,
+            to_block: toBlock,
           },
         },
       ],

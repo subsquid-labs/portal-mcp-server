@@ -5,6 +5,7 @@ import { Client } from '@modelcontextprotocol/client'
 import { App } from '@modelcontextprotocol/ext-apps'
 import { AppBridge } from '@modelcontextprotocol/ext-apps/app-bridge'
 import { CLIENT_CAPABILITIES_META_KEY, InMemoryTransport } from '@modelcontextprotocol/server'
+import { serveStdio } from '@modelcontextprotocol/server/stdio'
 
 import { createPortalServer } from '../server.js'
 import {
@@ -173,44 +174,57 @@ describe('SQD Explorer auto mode and tool coverage', () => {
     assert.ok(ACTIVITY_EXPLORER_TOOLS.has('portal_evm_query_traces'))
   })
 
-  it('auto-enables SQD Explorer on stdio when the client declares io.modelcontextprotocol/ui', async () => {
+  it('auto-enables SQD Explorer on both legacy and modern 2026-07-28 stdio when io.modelcontextprotocol/ui is declared', async () => {
     const previous = process.env.MCP_APP_ENABLED
     delete process.env.MCP_APP_ENABLED
-    const [uiClientTransport, uiServerTransport] = InMemoryTransport.createLinkedPair()
-    const [plainClientTransport, plainServerTransport] = InMemoryTransport.createLinkedPair()
-    const uiServer = createPortalServer({ transport: 'stdio' })
-    const plainServer = createPortalServer({ transport: 'stdio' })
-    const uiClient = new Client(
-      { name: 'sqd-stdio-ui-host', version: '1.0.0' },
-      {
-        capabilities: {
-          extensions: {
-            [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
-          },
-        } as any,
-      },
-    )
-    const plainClient = new Client({ name: 'sqd-stdio-plain-host', version: '1.0.0' })
-    await Promise.all([
-      uiServer.connect(uiServerTransport),
-      plainServer.connect(plainServerTransport),
-      uiClient.connect(uiClientTransport),
-      plainClient.connect(plainClientTransport),
-    ])
     try {
-      const uiTools = (await uiClient.listTools()).tools.filter((tool) =>
-        Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
-      )
-      assert.equal(uiTools.length, ACTIVITY_EXPLORER_TOOLS.size)
-      assert.ok(uiTools.some((tool) => tool.name === 'portal_tron_query_transactions'))
-      assert.ok(uiTools.some((tool) => tool.name === 'portal_evm_query_traces'))
+      for (const mode of ['legacy', 'modern'] as const) {
+        const [uiClientTransport, uiServerTransport] = InMemoryTransport.createLinkedPair()
+        const [plainClientTransport, plainServerTransport] = InMemoryTransport.createLinkedPair()
+        const uiHandle = serveStdio(() => createPortalServer({ transport: 'stdio' }), {
+          legacy: 'serve',
+          transport: uiServerTransport,
+        })
+        const plainHandle = serveStdio(() => createPortalServer({ transport: 'stdio' }), {
+          legacy: 'serve',
+          transport: plainServerTransport,
+        })
+        const negotiation =
+          mode === 'modern' ? { versionNegotiation: { mode: 'auto' as const, probe: { timeoutMs: 5_000 } } } : {}
+        const uiClient = new Client(
+          { name: `sqd-stdio-ui-host-${mode}`, version: '1.0.0' },
+          {
+            ...negotiation,
+            capabilities: {
+              extensions: {
+                [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+              },
+            } as any,
+          },
+        )
+        const plainClient = new Client({ name: `sqd-stdio-plain-host-${mode}`, version: '1.0.0' }, negotiation)
+        await Promise.all([uiClient.connect(uiClientTransport), plainClient.connect(plainClientTransport)])
+        try {
+          if (mode === 'modern') {
+            assert.equal(uiClient.getProtocolEra(), 'modern')
+            assert.equal(uiClient.getNegotiatedProtocolVersion(), '2026-07-28')
+          }
+          const uiTools = (await uiClient.listTools()).tools.filter((tool) =>
+            Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
+          )
+          assert.equal(uiTools.length, ACTIVITY_EXPLORER_TOOLS.size, `${mode} stdio should attach Explorer metadata`)
+          assert.ok(uiTools.some((tool) => tool.name === 'portal_tron_query_transactions'))
+          assert.ok(uiTools.some((tool) => tool.name === 'portal_evm_query_traces'))
 
-      const plainTools = (await plainClient.listTools()).tools.filter((tool) =>
-        Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
-      )
-      assert.equal(plainTools.length, 0)
+          const plainTools = (await plainClient.listTools()).tools.filter((tool) =>
+            Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
+          )
+          assert.equal(plainTools.length, 0, `${mode} plain stdio client should not receive Explorer metadata`)
+        } finally {
+          await Promise.all([uiClient.close(), plainClient.close(), uiHandle.close(), plainHandle.close()])
+        }
+      }
     } finally {
-      await Promise.all([uiClient.close(), plainClient.close(), uiServer.close(), plainServer.close()])
       if (previous === undefined) delete process.env.MCP_APP_ENABLED
       else process.env.MCP_APP_ENABLED = previous
     }

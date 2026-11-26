@@ -13,6 +13,7 @@ import {
 import { normalizeTronAddress } from '../../helpers/tron.js'
 import { computeSolanaTimeSeries } from '../solana/time-series-shared.js'
 import { toTronInputError } from '../tron/shared.js'
+import { assertSeriesWindowScannable } from './time-series-bounds.js'
 
 type CompareMetric = 'transaction_count' | 'avg_gas_price' | 'gas_used' | 'block_utilization' | 'unique_addresses'
 
@@ -158,6 +159,9 @@ export async function computeWindowSeries(params: {
       resolvedWindow.to_block ?? Number.MAX_SAFE_INTEGER,
       false,
     )
+    if (chainType !== 'solana') {
+      assertSeriesWindowScannable({ dataset, chainType, fromBlock, toBlock, duration })
+    }
 
     const intervalSeconds = parseTimeframeToSeconds(interval)
     const durationSeconds = parseTimeframeToSeconds(duration)

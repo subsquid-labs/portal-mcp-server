@@ -9,12 +9,14 @@ import type { McpServer } from '@modelcontextprotocol/server'
 import type { z } from 'zod'
 
 import { RECORDED_FIXTURES } from '../../app-ui/fixtures.recorded.js'
+import { clearDatasetCaches } from '../../cache/datasets.js'
 import {
   applyWalletSummaryResponseFormat,
   bitcoinValueToSats,
   buildWalletCompleteness,
   formatDecimalAmountExact,
   formatSatsAsBtc,
+  isTrc20TransferLog,
   parseNumericAmount,
   registerGetWalletSummaryTool,
 } from './wallet-summary.js'
@@ -158,5 +160,148 @@ describe('exact amount helpers', () => {
     assert.equal(formatDecimalAmountExact(1_500_000n, 6), '1.5')
     assert.equal(parseNumericAmount('12.5'), 12.5)
     assert.equal(parseNumericAmount('not a number'), 0)
+  })
+})
+
+describe('Tron wallet summary TRC-20 filtering and follow-up pivots', () => {
+  const TRANSFER_TOPIC0 = 'ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+  const WALLET_BASE58 = 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7'
+  const WALLET_TOPIC = '00000000000000000000000074472e7d35395a6b54421a4b67c5c199736b2c2a'
+  const OTHER_TOPIC = '0000000000000000000000001111111111111111111111111111111111111111'
+  const TRC20_CONTRACT_HEX = 'a614f803b6fd780986a42c78ec9c7f77e6ded13c'
+  const TRC721_CONTRACT_HEX = '2222222222222222222222222222222222222222'
+
+  it('distinguishes 3-topic TRC-20 transfers from 4-topic TRC-721 NFT transfers', () => {
+    assert.equal(
+      isTrc20TransferLog({
+        topics: [TRANSFER_TOPIC0, OTHER_TOPIC, WALLET_TOPIC],
+        data: '00000000000000000000000000000000000000000000000000000000000f4240',
+      }),
+      true,
+    )
+    assert.equal(
+      isTrc20TransferLog({
+        topics: [
+          TRANSFER_TOPIC0,
+          OTHER_TOPIC,
+          WALLET_TOPIC,
+          '000000000000000000000000000000000000000000000000000000000000002a',
+        ],
+        data: '',
+      }),
+      false,
+    )
+  })
+
+  it('excludes TRC-721 logs from TRC-20 counts/pagination and emits accurate directional next_pivots', async (t) => {
+    clearDatasetCaches()
+    t.after(() => clearDatasetCaches())
+    type TronPayload = {
+      tron: { trc20_transfers_count: number }
+      fund_flow: {
+        summary: { assets_moved: number; trc20_transfer_logs: number }
+        next_pivots: Array<{ tool: string; suggested_arguments: Record<string, unknown> }>
+      }
+      _pagination: { sections: { trc20_transfers: { returned: number; has_more: boolean } } }
+    }
+    let callTool: ((args: Record<string, unknown>) => Promise<{ structuredContent: TronPayload }>) | undefined
+    const server = {
+      registerTool: (
+        _name: string,
+        config: { inputSchema: z.ZodType<Record<string, unknown>> },
+        handler: (args: Record<string, unknown>, context: unknown) => Promise<{ structuredContent: TronPayload }>,
+      ) => {
+        callTool = (args) => handler(config.inputSchema.parse(args), {})
+      },
+    } as unknown as McpServer
+    registerGetWalletSummaryTool(server)
+    assert.ok(callTool)
+
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/datasets') {
+        return Response.json([{ dataset: 'tron-mainnet', aliases: ['tron'], metadata: { kind: 'tron' } }])
+      }
+      if (url.pathname.endsWith('/head') || url.pathname.endsWith('/finalized-head')) {
+        return Response.json({ number: 88_000_010 })
+      }
+      if (url.pathname.endsWith('/metadata')) return Response.json({ start_block: 0 })
+      const query = JSON.parse(String(init?.body))
+      if (Array.isArray(query.logs)) {
+        return Response.json({
+          header: { number: 88_000_010, timestamp: 1_795_000_000_000 },
+          transactions: [{ transactionIndex: 0, hash: 'a'.repeat(64) }],
+          logs: [
+            // Standard TRC-20 Transfer (3 topics + 32-byte data)
+            {
+              logIndex: 0,
+              transactionIndex: 0,
+              address: TRC20_CONTRACT_HEX,
+              topics: [TRANSFER_TOPIC0, OTHER_TOPIC, WALLET_TOPIC],
+              data: '00000000000000000000000000000000000000000000000000000000000f4240',
+            },
+            // TRC-721 NFT Transfer (4 topics + empty data) -> must NOT count as TRC-20 or trigger has_more
+            {
+              logIndex: 1,
+              transactionIndex: 0,
+              address: TRC721_CONTRACT_HEX,
+              topics: [
+                TRANSFER_TOPIC0,
+                OTHER_TOPIC,
+                WALLET_TOPIC,
+                '0000000000000000000000000000000000000000000000000000000000000007',
+              ],
+              data: '',
+            },
+          ],
+        })
+      }
+      return Response.json({ header: { number: 88_000_010, timestamp: 1_795_000_000_000 }, transactions: [] })
+    })
+
+    const payload = (
+      await callTool({
+        network: 'tron',
+        address: WALLET_BASE58,
+        timeframe: '10',
+        limit_per_type: 1,
+        response_format: 'compact',
+      })
+    ).structuredContent
+
+    assert.equal(payload.tron.trc20_transfers_count, 1)
+    assert.equal(payload.fund_flow.summary.trc20_transfer_logs, 1)
+    assert.equal(payload.fund_flow.summary.assets_moved, 1)
+    assert.equal(payload._pagination.sections.trc20_transfers.returned, 1)
+    assert.equal(payload._pagination.sections.trc20_transfers.has_more, false)
+
+    const pivots = payload.fund_flow.next_pivots
+    assert.equal(pivots.length, 4)
+    assert.deepEqual(pivots[0]?.suggested_arguments, {
+      network: 'tron-mainnet',
+      from_addresses: [WALLET_BASE58],
+      from_block: 88_000_000,
+      to_block: 88_000_010,
+    })
+    assert.deepEqual(pivots[1]?.suggested_arguments, {
+      network: 'tron-mainnet',
+      to_addresses: [WALLET_BASE58],
+      from_block: 88_000_000,
+      to_block: 88_000_010,
+    })
+    assert.deepEqual(pivots[2]?.suggested_arguments, {
+      network: 'tron-mainnet',
+      event: 'transfer',
+      topic1: [WALLET_BASE58],
+      from_block: 88_000_000,
+      to_block: 88_000_010,
+    })
+    assert.deepEqual(pivots[3]?.suggested_arguments, {
+      network: 'tron-mainnet',
+      event: 'transfer',
+      topic2: [WALLET_BASE58],
+      from_block: 88_000_000,
+      to_block: 88_000_010,
+    })
   })
 })

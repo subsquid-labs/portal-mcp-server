@@ -1,13 +1,19 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
+import type { McpServer } from '@modelcontextprotocol/server'
+import type { z } from 'zod'
+
+import { clearDatasetCaches } from '../../cache/datasets.js'
 import { ActionableError } from '../../helpers/errors.js'
 import { parseTimeframeToSeconds } from '../../helpers/timeframe.js'
+import { computeWindowSeries } from './compare-periods.js'
 import {
   MAX_SERIES_SCAN_BLOCKS,
   assertSeriesDurationScannable,
   assertSeriesWindowScannable,
   formatMetricWithNoun,
+  registerGetTimeSeriesDataTool,
   resolveSeriesWindow,
 } from './time-series.js'
 
@@ -168,5 +174,103 @@ describe('formatMetricWithNoun', () => {
       '12.3M gas used',
     )
     assert.equal(formatMetricWithNoun(1_200, 'transaction_count', 'txs', { unit: 'transactions' }), '1,200 txs')
+  })
+})
+
+describe('compare_previous scan-block enforcement', () => {
+  it('rejects an oversized Tron compare_previous duration before making any stream call', async (t) => {
+    clearDatasetCaches()
+    t.after(() => clearDatasetCaches())
+    let callTool: ((args: Record<string, unknown>) => Promise<unknown>) | undefined
+    const server = {
+      registerTool: (
+        _name: string,
+        config: { inputSchema: z.ZodType<Record<string, unknown>> },
+        handler: (args: Record<string, unknown>, context: unknown) => Promise<unknown>,
+      ) => {
+        callTool = (args) => handler(config.inputSchema.parse(args), {})
+      },
+    } as unknown as McpServer
+    registerGetTimeSeriesDataTool(server)
+    assert.ok(callTool)
+
+    let streamCalls = 0
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/datasets') {
+        return Response.json([{ dataset: 'tron-mainnet', aliases: ['tron'], metadata: { kind: 'tron' } }])
+      }
+      if (url.pathname.endsWith('/stream')) {
+        streamCalls += 1
+        throw new Error('stream must not be called for an oversized comparison')
+      }
+      throw new Error(`Unexpected fetch: ${url.pathname}`)
+    })
+
+    await assert.rejects(
+      () =>
+        callTool!({
+          network: 'tron',
+          metric: 'transaction_count',
+          interval: '1h',
+          duration: '7d',
+          compare_previous: true,
+        }),
+      (error: unknown) => error instanceof ActionableError && error.code === 'unsupported_operation',
+    )
+    assert.equal(streamCalls, 0)
+  })
+
+  it('enforces MAX_SERIES_SCAN_BLOCKS on each resolved Tron comparison window before streaming', async (t) => {
+    clearDatasetCaches()
+    t.after(() => clearDatasetCaches())
+    let seriesStreamCalls = 0
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/datasets') {
+        return Response.json([{ dataset: 'tron-mainnet', aliases: ['tron'], metadata: { kind: 'tron' } }])
+      }
+      if (url.pathname.endsWith('/head') || url.pathname.endsWith('/finalized-head')) {
+        return Response.json({ number: 90_000_000 })
+      }
+      if (url.pathname.endsWith('/metadata')) {
+        return Response.json({ start_block: 0 })
+      }
+      if (url.pathname.includes('/timestamps/')) {
+        // Return a resolved block span of 12,001 blocks (just over MAX_SERIES_SCAN_BLOCKS)
+        const tsMatch = url.pathname.match(/\/timestamps\/(\d+)\//)
+        const ts = Number(tsMatch?.[1] ?? 0)
+        return Response.json({ block_number: ts <= 1_794_400_000 ? 89_000_000 : 89_012_000 })
+      }
+      if (url.pathname.endsWith('/stream')) {
+        const body = JSON.parse(String(init?.body ?? '{}'))
+        // Allow header-only timestamp boundary verification reads; reject any series stream read.
+        if (!body.transactions && !body.transferTransactions && body.toBlock - body.fromBlock <= 50) {
+          const rows: string[] = []
+          for (let block = body.fromBlock; block <= body.toBlock; block++) {
+            const tsSeconds = 1_794_400_000 + (block - 89_000_000) * 3
+            rows.push(JSON.stringify({ header: { number: block, timestamp: tsSeconds * 1000 } }))
+          }
+          return new Response(`${rows.join('\n')}\n`)
+        }
+        seriesStreamCalls += 1
+        throw new Error('stream must not be called past MAX_SERIES_SCAN_BLOCKS')
+      }
+      throw new Error(`Unexpected fetch: ${url.pathname}`)
+    })
+
+    await assert.rejects(
+      () =>
+        computeWindowSeries({
+          dataset: 'tron-mainnet',
+          metric: 'transaction_count',
+          interval: '1h',
+          duration: '10h',
+          fromTimestamp: 1_794_400_000,
+          toTimestampInclusive: 1_794_436_000,
+        }),
+      (error: unknown) => error instanceof ActionableError && error.code === 'unsupported_operation',
+    )
+    assert.equal(seriesStreamCalls, 0)
   })
 })

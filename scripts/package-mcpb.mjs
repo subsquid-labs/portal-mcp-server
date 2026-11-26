@@ -34,6 +34,9 @@ const EXCLUDED =
 function filter(source) {
   const relative = path.relative(root, source)
   if (relative === '') return true
+  const normalized = relative.split(path.sep).join('/')
+  // Bundled MCP skills ship markdown playbooks and references under dist/skills/.
+  if (normalized === 'dist/skills' || normalized.startsWith('dist/skills/')) return true
   const base = path.basename(relative)
   if (/^LICEN[CS]E/i.test(base)) return true
   return !EXCLUDED.test(relative)

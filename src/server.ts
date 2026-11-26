@@ -381,14 +381,47 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
   registerActivityExplorerResource(server, runtimeContext)
   attachPortalSkills(server)
 
+  // Capture the SDK's own tools/list handler while registering tools so auto mode
+  // can attach SQD Explorer metadata per request (2026-07-28 envelopes and legacy).
+  let sdkListToolsHandler: ((request: any, ctx: ServerContext) => Promise<any> | any) | undefined
+  const originalSetRequestHandler = server.server.setRequestHandler.bind(server.server)
+  ;(server.server as any).setRequestHandler = (...args: any[]) => {
+    if (args[0] === 'tools/list') {
+      sdkListToolsHandler = args[1]
+    }
+    return (originalSetRequestHandler as (...callArgs: any[]) => unknown)(...args)
+  }
+
   // Register all tools
   registerAllTools(server)
+  ;(server.server as any).setRequestHandler = originalSetRequestHandler
 
-  /* On long-lived stdio connections in auto mode, client capabilities arrive
-     during the MCP initialize handshake after startup registration. Activate
-     SQD Explorer tool metadata dynamically once an MCP Apps host declares
-     io.modelcontextprotocol/ui so tools/list and tools/call match HTTP auto mode. */
+  /* In auto mode without an explicit ?app= override, resolve SQD Explorer
+     metadata dynamically on tools/list from either the 2026-07-28 per-request
+     capability envelope or legacy 2025 initialize capabilities. This ensures
+     both modern server/discover stdio sessions and legacy stdio sessions
+     receive Explorer metadata automatically. */
   if (runtimeContext.appEnabled === undefined && !appEnabled && getActivityExplorerDeploymentMode() === 'auto') {
+    if (sdkListToolsHandler) {
+      const baseListTools = sdkListToolsHandler
+      server.server.setRequestHandler('tools/list' as any, async (request: any, ctx: ServerContext) => {
+        const envelope = ctx?.mcpReq?.envelope as Record<string, unknown> | undefined
+        const uiDeclared = classifyUiCapability(envelope, server.server.getClientCapabilities()) === 'declared'
+        const result = await baseListTools(request, ctx)
+        if (!uiDeclared || !result || !Array.isArray(result.tools)) return result
+        return {
+          ...result,
+          tools: result.tools.map((tool: Record<string, unknown>) => {
+            if (tool._meta || typeof tool.name !== 'string' || !ACTIVITY_EXPLORER_TOOLS.has(tool.name)) {
+              return tool
+            }
+            const meta = runWithActivityExplorerSurface(true, () => getActivityExplorerToolMeta(tool.name as string))
+            return meta ? { ...tool, _meta: meta } : tool
+          }),
+        }
+      })
+    }
+
     const previousOnInitialized = server.server.oninitialized
     server.server.oninitialized = () => {
       previousOnInitialized?.()

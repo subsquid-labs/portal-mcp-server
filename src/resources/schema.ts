@@ -604,7 +604,7 @@ export function registerSchemaResource(server: McpServer) {
         version: npmVersion,
         queryType: 'tron',
         addressNote:
-          'Portal Tron queries use 41-prefixed 21-byte hex without 0x; MCP tools accept Base58 (T...), 41-hex, or 0x/bare 20-byte hex.',
+          'Portal Tron uses three hex encodings by context: transaction filters (owner, to, contract) use 41-prefixed 21-byte hex without 0x; log emitter filters (address) use bare 20-byte hex without 0x or 41 prefix; indexed log address topics (topic1/topic2) use 32-byte (64-char) left-padded hex without 0x. MCP tools accept Base58 (T...), 41-hex, or 0x/bare 20-byte hex and convert automatically.',
         endpoints: {
           blocks: {
             description: 'Query Tron block headers (millisecond timestamps)',
@@ -613,6 +613,7 @@ export function registerSchemaResource(server: McpServer) {
           transactions: {
             description:
               'Query all Tron transactions or narrow families via transferTransactions, transferAssetTransactions, and triggerSmartContractTransactions',
+            addressFormat: '41-prefixed 21-byte hex without 0x for owner, to, and contract filters',
             fields: Object.keys(buildTronTransactionFields()),
             requestKeys: [
               'transactions',
@@ -630,6 +631,8 @@ export function registerSchemaResource(server: McpServer) {
           },
           logs: {
             description: 'Query TRC-20 and smart-contract event logs',
+            addressFormat:
+              'Bare 20-byte hex (no 0x, no 41 prefix) for address (emitting contract); 32-byte left-padded hex (no 0x) for topic1/topic2 addresses',
             fields: Object.keys(buildTronLogFields()),
             filters: ['address', 'topic0', 'topic1', 'topic2', 'topic3'],
             relatedData: ['transaction'],
