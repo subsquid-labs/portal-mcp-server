@@ -162,6 +162,10 @@ const manifest = {
   },
 }
 writeFileSync(path.join(stage, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+// Override mcpb pack's default `*.log` exclusion for bundled skill fixtures
+// under dist/skills/ (e.g., squid-perf benchmark sample logs). `.mcpbignore`
+// itself remains excluded from the packed archive.
+writeFileSync(path.join(stage, '.mcpbignore'), '!dist/skills/**\n!dist/skills/**/*.log\n')
 
 // 5. Validate and pack with the official CLI.
 const mcpbCli = path.join(root, 'node_modules/@anthropic-ai/mcpb/dist/cli/cli.js')

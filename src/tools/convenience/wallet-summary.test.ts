@@ -304,4 +304,92 @@ describe('Tron wallet summary TRC-20 filtering and follow-up pivots', () => {
       to_block: 88_000_010,
     })
   })
+
+  it('keeps scanning past a chunk filled with TRC-721 NFT logs to find older TRC-20 transfers', async (t) => {
+    clearDatasetCaches()
+    t.after(() => clearDatasetCaches())
+    type TronPayload = {
+      tron: { trc20_transfers_count: number }
+      _pagination: { sections: { trc20_transfers: { returned: number; has_more: boolean } } }
+    }
+    let callTool: ((args: Record<string, unknown>) => Promise<{ structuredContent: TronPayload }>) | undefined
+    const server = {
+      registerTool: (
+        _name: string,
+        config: { inputSchema: z.ZodType<Record<string, unknown>> },
+        handler: (args: Record<string, unknown>, context: unknown) => Promise<{ structuredContent: TronPayload }>,
+      ) => {
+        callTool = (args) => handler(config.inputSchema.parse(args), {})
+      },
+    } as unknown as McpServer
+    registerGetWalletSummaryTool(server)
+    assert.ok(callTool)
+
+    let logChunksQueried = 0
+    t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input))
+      if (url.pathname === '/datasets') {
+        return Response.json([{ dataset: 'tron-mainnet', aliases: ['tron'], metadata: { kind: 'tron' } }])
+      }
+      if (url.pathname.endsWith('/head') || url.pathname.endsWith('/finalized-head')) {
+        return Response.json({ number: 88_004_000 })
+      }
+      if (url.pathname.endsWith('/metadata')) return Response.json({ start_block: 0 })
+      const query = JSON.parse(String(init?.body))
+      if (Array.isArray(query.logs)) {
+        logChunksQueried += 1
+        // Newest chunk (88_002_001..88_004_000): 8 TRC-721 NFT logs, 0 TRC-20 logs
+        if (query.toBlock > 88_002_000) {
+          return Response.json({
+            header: { number: query.toBlock, timestamp: 1_795_010_000_000 },
+            transactions: [{ transactionIndex: 0, hash: 'b'.repeat(64) }],
+            logs: Array.from({ length: 8 }, (_, idx) => ({
+              logIndex: idx,
+              transactionIndex: 0,
+              address: TRC721_CONTRACT_HEX,
+              topics: [TRANSFER_TOPIC0, OTHER_TOPIC, WALLET_TOPIC, idx.toString(16).padStart(64, '0')],
+              data: '',
+            })),
+          })
+        }
+        // Preceding chunk (88_000_001..88_002_000): 2 genuine TRC-20 Transfer logs
+        return Response.json({
+          header: { number: query.toBlock, timestamp: 1_795_004_000_000 },
+          transactions: [{ transactionIndex: 0, hash: 'c'.repeat(64) }],
+          logs: [
+            {
+              logIndex: 0,
+              transactionIndex: 0,
+              address: TRC20_CONTRACT_HEX,
+              topics: [TRANSFER_TOPIC0, OTHER_TOPIC, WALLET_TOPIC],
+              data: '00000000000000000000000000000000000000000000000000000000000f4240',
+            },
+            {
+              logIndex: 1,
+              transactionIndex: 0,
+              address: TRC20_CONTRACT_HEX,
+              topics: [TRANSFER_TOPIC0, OTHER_TOPIC, WALLET_TOPIC],
+              data: '00000000000000000000000000000000000000000000000000000000001e8480',
+            },
+          ],
+        })
+      }
+      return Response.json({ header: { number: query.toBlock, timestamp: 1_795_000_000_000 }, transactions: [] })
+    })
+
+    const payload = (
+      await callTool({
+        network: 'tron',
+        address: WALLET_BASE58,
+        timeframe: '3999',
+        limit_per_type: 1,
+        response_format: 'compact',
+      })
+    ).structuredContent
+
+    assert.equal(logChunksQueried, 2, 'scanner must advance past the NFT-only chunk')
+    assert.equal(payload.tron.trc20_transfers_count, 1)
+    assert.equal(payload._pagination.sections.trc20_transfers.returned, 1)
+    assert.equal(payload._pagination.sections.trc20_transfers.has_more, true)
+  })
 })

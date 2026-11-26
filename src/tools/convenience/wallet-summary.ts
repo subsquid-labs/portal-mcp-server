@@ -3425,7 +3425,14 @@ async function buildNonEvmWalletSummary(params: {
                 { topic0: [transferTopic0], topic2: [topicHex], transaction: true },
               ],
             },
-            { ...fetchOpts, limit: Math.min(20, (limit_per_type + 1) * 4), itemKeys: ['logs'] },
+            {
+              ...fetchOpts,
+              itemKeys: ['logs'],
+              countItems: (record) => {
+                const logs = (record as { logs?: Record<string, unknown>[] } | null)?.logs
+                return Array.isArray(logs) ? logs.filter(isTrc20TransferLog).length : 0
+              },
+            },
           )
         : Promise.resolve(emptyFetchResult),
     ])
