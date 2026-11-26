@@ -23,6 +23,9 @@ export const INITIAL_RETRY_DELAY_MS = 1_000
 export const MAX_RETRY_DELAY_MS = 10_000
 export const MAX_RETRY_WALL_CLOCK_MS = 18_000
 export const MAX_SHARED_COOLDOWN_MS = 10_000
+export const OVERLOAD_RETRIES = 10
+export const OVERLOAD_INITIAL_RETRY_DELAY_MS = 150
+export const OVERLOAD_MAX_RETRY_DELAY_MS = 500
 const MIN_RETRY_ATTEMPT_WINDOW_MS = 1_000
 const MAX_ERROR_BODY_BYTES = 4_000
 const MAX_TRACKED_RATE_LIMIT_BUCKETS = 256
@@ -188,7 +191,7 @@ export function computeRetryDelayMs(
   if (retryAfterMs !== undefined) {
     /* Honor upstream Retry-After while still scaling exponentially if repeated
        retries receive tiny hints such as 0 or 1 second. Keep jitter tight on
-       multi-second Retry-After windows so a 10s overload still fits interactive
+       multi-second Retry-After windows so a 10s wait still fits interactive
        latency budgets. */
     const floor = Math.max(retryAfterMs, attempt > 0 ? Math.floor(exponentialCap / 2) : 0)
     const jitterWindow = retryAfterMs > 5_000 ? 500 : Math.min(1_000, exponentialCap)
@@ -198,6 +201,17 @@ export function computeRetryDelayMs(
      concurrent callers de-correlate without slamming Portal immediately. */
   const minDelay = Math.floor(exponentialCap / 2)
   return minDelay + Math.floor(jitter * (exponentialCap - minDelay + 1))
+}
+
+export function computeOverloadRetryDelayMs(attempt: number, random: () => number = Math.random): number {
+  const cap = Math.min(OVERLOAD_INITIAL_RETRY_DELAY_MS * 2 ** Math.max(0, attempt), OVERLOAD_MAX_RETRY_DELAY_MS)
+  const jitter = Math.max(0, Math.min(0.999_999_999, random()))
+  const minDelay = Math.floor(cap / 2)
+  return minDelay + Math.floor(jitter * (cap - minDelay + 1))
+}
+
+function retryLimitFor(reason: PortalRetryReason, callerRetries: number): number {
+  return callerRetries > 0 && reason === 'overloaded' ? Math.max(callerRetries, OVERLOAD_RETRIES) : callerRetries
 }
 
 function classifyRetryReason(error: unknown, status?: number): PortalRetryReason {
@@ -308,15 +322,20 @@ async function inspectNonOkPortalResponse(
   /* Pace concurrent callers behind a shared dataset/endpoint cooldown on 429
      rate limits. Portal 529 overloads are per-request worker saturation while
      sibling requests on the same dataset often still succeed immediately, so
-     529 honors Retry-After per request without stalling unrelated callers. */
+     a 529 sets no shared cooldown and does not stall unrelated callers. */
   if (response.status === 429) {
     recordOriginRateLimit(url, headerRetryAfterMs)
   }
 
+  /* A 529 returns at once, and one advertised wait uses most of the retry
+     budget, so retry on a short backoff and fit more attempts in the same
+     budget. */
   const retryDelayMs =
     response.status === 429
       ? fallbackRetryDelayMs
-      : computeRetryDelayMs(attempt, headerRetryAfterMs ?? parsedError.retryAfterMs)
+      : response.status === 529
+        ? computeOverloadRetryDelayMs(attempt)
+        : computeRetryDelayMs(attempt, headerRetryAfterMs ?? parsedError.retryAfterMs)
 
   return {
     error: parsedError,
@@ -526,7 +545,7 @@ export async function portalFetch<T>(
     let pendingRetryReason: PortalRetryReason | undefined
     const retryStartedAt = Date.now()
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
+    for (let attempt = 0; attempt <= retryLimitFor('overloaded', retries); attempt++) {
       if (!(await waitForOriginCooldown(url, retries, timeout, retryStartedAt, retryBudgetMs, respectCooldown))) {
         if (lastError) break
       }
@@ -582,7 +601,16 @@ export async function portalFetch<T>(
           lastError = outcome.error
           releaseAdmission()
           releaseAdmission = undefined
-          if (!(await waitForRetry(attempt, retries, timeout, retryStartedAt, retryBudgetMs, outcome.retryDelayMs)))
+          if (
+            !(await waitForRetry(
+              attempt,
+              retryLimitFor(outcome.reason, retries),
+              timeout,
+              retryStartedAt,
+              retryBudgetMs,
+              outcome.retryDelayMs,
+            ))
+          )
             break
           pendingRetryReason = outcome.reason
           continue
@@ -644,7 +672,7 @@ export async function portalFetchStream(
     let pendingRetryReason: PortalRetryReason | undefined
     const retryStartedAt = Date.now()
 
-    for (let attempt = 0; attempt <= options.retries; attempt++) {
+    for (let attempt = 0; attempt <= retryLimitFor('overloaded', options.retries); attempt++) {
       if (
         !(await waitForOriginCooldown(url, options.retries, timeout, retryStartedAt, retryBudgetMs, respectCooldown))
       ) {
@@ -701,7 +729,7 @@ export async function portalFetchStream(
           if (
             !(await waitForRetry(
               attempt,
-              options.retries,
+              retryLimitFor(outcome.reason, options.retries),
               timeout,
               retryStartedAt,
               retryBudgetMs,
@@ -847,7 +875,7 @@ export async function portalFetchStreamVisit(
     let pendingRetryReason: PortalRetryReason | undefined
     const retryStartedAt = Date.now()
 
-    for (let attempt = 0; attempt <= normalizedOptions.retries; attempt++) {
+    for (let attempt = 0; attempt <= retryLimitFor('overloaded', normalizedOptions.retries); attempt++) {
       if (
         !(await waitForOriginCooldown(
           url,
@@ -913,7 +941,7 @@ export async function portalFetchStreamVisit(
           if (
             !(await waitForRetry(
               attempt,
-              normalizedOptions.retries,
+              retryLimitFor(outcome.reason, normalizedOptions.retries),
               timeout,
               retryStartedAt,
               retryBudgetMs,

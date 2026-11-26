@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { afterEach, describe, it } from 'node:test'
+import { type TestContext, afterEach, describe, it } from 'node:test'
 
 import { portalRetriesTotal } from '../metrics.js'
 import { ActionableError, RequestCancelledError, parsePortalError, wrapError } from './errors.js'
@@ -7,6 +7,8 @@ import {
   MAX_RETRY_DELAY_MS,
   MAX_RETRY_WALL_CLOCK_MS,
   MAX_SHARED_COOLDOWN_MS,
+  OVERLOAD_RETRIES,
+  computeOverloadRetryDelayMs,
   computeRetryAttemptTimeoutMs,
   computeRetryDelayMs,
   getOriginCooldownRemainingMs,
@@ -28,6 +30,28 @@ afterEach(() => {
   globalThis.fetch = originalFetch
   resetPortalRateLimitState()
 })
+
+async function settleOnMockClock<T>(t: TestContext, pending: Promise<T>, stepMs = 50): Promise<T> {
+  let settled = false
+  pending.then(
+    () => {
+      settled = true
+    },
+    () => {
+      settled = true
+    },
+  )
+  for (let step = 0; step < 2_000 && !settled; step++) {
+    await new Promise((resolve) => setImmediate(resolve))
+    if (!settled) t.mock.timers.tick(stepMs)
+  }
+  assert.ok(settled, 'request did not settle on the mocked clock')
+  return pending
+}
+
+function overloaded(): Response {
+  return new Response('overloaded', { status: 529, headers: { 'Retry-After': '10' } })
+}
 
 function interruptedResponse(): Response {
   let reads = 0
@@ -446,6 +470,24 @@ describe('Portal exponential retry and rate-limit handling', () => {
     )
   })
 
+  it('backs off a 529 overload with equal jitter between 75 ms and 500 ms', () => {
+    for (const [attempt, shortest, longest] of [
+      [0, 75, 150],
+      [1, 150, 300],
+      [2, 250, 500],
+      [5, 250, 500],
+    ]) {
+      assert.equal(
+        computeOverloadRetryDelayMs(attempt, () => 0),
+        shortest,
+      )
+      assert.equal(
+        computeOverloadRetryDelayMs(attempt, () => 0.999_999),
+        longest,
+      )
+    }
+  })
+
   it('caps retry attempt timeouts to the shared wall-clock budget', () => {
     assert.equal(computeRetryAttemptTimeoutMs(60_000, 5, 1_000, 1_000), MAX_RETRY_WALL_CLOCK_MS)
     assert.equal(computeRetryAttemptTimeoutMs(60_000, 5, 1_000, 1_000 + MAX_RETRY_WALL_CLOCK_MS - 3_000), 3_000)
@@ -738,8 +780,8 @@ describe('Portal exponential retry and rate-limit handling', () => {
     assert.equal(head.ok, true)
     assert.ok(Date.now() - startedAt < 500, 'head lookup must not stall on a stream cooldown')
 
-    // A 529 overload honors Retry-After per request without stalling sibling
-    // requests on the same dataset behind a 10s shared cooldown.
+    // A 529 sets no shared cooldown, so sibling requests on the same dataset
+    // do not stall behind its 10s Retry-After.
     resetPortalRateLimitState()
     let streamCalls = 0
     globalThis.fetch = async () => {
@@ -754,6 +796,7 @@ describe('Portal exponential retry and rate-limit handling', () => {
       (error: unknown) =>
         error instanceof ActionableError && error.code === 'rate_limited' && error.retryAfterMs === 10_000,
     )
+    assert.equal(streamCalls, 1, 'retries: 0 must not retry a 529')
     assert.equal(getOriginCooldownRemainingMs('https://portal.example/datasets/base-mainnet/stream'), 0)
     const siblingStartedAt = Date.now()
     const sibling = await portalFetchStream('https://portal.example/datasets/base-mainnet/stream', {}, { retries: 2 })
@@ -761,23 +804,92 @@ describe('Portal exponential retry and rate-limit handling', () => {
     assert.ok(Date.now() - siblingStartedAt < 500, 'sibling stream request must not stall behind a 529')
   })
 
-  it('stops retrying immediately with rate_limited instead of sleeping into an enclosing tool deadline', async () => {
+  it('retries a stream request through repeated 529 overloads on a short backoff', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
     let calls = 0
     globalThis.fetch = async () => {
       calls++
-      return new Response('overloaded', { status: 529, headers: { 'Retry-After': '10' } })
+      return calls <= 8 ? overloaded() : new Response('{"number":1}\n')
+    }
+
+    const startedAt = Date.now()
+    const records = await settleOnMockClock(
+      t,
+      portalFetchStream('https://portal.example/datasets/base-mainnet/stream', {}),
+    )
+    assert.deepEqual(records, [{ number: 1 }])
+    assert.equal(calls, 9)
+    assert.ok(Date.now() - startedAt < 5_000, `eight 529 retries took ${Date.now() - startedAt}ms`)
+  })
+
+  it('gives up on a persistent 529 after the overload retries and keeps its Retry-After', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    let calls = 0
+    globalThis.fetch = async () => {
+      calls++
+      return overloaded()
+    }
+
+    const url = 'https://portal.example/datasets/base-mainnet/stream'
+    for (const [name, request] of [
+      ['portalFetch', () => portalFetch(url)],
+      ['portalFetchStream', () => portalFetchStream(url, {})],
+      ['portalFetchStreamVisit', () => portalFetchStreamVisit(url, {}, { onRecord: () => undefined })],
+    ] as const) {
+      calls = 0
+      await assert.rejects(
+        settleOnMockClock<unknown>(t, request()),
+        (error: unknown) =>
+          error instanceof ActionableError && error.code === 'rate_limited' && error.retryAfterMs === 10_000,
+      )
+      assert.equal(calls, OVERLOAD_RETRIES + 1, name)
+    }
+  })
+
+  it('keeps the caller retry count for failures that are not a 529', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    let calls = 0
+    globalThis.fetch = async () => {
+      calls++
+      return new Response('worker rotating', { status: 503 })
+    }
+
+    const url = 'https://portal.example/datasets/base-mainnet/stream'
+    for (const [name, request] of [
+      ['portalFetch', () => portalFetch(url, { retries: 2 })],
+      ['portalFetchStream', () => portalFetchStream(url, {}, { retries: 2 })],
+      ['portalFetchStreamVisit', () => portalFetchStreamVisit(url, {}, { retries: 2, onRecord: () => undefined })],
+    ] as const) {
+      calls = 0
+      await assert.rejects(
+        settleOnMockClock<unknown>(t, request()),
+        (error: unknown) => error instanceof ActionableError && error.code === 'upstream_unavailable',
+      )
+      assert.equal(calls, 3, name)
+    }
+  })
+
+  it('retries a 529 on a short backoff and stops with rate_limited before an enclosing tool deadline', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    let calls = 0
+    globalThis.fetch = async () => {
+      calls++
+      return overloaded()
     }
 
     const startedAt = Date.now()
     await assert.rejects(
-      runWithPortalRequestDeadline(3_000, () =>
-        portalFetch('https://deadline.example/datasets/base-mainnet/stream', { retries: 4 }),
+      settleOnMockClock(
+        t,
+        runWithPortalRequestDeadline(3_000, () =>
+          portalFetch('https://deadline.example/datasets/base-mainnet/stream', { retries: 4 }),
+        ),
       ),
       (error: unknown) =>
         error instanceof ActionableError && error.code === 'rate_limited' && error.retryAfterMs === 10_000,
     )
-    assert.equal(calls, 1)
-    assert.ok(Date.now() - startedAt < 500)
+    assert.ok(calls > 2, `expected more than one retry, got ${calls} calls`)
+    assert.ok(Date.now() - startedAt < 3_000, `returned after ${Date.now() - startedAt}ms`)
   })
 
   it('does not retry 501, 505, or permanent undici DNS/unreachable errors and preserves malformed-stream guidance on terminated reads', async () => {

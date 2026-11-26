@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { afterEach, describe, it } from 'node:test'
+import { type TestContext, afterEach, describe, it } from 'node:test'
 
 import { clearDatasetCaches } from '../cache/datasets.js'
 import { ActionableError } from './errors.js'
@@ -19,6 +19,24 @@ import {
 
 const NOW = 1_700_000_000
 const originalFetch = globalThis.fetch
+
+async function settleOnMockClock<T>(t: TestContext, pending: Promise<T>, stepMs = 50): Promise<T> {
+  let settled = false
+  pending.then(
+    () => {
+      settled = true
+    },
+    () => {
+      settled = true
+    },
+  )
+  for (let step = 0; step < 2_000 && !settled; step++) {
+    await new Promise((resolve) => setImmediate(resolve))
+    if (!settled) t.mock.timers.tick(stepMs)
+  }
+  assert.ok(settled, 'lookup did not settle on the mocked clock')
+  return pending
+}
 
 afterEach(() => {
   globalThis.fetch = originalFetch
@@ -241,7 +259,8 @@ describe('timeframe lookup caching and deduplication', () => {
     assert.equal(streamCalls, 1)
   })
 
-  it('preserves upstream rate_limited errors on Base timeframes without poisoning the timestamp endpoint', async () => {
+  it('preserves upstream rate_limited errors on Base timeframes without poisoning the timestamp endpoint', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
     let phase: 'rate_limited' | 'healthy' = 'rate_limited'
     const exactBoundary = BASE_HEAD_TIMESTAMP - 900
     globalThis.fetch = async (input, init) => {
@@ -268,7 +287,7 @@ describe('timeframe lookup caching and deduplication', () => {
     }
 
     await assert.rejects(
-      resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' }),
+      settleOnMockClock(t, resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' })),
       (error: unknown) => error instanceof ActionableError && error.code === 'rate_limited',
     )
 
@@ -276,12 +295,54 @@ describe('timeframe lookup caching and deduplication', () => {
     // being stuck in the 5-minute timestamp-endpoint-down fallback.
     resetPortalRateLimitState()
     phase = 'healthy'
-    const recovered = await resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' })
+    const recovered = await settleOnMockClock(
+      t,
+      resolveTimeframeOrBlocks({ dataset: 'base-mainnet', timeframe: '15m' }),
+    )
     assert.equal(recovered.from_block, 1_000)
     assert.equal(recovered.from_lookup?.resolution, 'verified_boundary')
   })
 
-  it('falls back promptly on non-Base chains when timestamp verification hits a 10s 529 overload', async () => {
+  it('verifies a non-Base timeframe once timestamp lookups recover from two 529 overloads', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    const headBlock = 900_000
+    const headTimestamp = 1_790_000_000
+    const exactBoundary = headTimestamp - 86_400
+    let overloads = 2
+    globalThis.fetch = async (input, init) => {
+      const url = String(input)
+      if (url.endsWith('/head')) return Response.json({ number: headBlock, hash: '0xbtc' })
+      if (url.endsWith('/metadata')) return Response.json({ start_block: 0 })
+      if (overloads > 0) {
+        overloads--
+        return new Response('overloaded', { status: 529, headers: { 'Retry-After': '10' } })
+      }
+      if (url.includes('/timestamps/')) return Response.json({ block_number: 1_000 })
+      if (url.endsWith('/stream')) {
+        const query = JSON.parse(String(init?.body))
+        if (query.fromBlock === headBlock) {
+          return new Response(JSON.stringify({ header: { number: headBlock, timestamp: headTimestamp } }) + '\n')
+        }
+        const records = [999, 1_000, 1_001]
+          .filter((number) => number >= query.fromBlock && number <= query.toBlock)
+          .map((number) => ({ header: { number, timestamp: exactBoundary + (number - 1_000) * 2 } }))
+        return new Response(records.map((record) => JSON.stringify(record)).join('\n') + '\n')
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }
+
+    const resolved = await settleOnMockClock(
+      t,
+      resolveTimeframeOrBlocks({ dataset: 'bitcoin-mainnet', timeframe: '24h' }),
+    )
+    assert.equal(resolved.estimated_timeframe, undefined)
+    assert.equal(resolved.from_lookup?.resolution, 'verified_boundary')
+    assert.equal(resolved.from_block, 1_000)
+    assert.equal(overloads, 0, 'both 529 answers were served')
+  })
+
+  it('retries a persistent 529 on non-Base chains, then estimates without waiting for its Retry-After', async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
     let streamCalls = 0
     globalThis.fetch = async (input) => {
       const url = String(input)
@@ -295,10 +356,13 @@ describe('timeframe lookup caching and deduplication', () => {
     }
 
     const startedAt = Date.now()
-    const resolved = await resolveTimeframeOrBlocks({ dataset: 'bitcoin-mainnet', timeframe: '24h' })
-    assert.ok(Date.now() - startedAt < 500, 'should fall back promptly instead of sleeping 10s+ on a 529')
+    const resolved = await settleOnMockClock(
+      t,
+      resolveTimeframeOrBlocks({ dataset: 'bitcoin-mainnet', timeframe: '24h' }),
+    )
     assert.equal(resolved.estimated_timeframe?.resolution, 'estimated')
     assert.equal(resolved.to_block, 900_000)
-    assert.equal(streamCalls, 1)
+    assert.ok(streamCalls > 1, `expected a retry, got ${streamCalls} stream calls`)
+    assert.ok(Date.now() - startedAt < 10_000, `fell back after ${Date.now() - startedAt}ms`)
   })
 })
