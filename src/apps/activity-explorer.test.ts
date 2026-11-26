@@ -172,4 +172,47 @@ describe('SQD Explorer auto mode and tool coverage', () => {
     assert.ok(ACTIVITY_EXPLORER_TOOLS.has('portal_tron_query_logs'))
     assert.ok(ACTIVITY_EXPLORER_TOOLS.has('portal_evm_query_traces'))
   })
+
+  it('auto-enables SQD Explorer on stdio when the client declares io.modelcontextprotocol/ui', async () => {
+    const previous = process.env.MCP_APP_ENABLED
+    delete process.env.MCP_APP_ENABLED
+    const [uiClientTransport, uiServerTransport] = InMemoryTransport.createLinkedPair()
+    const [plainClientTransport, plainServerTransport] = InMemoryTransport.createLinkedPair()
+    const uiServer = createPortalServer({ transport: 'stdio' })
+    const plainServer = createPortalServer({ transport: 'stdio' })
+    const uiClient = new Client(
+      { name: 'sqd-stdio-ui-host', version: '1.0.0' },
+      {
+        capabilities: {
+          extensions: {
+            [MCP_APP_EXTENSION_ID]: { mimeTypes: [MCP_APP_MIME_TYPE] },
+          },
+        } as any,
+      },
+    )
+    const plainClient = new Client({ name: 'sqd-stdio-plain-host', version: '1.0.0' })
+    await Promise.all([
+      uiServer.connect(uiServerTransport),
+      plainServer.connect(plainServerTransport),
+      uiClient.connect(uiClientTransport),
+      plainClient.connect(plainClientTransport),
+    ])
+    try {
+      const uiTools = (await uiClient.listTools()).tools.filter((tool) =>
+        Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
+      )
+      assert.equal(uiTools.length, ACTIVITY_EXPLORER_TOOLS.size)
+      assert.ok(uiTools.some((tool) => tool.name === 'portal_tron_query_transactions'))
+      assert.ok(uiTools.some((tool) => tool.name === 'portal_evm_query_traces'))
+
+      const plainTools = (await plainClient.listTools()).tools.filter((tool) =>
+        Boolean((tool._meta as Record<string, any> | undefined)?.ui?.resourceUri),
+      )
+      assert.equal(plainTools.length, 0)
+    } finally {
+      await Promise.all([uiClient.close(), plainClient.close(), uiServer.close(), plainServer.close()])
+      if (previous === undefined) delete process.env.MCP_APP_ENABLED
+      else process.env.MCP_APP_ENABLED = previous
+    }
+  })
 })

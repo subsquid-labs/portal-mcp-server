@@ -1,8 +1,10 @@
-import { CLIENT_INFO_META_KEY, McpServer, type ServerContext } from '@modelcontextprotocol/server'
+import { CLIENT_INFO_META_KEY, McpServer, type RegisteredTool, type ServerContext } from '@modelcontextprotocol/server'
 
 import {
+  ACTIVITY_EXPLORER_TOOLS,
   classifyUiCapability,
   getActivityExplorerDeploymentMode,
+  getActivityExplorerToolMeta,
   isActivityExplorerEnabled,
   isActivityExplorerEnabledByDeployment,
   recordActivityExplorerResult,
@@ -356,6 +358,7 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
 
   // Instrument the single MCP SDK v2 registration surface used by every tool.
   const originalRegisterTool = server.registerTool.bind(server)
+  const registeredTools = new Map<string, RegisteredTool>()
 
   ;(server as any).registerTool = (...args: any[]) => {
     const toolName = args[0] as string
@@ -365,9 +368,11 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
       args[2] = instrumentToolHandler(toolName, handler)
     }
 
-    return originalRegisterTool(
+    const registered = originalRegisterTool(
       ...(args as [string, Parameters<typeof server.registerTool>[1], Parameters<typeof server.registerTool>[2]]),
     )
+    registeredTools.set(toolName, registered)
+    return registered
   }
 
   // Register resources and bundled MCP Skills (SEP-2640)
@@ -378,6 +383,30 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
 
   // Register all tools
   registerAllTools(server)
+
+  /* On long-lived stdio connections in auto mode, client capabilities arrive
+     during the MCP initialize handshake after startup registration. Activate
+     SQD Explorer tool metadata dynamically once an MCP Apps host declares
+     io.modelcontextprotocol/ui so tools/list and tools/call match HTTP auto mode. */
+  if (runtimeContext.appEnabled === undefined && !appEnabled && getActivityExplorerDeploymentMode() === 'auto') {
+    const previousOnInitialized = server.server.oninitialized
+    server.server.oninitialized = () => {
+      previousOnInitialized?.()
+      if (classifyUiCapability(undefined, server.server.getClientCapabilities()) !== 'declared') return
+      let updated = false
+      for (const [toolName, registered] of registeredTools) {
+        if (!ACTIVITY_EXPLORER_TOOLS.has(toolName)) continue
+        const meta = runWithActivityExplorerSurface(true, () => getActivityExplorerToolMeta(toolName))
+        if (meta) {
+          registered._meta = meta
+          updated = true
+        }
+      }
+      if (updated) {
+        server.sendToolListChanged()
+      }
+    }
+  }
 
   return server
 }
