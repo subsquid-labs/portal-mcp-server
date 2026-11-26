@@ -2,6 +2,7 @@ import { CLIENT_INFO_META_KEY, McpServer, type ServerContext } from '@modelconte
 
 import {
   classifyUiCapability,
+  getActivityExplorerDeploymentMode,
   isActivityExplorerEnabled,
   isActivityExplorerEnabledByDeployment,
   recordActivityExplorerResult,
@@ -12,6 +13,7 @@ import { RequestCancelledError } from './helpers/errors.js'
 import { attachEvidenceReceipt } from './helpers/evidence-receipt.js'
 import { runWithGuardrailScope } from './helpers/guardrails.js'
 import { PORTAL_TOOL_NAMES, listsOutputSchemaFor, runWithOutputSchemaListing } from './helpers/mcp-registration.js'
+import { runWithPortalProgress } from './helpers/progress.js'
 import {
   combineAbortSignals,
   getPortalRequestSignal,
@@ -20,6 +22,7 @@ import {
 } from './helpers/request-context.js'
 import { getToolWorkProfile, toolAdmission } from './helpers/tool-admission.js'
 import { formatToolError } from './helpers/tool-error.js'
+import { SQD_SERVER_ICONS } from './icons.js'
 import { registerInvestigationPromptsAndResources } from './investigations.js'
 import { toolCallDuration, toolCallsActive, toolCallsTotal } from './metrics.js'
 import {
@@ -32,6 +35,7 @@ import {
   recordToolOutcome,
 } from './observability.js'
 import { registerSchemaResource } from './resources/schema.js'
+import { attachPortalSkills } from './skills.js'
 import { registerAllTools } from './tools/index.js'
 import {
   type ToolSelection,
@@ -151,10 +155,25 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
   const server = new McpServer(
     {
       name: 'sqd-portal-mcp-server',
+      title: 'SQD',
       version: npmVersion,
+      description:
+        'Read-only blockchain data from SQD Portal across EVM, Solana, Bitcoin, Substrate, Hyperliquid, and Tron datasets.',
+      websiteUrl: 'https://docs.sqd.dev/en/ai/mcp-server',
+      icons: SQD_SERVER_ICONS,
     },
     {
       instructions: getPortalServerInstructions(),
+      /* Private 5-minute cache hints let stateless 2026-07-28 clients reuse
+         discovery and catalog listings across turns without leaking per-caller
+         toolset or User-Agent variations across different clients. */
+      cacheHints: {
+        'server/discover': { ttlMs: 300_000, cacheScope: 'private' },
+        'tools/list': { ttlMs: 300_000, cacheScope: 'private' },
+        'prompts/list': { ttlMs: 300_000, cacheScope: 'private' },
+        'resources/list': { ttlMs: 300_000, cacheScope: 'private' },
+        'resources/templates/list': { ttlMs: 300_000, cacheScope: 'private' },
+      },
     },
   )
 
@@ -242,14 +261,22 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
             admitted = true
             toolCallsActive.inc({ tool: toolName, transport: runtimeContext.transport })
             /* Handlers run outside the factory's scope, so the connection's
-               app choice is re-entered here for the result formatters. */
-            const handlerResult = await runWithActivityExplorerSurface(appEnabled, () =>
+               app choice is re-entered here for the result formatters. In auto
+               mode, a host that explicitly declared MCP Apps UI capability gets
+               the App surface automatically unless it opted out. */
+            const callAppEnabled =
+              runtimeContext.appEnabled !== undefined
+                ? appEnabled
+                : appEnabled || (getActivityExplorerDeploymentMode() === 'auto' && uiCapability === 'declared')
+            const handlerResult = await runWithActivityExplorerSurface(callAppEnabled, () =>
               runWithToolAdmissionLease(
                 lease,
                 () =>
                   runWithPortalRequestSignal(requestSignal, () =>
-                    runWithGuardrailScope({ tool: toolName, workClass: getToolWorkProfile(toolName).class }, () =>
-                      handler(...handlerArgs),
+                    runWithPortalProgress(requestContext, () =>
+                      runWithGuardrailScope({ tool: toolName, workClass: getToolWorkProfile(toolName).class }, () =>
+                        handler(...handlerArgs),
+                      ),
                     ),
                   ),
                 requestSignal,
@@ -343,10 +370,11 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
     )
   }
 
-  // Register resources
+  // Register resources and bundled MCP Skills (SEP-2640)
   registerSchemaResource(server)
   registerInvestigationPromptsAndResources(server)
   registerActivityExplorerResource(server, runtimeContext)
+  attachPortalSkills(server)
 
   // Register all tools
   registerAllTools(server)

@@ -13,10 +13,10 @@ import { resolveKnownContractReference } from '../../helpers/entity-resolution.j
 import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchStreamRange } from '../../helpers/fetch.js'
 import { buildEvmTransactionFields } from '../../helpers/fields.js'
-import { formatResult, formatTimestamp } from '../../helpers/format.js'
+import { formatDuration, formatResult, formatTimestamp } from '../../helpers/format.js'
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
 import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
-import { getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
+import { estimateBlockTime, getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 
 const DEFAULT_RECENT_SEARCH_DEPTH_BLOCKS = 100_000
@@ -280,6 +280,7 @@ export function registerContractDeploymentTool(server: McpServer) {
         fromBlock: resolvedBlocks.from_block,
         toBlock: endBlock,
         chunkSize,
+        concurrency: 2,
         scanOrder: scan_order,
         maxScanBlocks,
         shouldContinue: () => !deployment,
@@ -297,6 +298,8 @@ export function registerContractDeploymentTool(server: McpServer) {
       const scannedFromBlock = scanResult.scannedFromBlock
       const scannedToBlock = scanResult.scannedToBlock
       const scannedBlocks = scanResult.scannedBlocks
+      const approxWindowSeconds = Math.round(scannedBlocks * estimateBlockTime(dataset, chainType))
+      const approxSpan = approxWindowSeconds > 0 ? formatDuration(approxWindowSeconds) : undefined
 
       const items = deployment ? [deployment] : []
       const notices = [...getTimestampWindowNotices(resolvedBlocks)]
@@ -305,7 +308,7 @@ export function registerContractDeploymentTool(server: McpServer) {
       }
       if (!hasExplicitWindow) {
         notices.push(
-          `Searched the most recent ${search_depth_blocks.toLocaleString()} blocks. For older contracts, pass from_block or from_timestamp.`,
+          `Searched the most recent ${search_depth_blocks.toLocaleString()} blocks${approxSpan ? ` (~${approxSpan} on ${dataset})` : ''}. For older contracts, pass from_block or from_timestamp near the deployment date.`,
         )
       }
       const scanHasMore = !deployment && scanResult.reachedMaxScanBlocks && scanResult.hasUnscannedBlocks

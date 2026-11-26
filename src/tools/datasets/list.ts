@@ -25,6 +25,57 @@ type ListNetworksCursorRequest = {
   limit: number
 }
 
+const FEATURED_MAINNET_ORDER = [
+  'ethereum-mainnet',
+  'base-mainnet',
+  'arbitrum-one',
+  'optimism-mainnet',
+  'polygon-mainnet',
+  'solana-mainnet',
+  'bitcoin-mainnet',
+  'hyperliquid-fills',
+  'tron-mainnet',
+  'polkadot',
+  'binance-mainnet',
+  'avalanche-mainnet',
+  'zksync-mainnet',
+  'linea-mainnet',
+  'scroll-mainnet',
+  'gnosis-mainnet',
+  'monad-mainnet',
+  'unichain-mainnet',
+  'hyperliquid-mainnet',
+  'kusama',
+] as const
+
+const FEATURED_MAINNET_RANK = new Map<string, number>(FEATURED_MAINNET_ORDER.map((dataset, index) => [dataset, index]))
+
+export function compareNetworkRows(
+  left: { network: string; type?: string; real_time?: boolean },
+  right: { network: string; type?: string; real_time?: boolean },
+  query?: string,
+): number {
+  const lowerQuery = query?.trim().toLowerCase()
+  if (lowerQuery) {
+    const leftExact = left.network.toLowerCase() === lowerQuery ? 0 : 1
+    const rightExact = right.network.toLowerCase() === lowerQuery ? 0 : 1
+    if (leftExact !== rightExact) return leftExact - rightExact
+  }
+  const leftFeatured = FEATURED_MAINNET_RANK.get(left.network)
+  const rightFeatured = FEATURED_MAINNET_RANK.get(right.network)
+  if (leftFeatured !== undefined || rightFeatured !== undefined) {
+    if (leftFeatured === undefined) return 1
+    if (rightFeatured === undefined) return -1
+    return leftFeatured - rightFeatured
+  }
+  const typeRank = (type?: string) => (type === 'mainnet' ? 0 : type === 'testnet' ? 1 : 2)
+  const typeDelta = typeRank(left.type) - typeRank(right.type)
+  if (typeDelta !== 0) return typeDelta
+  const rtDelta = Number(Boolean(right.real_time)) - Number(Boolean(left.real_time))
+  if (rtDelta !== 0) return rtDelta
+  return left.network.localeCompare(right.network)
+}
+
 export function registerListDatasetsTool(server: McpServer) {
   registerPortalTool(
     server,
@@ -165,6 +216,8 @@ export function registerListDatasetsTool(server: McpServer) {
           tables: d.schema?.tables ? Object.keys(d.schema.tables) : undefined,
         }
       })
+
+      results.sort((left, right) => compareNetworkRows(left, right, query))
 
       const totalAvailable = results.length
       const { pageItems, hasMore, nextOffset } = paginateOffsetItems(results, limit, currentOffset)

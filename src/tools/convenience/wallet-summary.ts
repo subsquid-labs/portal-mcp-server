@@ -28,7 +28,12 @@ import {
   parseExactDecimal,
 } from '../../helpers/exact-decimal.js'
 import { portalFetchRecentRecords } from '../../helpers/fetch.js'
-import { buildEvmLogFields } from '../../helpers/fields.js'
+import {
+  buildEvmLogFields,
+  buildTronBlockFields,
+  buildTronLogFields,
+  buildTronTransactionFields,
+} from '../../helpers/fields.js'
 import {
   formatResult,
   formatTimestamp,
@@ -64,6 +69,7 @@ import {
   resolveTimeframeOrBlocks,
 } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { normalizeTronAddress, parseTronAddress, stripHexPrefix, sunToTrx } from '../../helpers/tron.js'
 import {
   buildMetricCard,
   buildPortalUi,
@@ -81,6 +87,7 @@ import {
   normalizeBitcoinAddressForPortal,
   normalizeEvmAddress,
 } from '../../helpers/validation.js'
+import { flattenTronLogs, flattenTronTransactions, sortTronLogs, sortTronTransactions } from '../tron/shared.js'
 
 // ============================================================================
 // Tool: Get Wallet Summary (Convenience Wrapper)
@@ -1323,7 +1330,7 @@ function buildWalletUi(params: {
   })
 }
 
-function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid') {
+function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid' | 'tron') {
   const answerSequenceByVm: Record<typeof vm, string[]> = {
     evm: [
       'overview',
@@ -1370,6 +1377,17 @@ function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid
       'assets.volume_by_coin',
       'activity.items',
     ],
+    tron: [
+      'overview',
+      'completeness',
+      'fund_flow.summary',
+      'fund_flow.asset_flows',
+      'activity.count',
+      'assets.total_trx_received',
+      'assets.total_trx_sent',
+      'tron.trc20_transfers_count',
+      'activity.items',
+    ],
   }
 
   const parserNotesByVm: Record<typeof vm, string[]> = {
@@ -1389,6 +1407,9 @@ function buildWalletLlmOverrides(vm: 'evm' | 'solana' | 'bitcoin' | 'hyperliquid
       'Check hyperliquid.fee_summary.fees_status before citing USD fees. Use signed fees_by_token when the USD total is unavailable; negative fees are rebates.',
       'Start with overview and activity.count, then mention fee_summary and volume_by_coin before listing individual fills.',
       'activity.items is the normalized fill feed; assets.volume_by_coin is the best section for what this wallet traded.',
+    ],
+    tron: [
+      'Start with overview, fund_flow.summary, and TRX totals, then mention contract calls and TRC-20 transfer counts.',
     ],
   }
 
@@ -1491,9 +1512,18 @@ export function registerGetWalletSummaryTool(server: McpServer) {
               ? isValidSolanaAddress(address)
               : chainType === 'bitcoin'
                 ? isValidBitcoinAddress(address)
-                : chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
-                  ? isValidHyperliquidAddress(address)
-                  : true
+                : chainType === 'tron'
+                  ? (() => {
+                      try {
+                        parseTronAddress(address)
+                        return true
+                      } catch {
+                        return false
+                      }
+                    })()
+                  : chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
+                    ? isValidHyperliquidAddress(address)
+                    : true
         if (!valid) {
           throw new ActionableError(
             `Invalid ${chainType} wallet address.`,
@@ -1509,26 +1539,21 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           address = address.toLowerCase()
         } else if (chainType === 'bitcoin') {
           address = normalizeBitcoinAddressForPortal(address)
+        } else if (chainType === 'tron') {
+          address = normalizeTronAddress(address, 'base58')
         }
       }
 
-      if (chainType === 'substrate' || chainType === 'tron') {
+      if (chainType === 'substrate') {
         throw createUnsupportedChainError({
           toolName: 'portal_get_wallet_summary',
           dataset,
           actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
-          suggestions:
-            chainType === 'tron'
-              ? [
-                  'Use portal_get_network_info for Tron availability and freshness.',
-                  'Use portal_debug_resolve_time_to_block for Tron timestamp-to-block lookups.',
-                  'Use portal_tron_query_transactions with from_addresses or to_addresses for TRX sent or received by the wallet, and portal_tron_query_logs with topic1 or topic2 set to the wallet for TRC-20 transfers.',
-                ]
-              : [
-                  'Use portal_debug_query_blocks plus a Substrate-specific event or call query for now.',
-                  'Add a dedicated Substrate wallet summary once address and account filters are productized for Substrate networks.',
-                ],
+          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills', 'tron'],
+          suggestions: [
+            'Use portal_debug_query_blocks plus a Substrate-specific event or call query for now.',
+            'Add a dedicated Substrate wallet summary once address and account filters are productized for Substrate networks.',
+          ],
         })
       }
 
@@ -3290,6 +3315,308 @@ async function buildNonEvmWalletSummary(params: {
           windowComplete: bitcoinWindowComplete,
           sections: {
             activity: buildSectionPagination(outputs.length + inputs.length, bitcoinHasMore),
+          },
+        }),
+        metadata: {
+          network: dataset,
+          dataset,
+          from_block: fromBlock,
+          to_block: toBlock,
+          query_start_time: queryStartTime,
+        },
+      },
+    )
+  }
+
+  if (chainType === 'tron') {
+    const hex41 = normalizeTronAddress(address, 'transaction')
+    const topicHex = normalizeTronAddress(address, 'topic')
+    const transferTopic0 = stripHexPrefix(EVENT_SIGNATURES.TRANSFER_ERC20).toLowerCase()
+    const streamUrl = `${PORTAL_URL}/datasets/${dataset}/stream`
+    const fetchOpts = {
+      limit: limit_per_type + 1,
+      chunkSize: 2_000,
+      maxChunks: 15,
+      timeout: WALLET_QUERY_TIMEOUT_MS,
+      retries: WALLET_PRIMARY_QUERY_RETRIES,
+      retryBudgetMs: WALLET_PRIMARY_RETRY_BUDGET_MS,
+    }
+
+    const [trxBlocks, callBlocks, trc20Blocks] = await Promise.all([
+      portalFetchRecentRecords(
+        streamUrl,
+        {
+          type: 'tron',
+          fromBlock,
+          toBlock,
+          fields: {
+            block: buildTronBlockFields(),
+            transaction: buildTronTransactionFields(),
+          },
+          transferTransactions: [{ owner: [hex41] }, { to: [hex41] }],
+        },
+        { ...fetchOpts, itemKeys: ['transactions'] },
+      ),
+      portalFetchRecentRecords(
+        streamUrl,
+        {
+          type: 'tron',
+          fromBlock,
+          toBlock,
+          fields: {
+            block: buildTronBlockFields(),
+            transaction: buildTronTransactionFields(),
+          },
+          triggerSmartContractTransactions: [{ owner: [hex41] }],
+        },
+        { ...fetchOpts, itemKeys: ['transactions'] },
+      ),
+      portalFetchRecentRecords(
+        streamUrl,
+        {
+          type: 'tron',
+          fromBlock,
+          toBlock,
+          fields: {
+            block: buildTronBlockFields(),
+            log: buildTronLogFields(),
+            transaction: { transactionIndex: true, hash: true },
+          },
+          logs: [
+            { topic0: [transferTopic0], topic1: [topicHex], transaction: true },
+            { topic0: [transferTopic0], topic2: [topicHex], transaction: true },
+          ],
+        },
+        { ...fetchOpts, itemKeys: ['logs'] },
+      ),
+    ])
+
+    const trxTxs = sortTronTransactions(
+      flattenTronTransactions(trxBlocks, { includeLogs: false, includeInternalTransactions: false }),
+    )
+    const callTxs = sortTronTransactions(
+      flattenTronTransactions(callBlocks, { includeLogs: false, includeInternalTransactions: false }),
+    )
+    const trc20Logs = sortTronLogs(flattenTronLogs(trc20Blocks, { includeTransaction: false }))
+
+    const trxPage = paginateAscendingItems(trxTxs, limit_per_type, (item) =>
+      typeof item.block_number === 'number' ? item.block_number : undefined,
+    )
+    const callPage = paginateAscendingItems(callTxs, limit_per_type, (item) =>
+      typeof item.block_number === 'number' ? item.block_number : undefined,
+    )
+    const trc20Page = paginateAscendingItems(trc20Logs, limit_per_type, (item) =>
+      typeof item.block_number === 'number' ? item.block_number : undefined,
+    )
+
+    let receivedSun = 0n
+    let sentSun = 0n
+    let inboundCount = 0
+    let outboundCount = 0
+    for (const tx of trxPage.pageItems) {
+      const sunRaw = typeof tx.amount_sun === 'string' && /^\d+$/.test(tx.amount_sun) ? BigInt(tx.amount_sun) : 0n
+      if (tx.recipient_base58 === address) {
+        receivedSun += sunRaw
+        inboundCount += 1
+      }
+      if (tx.sender_base58 === address) {
+        sentSun += sunRaw
+        outboundCount += 1
+      }
+    }
+    const netSun = receivedSun - sentSun
+    const totalReceivedTrx = sunToTrx(receivedSun.toString()) ?? '0'
+    const totalSentTrx = sunToTrx(sentSun.toString()) ?? '0'
+    const netTrx = sunToTrx(netSun.toString()) ?? '0'
+
+    const seenActivityIds = new Set<string>()
+    const activityItems = [...trxPage.pageItems, ...callPage.pageItems, ...trc20Page.pageItems]
+      .filter((item) => {
+        const id = String(item.primary_id ?? item.tx_hash ?? '')
+        if (!id || seenActivityIds.has(id)) return false
+        seenActivityIds.add(id)
+        return true
+      })
+      .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0))
+
+    const tronHasMore = trxPage.hasMore || callPage.hasMore || trc20Page.hasMore
+    const tronWindowComplete = fromBlock <= requestedFromBlock
+    const tronCompleteness = buildWalletCompleteness({
+      hasMore: tronHasMore,
+      windowComplete: tronWindowComplete,
+    })
+
+    const fundFlow = {
+      definition: 'Native TRX transfers and TRC-20 Transfer logs involving this Tron wallet in the current page.',
+      summary: {
+        assets_moved: receivedSun > 0n || sentSun > 0n ? 1 : 0,
+        inbound_movements: inboundCount,
+        outbound_movements: outboundCount,
+        trc20_transfer_logs: trc20Page.pageItems.length,
+      },
+      asset_flows: [
+        buildSimpleAssetFlow({
+          assetType: 'native',
+          asset: 'TRX',
+          inboundCount,
+          outboundCount,
+          inboundAmount: `${totalReceivedTrx} TRX`,
+          outboundAmount: `${totalSentTrx} TRX`,
+          netAmount: `${netTrx} TRX`,
+          netDirection: netSun > 0n ? 'in' : netSun < 0n ? 'out' : 'flat',
+        }),
+      ],
+      movement_counterparties: [],
+      largest_movements: [],
+      next_pivots: [
+        {
+          goal: 'Inspect full Tron transactions for this wallet',
+          tool: 'portal_tron_query_transactions',
+          address,
+        },
+        {
+          goal: 'Inspect TRC-20 transfer logs for this wallet',
+          tool: 'portal_tron_query_logs',
+          address,
+        },
+      ],
+    }
+
+    return formatResult(
+      applyWalletSummaryResponseFormat(
+        {
+          overview: {
+            network: dataset,
+            vm: 'tron',
+            address,
+            address_hex41: hex41,
+            from_block: requestedFromBlock,
+            to_block: toBlock,
+            analyzed_from_block: fromBlock,
+            result_state: tronCompleteness.state,
+          },
+          completeness: tronCompleteness,
+          activity: {
+            count: activityItems.length,
+            items: activityItems,
+            ...(tronHasMore ? { items_sampled: true, item_sample_size: activityItems.length } : {}),
+          },
+          fund_flow: fundFlow,
+          assets: {
+            total_trx_received: totalReceivedTrx,
+            total_trx_sent: totalSentTrx,
+            total_trx_received_sun: receivedSun.toString(),
+            total_trx_sent_sun: sentSun.toString(),
+          },
+          tron: {
+            trx_transfers_count: trxPage.pageItems.length,
+            contract_calls_count: callPage.pageItems.length,
+            trc20_transfers_count: trc20Page.pageItems.length,
+            recent_trx_transfers: trxPage.pageItems,
+            recent_contract_calls: callPage.pageItems,
+            recent_trc20_transfers: trc20Page.pageItems,
+          },
+          tables: [
+            buildWalletActivityTable('Wallet activity', activityItems.length),
+            buildWalletAssetFlowsTable(fundFlow.asset_flows.length),
+          ],
+        },
+        effectiveResponseFormat,
+      ),
+      `Wallet summary for ${address} on ${networkLabel}: ${trxPage.pageItems.length} TRX transfers (net ${netTrx} TRX), ${callPage.pageItems.length} contract calls, ${trc20Page.pageItems.length} TRC-20 transfer logs.`,
+      {
+        toolName: 'portal_get_wallet_summary',
+        notices,
+        pagination: {
+          type: 'cursor',
+          page_size: limit_per_type,
+          returned: activityItems.length,
+          has_more: false,
+          sections: {
+            trx_transfers: buildSectionPagination(trxPage.pageItems.length, trxPage.hasMore),
+            contract_calls: buildSectionPagination(callPage.pageItems.length, callPage.hasMore),
+            trc20_transfers: buildSectionPagination(trc20Page.pageItems.length, trc20Page.hasMore),
+          },
+        },
+        freshness: buildQueryFreshness({
+          finality: 'latest',
+          headBlockNumber: head.number,
+          windowToBlock: toBlock,
+          resolvedWindow,
+        }),
+        execution: buildExecutionMetadata({
+          mode,
+          response_format: effectiveResponseFormat,
+          result_scope: fromBlock > requestedFromBlock ? 'partial_window' : 'complete_window',
+          requested_blocks: Math.max(0, toBlock - requestedFromBlock + 1),
+          analyzed_blocks: Math.max(0, toBlock - fromBlock + 1),
+          estimated_scan_blocks: Math.max(0, toBlock - fromBlock + 1),
+          from_block: fromBlock,
+          to_block: toBlock,
+          range_kind: resolvedWindow.range_kind,
+          normalized_output: true,
+        }),
+        pipes: pipesRecipe,
+        ui: buildWalletUi({
+          title: address,
+          subtitle: `${describeWalletWindow(timeframe)} on ${networkLabel}`,
+          activityCountPath: 'activity.count',
+          primaryValuePath: 'assets.total_trx_received',
+          primaryLabel: 'TRX received',
+          primaryFormat: 'decimal',
+          primaryUnit: 'TRX',
+          secondaryCards: [
+            buildMetricCard({
+              id: 'trx-sent',
+              label: 'TRX sent',
+              value_path: 'assets.total_trx_sent',
+              format: 'decimal',
+              unit: 'TRX',
+            }),
+            buildMetricCard({
+              id: 'trc20-transfers',
+              label: 'TRC-20 transfers',
+              value_path: 'tron.trc20_transfers_count',
+              format: 'integer',
+            }),
+            buildMetricCard({
+              id: 'contract-calls',
+              label: 'Contract calls',
+              value_path: 'tron.contract_calls_count',
+              format: 'integer',
+            }),
+          ],
+          panels: [
+            buildTimelinePanel({
+              id: 'wallet-timeline',
+              kind: 'timeline_panel',
+              title: 'Activity timeline',
+              subtitle: 'Chronological Tron activity for this wallet.',
+              data_key: 'activity.items',
+              timestamp_key: 'timestamp_human',
+              title_key: 'primary_id',
+              subtitle_keys: ['record_type', 'tx_hash'],
+              badge_key: 'record_type',
+              emphasis: 'primary',
+            }),
+            buildTablePanel({
+              id: 'wallet-table',
+              kind: 'table_panel',
+              title: 'Wallet activity',
+              subtitle: 'Normalized TRX transfers, contract calls, and TRC-20 logs.',
+              table_id: 'activity',
+            }),
+          ],
+          followUpActions: [{ label: 'Show raw activity rows', intent: 'show_raw', target: 'activity.items' }],
+        }),
+        llm: buildWalletLlmOverrides('tron'),
+        coverage: buildSectionCoverage({
+          windowFromBlock: requestedFromBlock,
+          windowToBlock: toBlock,
+          hasMore: tronHasMore,
+          windowComplete: tronWindowComplete,
+          sections: {
+            activity: buildSectionPagination(activityItems.length, tronHasMore),
           },
         }),
         metadata: {

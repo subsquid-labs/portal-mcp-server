@@ -12,6 +12,11 @@ import {
   buildTimeSeriesChart,
   buildTimeSeriesTable,
 } from '../../helpers/chart-metadata.js'
+import {
+  buildFormElicitationResult,
+  readFormElicitationOutcome,
+  supportsFormElicitation,
+} from '../../helpers/elicitation.js'
 import { ActionableError, createUnsupportedChainError, createUnsupportedMetricError } from '../../helpers/errors.js'
 import {
   EXACT_DECIMAL_ZERO,
@@ -38,9 +43,11 @@ import {
   resolveTimeframeOrBlocks,
 } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { normalizeTronAddress } from '../../helpers/tron.js'
 import { buildChartPanel, buildMetricCard, buildPortalUi, buildTablePanel } from '../../helpers/ui-metadata.js'
 import { visitHyperliquidFillBlocks } from '../hyperliquid/fill-stream.js'
 import { computeSolanaTimeSeries } from '../solana/time-series-shared.js'
+import { toTronInputError } from '../tron/shared.js'
 import { computeWindowSeries } from './compare-periods.js'
 
 // ============================================================================
@@ -74,7 +81,7 @@ type TimeSeriesMetric =
  * because the enum is the union of every family's metrics, and a request is
  * only meaningful against one family at a time.
  */
-type SupportedFamily = 'evm' | 'solana' | 'bitcoin' | 'hyperliquid'
+type SupportedFamily = 'evm' | 'solana' | 'bitcoin' | 'hyperliquid' | 'tron'
 
 const SUPPORTED_METRICS: Record<SupportedFamily, readonly TimeSeriesMetric[]> = {
   evm: [
@@ -88,6 +95,7 @@ const SUPPORTED_METRICS: Record<SupportedFamily, readonly TimeSeriesMetric[]> = 
   solana: ['transaction_count', 'unique_addresses', 'tps', 'avg_fee', 'success_rate', 'slots_per_hour'],
   bitcoin: ['transaction_count', 'unique_addresses', 'fees_btc', 'block_size_bytes'],
   hyperliquid: ['volume', 'fill_count', 'unique_traders'],
+  tron: ['transaction_count', 'unique_addresses'],
 }
 
 /* The schema enum has to list every metric; which ones a chain family
@@ -114,6 +122,13 @@ type TimeSeriesBlock = {
     feePayer?: string
     from?: string
     to?: string
+    parameter?: {
+      value?: {
+        owner_address?: string
+        to_address?: string
+        contract_address?: string
+      }
+    }
   }>
 }
 
@@ -194,6 +209,27 @@ export function assertSeriesDurationScannable(params: { dataset: string; chainTy
   const blocks = Math.ceil(seconds / secondsPerBlock)
   if (blocks <= MAX_SERIES_SCAN_BLOCKS * 1.5) return
   throw seriesWindowTooLargeError({ ...params, blocks, estimated: true })
+}
+
+function getSafeSeriesDurationPresets(dataset: string, chainType: string): string[] {
+  const secondsPerBlock = estimateBlockTime(dataset, chainType)
+  if (!(secondsPerBlock > 0)) return []
+  const affordableSeconds = MAX_SERIES_SCAN_BLOCKS * secondsPerBlock
+  const presets: [string, number][] = [
+    ['7d', 604_800],
+    ['3d', 259_200],
+    ['24h', 86_400],
+    ['12h', 43_200],
+    ['6h', 21_600],
+    ['1h', 3_600],
+    ['30m', 1_800],
+    ['15m', 900],
+    ['5m', 300],
+  ]
+  return presets
+    .filter(([, seconds]) => seconds <= affordableSeconds)
+    .slice(0, 3)
+    .map(([label]) => label)
 }
 
 function seriesWindowTooLargeError(params: {
@@ -334,7 +370,10 @@ function getBlockNumber(block: TimeSeriesBlock): number | undefined {
 }
 
 function getBlockTimestamp(block: TimeSeriesBlock): number | undefined {
-  return block.timestamp ?? block.header?.timestamp
+  const raw = block.timestamp ?? block.header?.timestamp
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined
+  /* Tron block headers carry Unix millisecond timestamps; normalize to seconds. */
+  return raw > 1e12 ? Math.floor(raw / 1000) : raw
 }
 
 function getBlockBigIntString(
@@ -544,6 +583,21 @@ function formatBucketTime(timestamp: unknown): string | undefined {
   return `${hh}:${mm} UTC`
 }
 
+export function formatMetricWithNoun(
+  value: number,
+  metric: TimeSeriesMetric,
+  metricNoun: string,
+  opts?: { compact?: boolean; unit?: string },
+): string {
+  const amount = formatMetricAmount(value, metric, opts)
+  const unit = opts?.unit?.trim()
+  if (unit && metricNoun.toLowerCase().startsWith(unit.toLowerCase())) {
+    const suffix = metricNoun.slice(unit.length).trim()
+    return suffix ? `${amount} ${suffix}` : amount
+  }
+  return `${amount} ${metricNoun}`
+}
+
 function buildTimeSeriesAnswer(params: {
   dataset: string
   metric: TimeSeriesMetric
@@ -598,7 +652,7 @@ function buildTimeSeriesAnswer(params: {
       : ''
 
   const firstSentence = isAdditiveMetric(params.metric)
-    ? `${coveragePrefix}~${formatMetricAmount(total, params.metric, { compact: true, unit: params.unit })} ${metricNoun} on ${network} over ${spanLabel} (${bucketCount} x ${params.interval} buckets, avg ${formatMetricAmount(avg, params.metric, { unit: params.unit })}/bucket).`
+    ? `${coveragePrefix}~${formatMetricWithNoun(total, params.metric, metricNoun, { compact: true, unit: params.unit })} on ${network} over ${spanLabel} (${bucketCount} x ${params.interval} buckets, avg ${formatMetricAmount(avg, params.metric, { unit: params.unit })}/bucket).`
     : `${coveragePrefix}${network} ${metricNoun} averaged ${formatMetricAmount(avg, params.metric, { unit: params.unit })} over ${spanLabel} (${bucketCount} x ${params.interval} buckets).`
 
   if (!Number.isFinite(peak.value) || peak.value <= 0 || avg <= 0) {
@@ -609,8 +663,8 @@ function buildTimeSeriesAnswer(params: {
   const multiplier = peak.value / avg
   const spikeSentence =
     multiplier >= 1.5
-      ? ` Notable spike${peakTime ? ` at ${peakTime}` : ''} with ${formatMetricAmount(peak.value, params.metric, { unit: params.unit })} ${metricNoun} in a single ${params.interval} window - roughly ${trimFixed(multiplier, 1)}x the average.`
-      : ` Peak bucket${peakTime ? ` at ${peakTime}` : ''}: ${formatMetricAmount(peak.value, params.metric, { unit: params.unit })} ${metricNoun}.`
+      ? ` Notable spike${peakTime ? ` at ${peakTime}` : ''} with ${formatMetricWithNoun(peak.value, params.metric, metricNoun, { unit: params.unit })} in a single ${params.interval} window - roughly ${trimFixed(multiplier, 1)}x the average.`
+      : ` Peak bucket${peakTime ? ` at ${peakTime}` : ''}: ${formatMetricWithNoun(peak.value, params.metric, metricNoun, { unit: params.unit })}.`
 
   return `${firstSentence}${spikeSentence}${blocks}`.trim()
 }
@@ -898,24 +952,27 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           'Execution depth. Defaults to complete requested-window analysis; the optional fast value is only for explicitly bounded previews.',
         ),
     },
-    async ({
-      network,
-      metric,
-      interval,
-      duration: requestedDuration,
-      address,
-      from_timestamp,
-      to_timestamp,
-      compare_previous,
-      group_by,
-      group_limit,
-      mode,
-    }) => {
+    async (
+      {
+        network,
+        metric,
+        interval,
+        duration: requestedDuration,
+        address,
+        from_timestamp,
+        to_timestamp,
+        compare_previous,
+        group_by,
+        group_limit,
+        mode,
+      },
+      context,
+    ) => {
       const queryStartTime = Date.now()
       let dataset = await resolveDataset(network)
       const chainType = detectChainType(dataset)
       const hasTimestamps = from_timestamp !== undefined || to_timestamp !== undefined
-      const { duration, windowLabel } = resolveSeriesWindow({
+      let { duration, windowLabel } = resolveSeriesWindow({
         dataset,
         requestedDuration,
         from_timestamp,
@@ -935,20 +992,6 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const longWindowNotice = hasTimestamps ? undefined : buildLongWindowNotice(duration)
       if (longWindowNotice) {
         notices.push(longWindowNotice)
-      }
-
-      if (chainType === 'tron') {
-        throw createUnsupportedChainError({
-          toolName: 'portal_get_time_series',
-          dataset,
-          actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
-          suggestions: [
-            'Use portal_get_network_info for Tron availability and freshness.',
-            'Use portal_debug_resolve_time_to_block for Tron timestamp-to-block lookups.',
-            'Use portal_tron_query_transactions or portal_tron_query_logs with response_format=summary for bounded Tron counts, or the Stream API examples in the bundled SQD Portal skill for custom time series.',
-          ],
-        })
       }
 
       if (compare_previous && group_by === 'contract') {
@@ -2453,7 +2496,31 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       }
 
       if (from_timestamp === undefined && to_timestamp === undefined) {
-        assertSeriesDurationScannable({ dataset, chainType, duration })
+        const safePresets = getSafeSeriesDurationPresets(dataset, chainType)
+        if (safePresets.length > 0 && supportsFormElicitation(context, server.server?.getClientCapabilities?.())) {
+          const choiceSchema = z.object({
+            duration: z.enum(safePresets as [string, ...string[]]).describe('Supported window duration'),
+          })
+          const outcome = readFormElicitationOutcome(context, 'series_duration', choiceSchema)
+          if (outcome.state === 'accepted') {
+            duration = outcome.value.duration
+          } else {
+            try {
+              assertSeriesDurationScannable({ dataset, chainType, duration })
+            } catch (error) {
+              if (outcome.state === 'missing') {
+                return buildFormElicitationResult(
+                  'series_duration',
+                  `${duration} exceeds the ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()}-block time-series scan cap on ${dataset}. Pick a supported duration to run now:`,
+                  choiceSchema,
+                )
+              }
+              throw error
+            }
+          }
+        } else {
+          assertSeriesDurationScannable({ dataset, chainType, duration })
+        }
       }
       // Get block range using Portal's /timestamps/ API
       const resolvedWindow = await resolveTimeframeOrBlocks({
@@ -2477,7 +2544,8 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       const expectedBuckets = Math.ceil(durationSeconds / intervalSeconds)
 
       // Build chain-specific query
-      const queryType = chainType === 'solana' ? 'solana' : chainType === 'bitcoin' ? 'bitcoin' : 'evm'
+      const queryType =
+        chainType === 'solana' ? 'solana' : chainType === 'bitcoin' ? 'bitcoin' : chainType === 'tron' ? 'tron' : 'evm'
       const blockFieldKey = 'block'
 
       const baseFields: any = {
@@ -2491,6 +2559,8 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         if (metric === 'unique_addresses') {
           if (chainType === 'solana') {
             baseFields.transaction.feePayer = true
+          } else if (chainType === 'tron') {
+            baseFields.transaction.parameter = true
           } else {
             baseFields.transaction.from = true
             baseFields.transaction.to = true
@@ -2498,6 +2568,15 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         }
         if (address && chainType === 'evm') {
           queryExtras.transactions = [{ to: [address.toLowerCase()] }]
+        } else if (address && chainType === 'tron') {
+          let hex41: string
+          try {
+            hex41 = normalizeTronAddress(address, 'transaction')
+          } catch (error) {
+            throw toTronInputError(error)
+          }
+          queryExtras.transferTransactions = [{ owner: [hex41] }, { to: [hex41] }]
+          queryExtras.triggerSmartContractTransactions = [{ owner: [hex41] }, { contract: [hex41] }]
         } else {
           queryExtras.transactions = [{}]
         }
@@ -2762,6 +2841,10 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               if (tx.feePayer) bucket.addresses.add(tx.feePayer)
               if (tx.from) bucket.addresses.add(tx.from.toLowerCase())
               if (tx.to) bucket.addresses.add(tx.to.toLowerCase())
+              const tronValue = tx.parameter?.value
+              if (tronValue?.owner_address) bucket.addresses.add(tronValue.owner_address.toLowerCase())
+              if (tronValue?.to_address) bucket.addresses.add(tronValue.to_address.toLowerCase())
+              if (tronValue?.contract_address) bucket.addresses.add(tronValue.contract_address.toLowerCase())
             })
           }
         })

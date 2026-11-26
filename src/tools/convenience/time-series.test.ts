@@ -7,6 +7,7 @@ import {
   MAX_SERIES_SCAN_BLOCKS,
   assertSeriesDurationScannable,
   assertSeriesWindowScannable,
+  formatMetricWithNoun,
   resolveSeriesWindow,
 } from './time-series.js'
 
@@ -157,5 +158,15 @@ describe('resolveSeriesWindow', () => {
     assert.deepEqual(resolveSeriesWindow({ dataset: 'ethereum-mainnet', from_timestamp: 'not a time' }), {
       duration: '6h',
     })
+  })
+})
+
+describe('formatMetricWithNoun', () => {
+  it('avoids repeating the unit word for gas_used', () => {
+    assert.equal(
+      formatMetricWithNoun(12_300_000, 'gas_used', 'gas used', { compact: true, unit: 'gas' }),
+      '12.3M gas used',
+    )
+    assert.equal(formatMetricWithNoun(1_200, 'transaction_count', 'txs', { unit: 'transactions' }), '1,200 txs')
   })
 })

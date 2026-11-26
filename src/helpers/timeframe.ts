@@ -10,6 +10,7 @@ import { ActionableError, RequestCancelledError } from './errors.js'
 import { portalFetch, portalFetchStream } from './fetch.js'
 import { formatTimestamp } from './format.js'
 import { assertWindowWithinGuardrail } from './guardrails.js'
+import { reportPortalProgress } from './progress.js'
 import {
   type SharedPortalWork,
   getPortalRequestSignal,
@@ -1007,6 +1008,11 @@ export async function resolveTimeframeOrBlocks(params: {
   to_timestamp?: TimestampInput
 }): Promise<ResolvedBlockWindow> {
   const { dataset, timeframe, from_block, to_block, from_timestamp, to_timestamp } = params
+  reportPortalProgress({
+    phase: 'resolve_window',
+    progress: 0,
+    message: `Resolving query window on ${dataset}`,
+  })
   const hasTimestampWindow = from_timestamp !== undefined || to_timestamp !== undefined
   const hasBlockWindow = from_block !== undefined || to_block !== undefined
 

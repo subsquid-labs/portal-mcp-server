@@ -3,9 +3,10 @@ import { z } from 'zod'
 
 import { resolveDataset, validateBlockRange } from '../../cache/datasets.js'
 import { PORTAL_URL } from '../../constants/index.js'
+import { scanBoundedBlockRange } from '../../helpers/bounded-search.js'
 import { detectChainType } from '../../helpers/chain.js'
 import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
-import { portalFetchRecentRecordsWithScan } from '../../helpers/fetch.js'
+import { portalFetchRecentRecordsWithScan, portalFetchStreamRange } from '../../helpers/fetch.js'
 import {
   buildSolanaBalanceFields,
   buildSolanaInstructionFields,
@@ -46,6 +47,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
     finalized_only: boolean
     fee_payer?: string[]
     mentions_account?: string[]
+    signature?: string
     include_instructions: boolean
     include_balances: boolean
     include_token_balances: boolean
@@ -160,6 +162,12 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
       finalized_only: z.boolean().optional().default(false).describe('Only query finalized slots'),
       fee_payer: z.array(z.string()).optional().describe('Fee payer addresses'),
       mentions_account: z.array(z.string()).optional().describe('Accounts mentioned anywhere in the transaction'),
+      signature: z
+        .string()
+        .optional()
+        .describe(
+          'FILTER: Exact base58 Solana transaction signature. Combine with from_block/to_block or a narrow timeframe; stops as soon as matched.',
+        ),
       include_instructions: z.boolean().optional().default(false).describe('Include instruction data'),
       include_balances: z.boolean().optional().default(false).describe('Include SOL balance changes'),
       include_token_balances: z.boolean().optional().default(false).describe('Include SPL token balance changes'),
@@ -195,6 +203,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
       finalized_only,
       fee_payer,
       mentions_account,
+      signature,
       include_instructions,
       include_balances,
       include_token_balances,
@@ -235,6 +244,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         finalized_only = paginationCursor.request.finalized_only
         fee_payer = paginationCursor.request.fee_payer
         mentions_account = paginationCursor.request.mentions_account
+        signature = paginationCursor.request.signature
         include_instructions = paginationCursor.request.include_instructions
         include_balances = paginationCursor.request.include_balances
         include_token_balances = paginationCursor.request.include_token_balances
@@ -258,6 +268,15 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
             { code: 'invalid_request', origin: 'client_input', retryable: false },
           )
         }
+      }
+      const normalizedSignature = signature?.trim()
+      if (normalizedSignature !== undefined && !/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(normalizedSignature)) {
+        throw new ActionableError(
+          `Invalid Solana transaction signature: ${signature}.`,
+          ['Pass a base58-encoded 64-byte Solana transaction signature and narrow the slot range or timeframe.'],
+          { field: 'signature' },
+          { code: 'invalid_request', origin: 'client_input', retryable: false },
+        )
       }
       const effectiveResponseFormat = resolveDefaultResponseFormat(response_format, {
         preserveFullIf:
@@ -348,15 +367,52 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
 
       const cursorSkip = paginationCursor?.skip_inclusive_block ?? 0
       const fetchLimit = limit + cursorSkip + 1
-      const { records: results, scan: recentScan } = await portalFetchRecentRecordsWithScan(
-        `${PORTAL_URL}/datasets/${dataset}/stream`,
-        query,
-        {
+      let results: unknown[] = []
+      let recentScan: { exhausted: boolean } | undefined
+      if (normalizedSignature) {
+        const matchedBlocks: unknown[] = []
+        let foundMatch = false
+        const maxSignatureScanSlots = hasFilters ? 5_000 : 500
+        const signatureScan = await scanBoundedBlockRange<unknown>({
+          fromBlock: resolvedFromBlock,
+          toBlock: pageToBlock,
+          chunkSize: hasFilters ? 200 : 25,
+          scanOrder: 'latest',
+          maxScanBlocks: Math.min(maxSignatureScanSlots, pageToBlock - resolvedFromBlock + 1),
+          shouldContinue: () => !foundMatch,
+          fetchChunk: async (chunk) => {
+            const chunkBlocks = await portalFetchStreamRange(`${PORTAL_URL}/datasets/${dataset}/stream`, {
+              ...query,
+              fromBlock: chunk.fromBlock,
+              toBlock: chunk.toBlock,
+            })
+            const matching = chunkBlocks
+              .map((rawBlock) => {
+                const block = rawBlock as Record<string, unknown> & { transactions?: Record<string, unknown>[] }
+                const matchingTxs = (block.transactions ?? []).filter((tx) => {
+                  const sigs = Array.isArray(tx.signatures) ? tx.signatures : []
+                  return sigs.some((sig) => String(sig) === normalizedSignature)
+                })
+                if (matchingTxs.length === 0) return undefined
+                foundMatch = true
+                return { ...block, transactions: matchingTxs }
+              })
+              .filter(Boolean)
+            matchedBlocks.push(...matching)
+            return matching
+          },
+        })
+        results = matchedBlocks
+        recentScan = { exhausted: !signatureScan.hasUnscannedBlocks || foundMatch }
+      } else {
+        const fetched = await portalFetchRecentRecordsWithScan(`${PORTAL_URL}/datasets/${dataset}/stream`, query, {
           itemKeys: ['transactions'],
           limit: fetchLimit,
           chunkSize: hasFilters ? 500 : Math.max(1, Math.min(10, limit)),
-        },
-      )
+        })
+        results = fetched.records
+        recentScan = fetched.scan
+      }
 
       const allTxs = sortTransactions(
         results.flatMap((block: unknown) => {

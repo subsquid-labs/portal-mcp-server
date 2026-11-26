@@ -1,4 +1,5 @@
 import { applyGuardrail } from './guardrails.js'
+import { reportPortalProgress } from './progress.js'
 
 export type BoundedSearchScanOrder = 'earliest' | 'latest'
 
@@ -86,6 +87,12 @@ export async function scanBoundedBlockRange<T>({
       scannedBlocks += chunkTo - chunkFrom + 1
       chunkCount += 1
       items = mergeChunkItems ? mergeChunkItems(items, chunkItems, chunk) : [...items, ...chunkItems]
+      reportPortalProgress({
+        phase: 'scan',
+        progress: scannedBlocks,
+        total: effectiveMaxScanBlocks,
+        message: `Scanned ${scannedBlocks.toLocaleString('en-US')} / ${effectiveMaxScanBlocks.toLocaleString('en-US')} blocks`,
+      })
     }
   } else if (requestedBlocks > 0 && effectiveConcurrency === 1) {
     for (let chunkTo = toBlock; chunkTo >= fromBlock && continueScanning(); chunkTo -= effectiveChunkSize) {
@@ -97,6 +104,12 @@ export async function scanBoundedBlockRange<T>({
       scannedBlocks += chunkTo - chunkFrom + 1
       chunkCount += 1
       items = mergeChunkItems ? mergeChunkItems(items, chunkItems, chunk) : [...items, ...chunkItems]
+      reportPortalProgress({
+        phase: 'scan',
+        progress: scannedBlocks,
+        total: effectiveMaxScanBlocks,
+        message: `Scanned ${scannedBlocks.toLocaleString('en-US')} / ${effectiveMaxScanBlocks.toLocaleString('en-US')} blocks`,
+      })
     }
   } else if (requestedBlocks > 0) {
     let nextChunkTo = toBlock
@@ -135,6 +148,12 @@ export async function scanBoundedBlockRange<T>({
         chunkCount += 1
         items = mergeChunkItems ? mergeChunkItems(items, outcome.value, chunk) : [...items, ...outcome.value]
       }
+      reportPortalProgress({
+        phase: 'scan',
+        progress: scannedBlocks,
+        total: effectiveMaxScanBlocks,
+        message: `Scanned ${scannedBlocks.toLocaleString('en-US')} / ${effectiveMaxScanBlocks.toLocaleString('en-US')} blocks`,
+      })
     }
   }
 

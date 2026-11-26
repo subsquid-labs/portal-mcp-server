@@ -6,6 +6,7 @@ import { type UpstreamSpan, startUpstreamSpan } from '../tracing.js'
 import { portalAdmission } from './admission.js'
 import { ActionableError, RequestCancelledError, createTimeoutError, parsePortalError, wrapError } from './errors.js'
 import { applyGuardrail } from './guardrails.js'
+import { reportPortalProgress } from './progress.js'
 import {
   type RequestAbortContext,
   createRequestAbortContext,
@@ -244,6 +245,12 @@ async function waitForRetry(
   const minAttemptWindow = Math.min(MIN_RETRY_ATTEMPT_WINDOW_MS, requestTimeoutMs)
   const effectiveCeiling = Math.min(startedAt + retryBudgetMs, getPortalRequestDeadlineAt() ?? Number.POSITIVE_INFINITY)
   if (Date.now() + delayMs + minAttemptWindow > effectiveCeiling) return false
+  reportPortalProgress({
+    phase: 'retry',
+    progress: attempt + 1,
+    total: retries + 1,
+    message: `Portal busy, retrying (attempt ${attempt + 2}/${retries + 1})`,
+  })
   await runWhilePortalBackoffSleep(() => sleep(delayMs))
   return true
 }
@@ -1150,9 +1157,21 @@ export async function portalFetchStreamRange(
     }
 
     if (lastReturnedBlock >= requestedTo) {
+      reportPortalProgress({
+        phase: 'stream',
+        progress: requestedTo - requestedFrom + 1,
+        total: requestedTo - requestedFrom + 1,
+        message: `Streamed blocks ${requestedFrom.toLocaleString('en-US')}-${requestedTo.toLocaleString('en-US')}`,
+      })
       break
     }
 
+    reportPortalProgress({
+      phase: 'stream',
+      progress: Math.max(1, lastReturnedBlock - requestedFrom + 1),
+      total: requestedTo - requestedFrom + 1,
+      message: `Streaming blocks (${(lastReturnedBlock - requestedFrom + 1).toLocaleString('en-US')}/${(requestedTo - requestedFrom + 1).toLocaleString('en-US')})`,
+    })
     currentFrom = lastReturnedBlock + 1
   }
 
@@ -1249,9 +1268,21 @@ export async function portalFetchStreamRangeVisit(
     }
 
     if (lastReturnedBlock >= requestedTo) {
+      reportPortalProgress({
+        phase: 'stream',
+        progress: requestedTo - requestedFrom + 1,
+        total: requestedTo - requestedFrom + 1,
+        message: `Streamed blocks ${requestedFrom.toLocaleString('en-US')}-${requestedTo.toLocaleString('en-US')}`,
+      })
       break
     }
 
+    reportPortalProgress({
+      phase: 'stream',
+      progress: Math.max(1, lastReturnedBlock - requestedFrom + 1),
+      total: requestedTo - requestedFrom + 1,
+      message: `Streaming blocks (${(lastReturnedBlock - requestedFrom + 1).toLocaleString('en-US')}/${(requestedTo - requestedFrom + 1).toLocaleString('en-US')})`,
+    })
     currentFrom = lastReturnedBlock + 1
   }
 

@@ -19,8 +19,8 @@ import {
   getDexScreenerChainForDataset,
   resolveTokenByAddressFromListWithStatus,
 } from '../../helpers/entity-resolution.js'
-import { RequestCancelledError, createUnsupportedChainError } from '../../helpers/errors.js'
-import { type DexScreenerPair, getDexScreenerPair } from '../../helpers/external-apis.js'
+import { ActionableError, RequestCancelledError, createUnsupportedChainError } from '../../helpers/errors.js'
+import { type DexScreenerPair, getDexScreenerPair, getDexScreenerTokenPairs } from '../../helpers/external-apis.js'
 import { portalFetchRecentRecords, portalFetchStreamRangeVisit } from '../../helpers/fetch.js'
 import { buildEvmLogFields } from '../../helpers/fields.js'
 import { formatResult, formatTimestamp } from '../../helpers/format.js'
@@ -42,7 +42,7 @@ import {
 } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { buildChartPanel, buildMetricCard, buildPortalUi, buildTablePanel } from '../../helpers/ui-metadata.js'
-import { untrustedLabel } from '../../helpers/untrusted-text.js'
+import { quoteUntrusted, untrustedLabel } from '../../helpers/untrusted-text.js'
 import { normalizeEvmAddress } from '../../helpers/validation.js'
 
 type OhlcDuration = '1h' | '6h' | '12h' | '24h' | '7d' | '30d'
@@ -1561,6 +1561,70 @@ export function registerEvmOhlcTool(server: McpServer) {
         const queryTarget = isUniswapV4SwapSource(source as EvmOhlcSource)
           ? `${normalizedPoolManagerAddress}:${normalizedPoolId}`
           : normalizedPoolAddress
+        if (normalizedPoolAddress && !isUniswapV4SwapSource(source as EvmOhlcSource)) {
+          const [tokenLookup, dexPairs] = await Promise.all([
+            resolveTokenByAddressFromListWithStatus(dataset, normalizedPoolAddress).catch(() => undefined),
+            (() => {
+              const dexChain = getDexScreenerChainForDataset(dataset)
+              return dexChain
+                ? getDexScreenerTokenPairs(dexChain, normalizedPoolAddress).catch(() => [])
+                : Promise.resolve([])
+            })(),
+          ])
+          if (tokenLookup?.match) {
+            const topPools = (dexPairs ?? [])
+              .filter(
+                (pair) =>
+                  typeof pair.pairAddress === 'string' &&
+                  /^0x[0-9a-fA-F]{40}$/.test(pair.pairAddress) &&
+                  pair.pairAddress.toLowerCase() !== normalizedPoolAddress,
+              )
+              .sort((left, right) => Number(right.liquidityUsd ?? 0) - Number(left.liquidityUsd ?? 0))
+              .slice(0, 3)
+              .map((pair) => {
+                const labels = pair.labels ?? []
+                const inferredSource =
+                  pair.dexId === 'uniswap' && labels.some((label) => label.toLowerCase() === 'v3')
+                    ? 'uniswap_v3_swap'
+                    : pair.dexId === 'uniswap' && labels.some((label) => label.toLowerCase() === 'v2')
+                      ? 'uniswap_v2_swap'
+                      : pair.dexId === 'aerodrome' && labels.some((label) => label.toLowerCase().includes('slipstream'))
+                        ? 'aerodrome_slipstream_swap'
+                        : undefined
+                return {
+                  pool_address: pair.pairAddress!.toLowerCase(),
+                  pair: `${pair.baseToken?.symbol ?? '?'}/${pair.quoteToken?.symbol ?? '?'}`,
+                  dex: pair.dexId,
+                  ...(inferredSource ? { source: inferredSource } : {}),
+                  ...(typeof pair.liquidityUsd === 'number' ? { liquidity_usd: Math.round(pair.liquidityUsd) } : {}),
+                }
+              })
+            const tokenLabel = `${untrustedLabel(tokenLookup.match.symbol)} (${quoteUntrusted(tokenLookup.match.name)})`
+            throw new ActionableError(
+              `No ${source} events found for ${queryTarget}. ${queryTarget} is the ${tokenLabel} token contract on ${dataset}, not a DEX liquidity pool.`,
+              [
+                ...(topPools.length > 0
+                  ? topPools.map(
+                      (pool) =>
+                        `Retry with pool_address="${pool.pool_address}"${pool.source ? ` and source="${pool.source}"` : ''} (${quoteUntrusted(pool.pair)} on ${quoteUntrusted(pool.dex ?? 'DEX')}).`,
+                    )
+                  : [
+                      `Call portal_resolve_entity with network="${dataset}", kind="pool", and a pair query such as ${quoteUntrusted(`${tokenLookup.match.symbol}/WETH uniswap`)} to find a pool address.`,
+                    ]),
+              ],
+              {
+                network: dataset,
+                token: {
+                  address: tokenLookup.match.address,
+                  symbol: tokenLookup.match.symbol,
+                  name: tokenLookup.match.name,
+                },
+                ...(topPools.length > 0 ? { suggested_pools: topPools } : {}),
+              },
+              { code: 'no_data', origin: 'client_input', retryable: false },
+            )
+          }
+        }
         throw new Error(`No ${source} events found for ${queryTarget} in the requested window`)
       }
 

@@ -89,7 +89,7 @@ export async function fetchExternalJson<T>(
 // ============================================================================
 
 export interface CoinGeckoToken {
-  chainId: number
+  chainId: number | null
   address: string
   name: string
   symbol: string
@@ -124,6 +124,8 @@ const COINGECKO_TOKEN_LISTS: Record<string, string> = {
   polygon: 'https://tokens.coingecko.com/polygon-pos/all.json',
   avalanche: 'https://tokens.coingecko.com/avalanche/all.json',
   bsc: 'https://tokens.coingecko.com/binance-smart-chain/all.json',
+  solana: 'https://tokens.coingecko.com/solana/all.json',
+  tron: 'https://tokens.coingecko.com/tron/all.json',
 }
 
 function buildTokenListResult(chain: string, record: TokenListCacheRecord, cacheStatus: 'fresh' | 'stale') {

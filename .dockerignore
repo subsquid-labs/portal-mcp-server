@@ -4,6 +4,7 @@ dist
 .claude
 *.md
 !THIRD_PARTY_NOTICES.md
+!plugins/portal/skills/**/*.md
 # The image runs `npm run build`, so every script that build reaches has to be
 # named here. An allowlist is silent when it is short by one file: adding
 # zod-locale-plugin.mjs to the bundler and not to this list broke the image
@@ -17,4 +18,5 @@ scripts/*
 !scripts/compact-stylesheet-plugin.mjs
 !scripts/zod-locale-plugin.mjs
 !scripts/copy-third-party-licenses.mjs
+!scripts/copy-skills.mjs
 src/generated

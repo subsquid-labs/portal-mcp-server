@@ -7,6 +7,7 @@ import { detectChainType, isL2Chain } from '../../helpers/chain.js'
 import { ActionableError, createUnsupportedChainError } from '../../helpers/errors.js'
 import { portalFetchRecentRecordsWithScan } from '../../helpers/fetch.js'
 import { TRANSACTION_FIELD_PRESETS } from '../../helpers/field-presets.js'
+import { buildTronBlockFields, buildTronTransactionFields } from '../../helpers/fields.js'
 import { formatResult, formatTimestamp, formatTransactionFields } from '../../helpers/format.js'
 import { registerPortalTool } from '../../helpers/mcp-registration.js'
 import {
@@ -29,6 +30,7 @@ import {
   resolveTimeframeOrBlocks,
 } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { normalizeTronAddresses } from '../../helpers/tron.js'
 import { buildPortalUi, buildTimelinePanel } from '../../helpers/ui-metadata.js'
 import {
   getQueryExamples,
@@ -37,6 +39,7 @@ import {
   validateQuerySize,
 } from '../../helpers/validation.js'
 import { fetchRecentHyperliquidFillBlocks } from '../hyperliquid/fill-stream.js'
+import { flattenTronTransactions, sortTronTransactions, toTronInputError } from '../tron/shared.js'
 
 // ============================================================================
 // Tool: Get Recent Transactions (Convenience Wrapper)
@@ -289,20 +292,6 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
         to_addresses = paginationCursor.to_addresses
       }
 
-      if (chainType === 'tron') {
-        throw createUnsupportedChainError({
-          toolName: 'portal_get_recent_activity',
-          dataset,
-          actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
-          suggestions: [
-            'Use portal_get_network_info for Tron availability and freshness.',
-            'Use portal_debug_resolve_time_to_block for Tron timestamp-to-block lookups.',
-            'Use portal_tron_query_transactions for native TRX transfers, TRC-10 transfers, and contract calls, and portal_tron_query_logs for TRC-20 events.',
-          ],
-        })
-      }
-
       if (
         (chainType === 'bitcoin' || chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds') &&
         (from_addresses?.length || to_addresses?.length)
@@ -446,6 +435,34 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
           toTimestamp: to_timestamp,
           rangeLabel,
           from_addresses: normalizedFrom,
+          limit,
+          fetchLimit,
+          cursor: paginationCursor,
+          resolvedBlocks,
+          headBlockNumber: head.number,
+          queryStartTime,
+        })
+      }
+      if (chainType === 'tron') {
+        let normalizedTronFrom: string[] | undefined
+        let normalizedTronTo: string[] | undefined
+        try {
+          normalizedTronFrom = normalizeTronAddresses(from_addresses, 'transaction')
+          normalizedTronTo = normalizeTronAddresses(to_addresses, 'transaction')
+        } catch (error) {
+          throw toTronInputError(error)
+        }
+        return await queryTronRecent({
+          dataset,
+          fromBlock,
+          pageToBlock,
+          windowToBlock,
+          timeframe,
+          fromTimestamp: from_timestamp,
+          toTimestamp: to_timestamp,
+          rangeLabel,
+          from_addresses: normalizedTronFrom,
+          to_addresses: normalizedTronTo,
           limit,
           fetchLimit,
           cursor: paginationCursor,
@@ -711,6 +728,160 @@ async function queryBitcoinRecent(params: {
       page.hasMore,
       limit,
     ),
+    {
+      toolName: 'portal_get_recent_activity',
+      ...(notices.length > 0 ? { notices } : {}),
+      pagination: buildPaginationInfo(limit, page.pageItems.length, nextCursor),
+      ordering: buildChronologicalPageOrdering({
+        sortedBy: 'block_number',
+        tieBreakers: ['transactionIndex', 'hash'],
+      }),
+      freshness: buildQueryFreshness({
+        finality: 'latest',
+        headBlockNumber,
+        windowToBlock,
+        resolvedWindow: resolvedBlocks,
+      }),
+      coverage: buildQueryCoverage({
+        windowFromBlock: fromBlock,
+        windowToBlock,
+        pageToBlock,
+        items: page.pageItems,
+        getBlockNumber,
+        hasMore: page.hasMore,
+        windowComplete: recentScan?.exhausted ?? true,
+      }),
+      execution: buildExecutionMetadata({
+        limit,
+        from_block: fromBlock,
+        to_block: windowToBlock,
+        page_to_block: pageToBlock,
+        range_kind: resolvedBlocks.range_kind,
+        normalized_output: true,
+      }),
+      ui: buildRecentActivityUi({ dataset, rangeLabel, nextCursor }),
+      llm: { compact: true },
+      metadata: {
+        network: dataset,
+        dataset,
+        from_block: fromBlock,
+        to_block: pageToBlock,
+        query_start_time: queryStartTime,
+      },
+    },
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Tron recent transactions
+// ---------------------------------------------------------------------------
+
+async function queryTronRecent(params: {
+  dataset: string
+  fromBlock: number
+  pageToBlock: number
+  windowToBlock: number
+  timeframe?: string
+  fromTimestamp?: TimestampInput
+  toTimestamp?: TimestampInput
+  rangeLabel: string
+  from_addresses: string[] | undefined
+  to_addresses: string[] | undefined
+  limit: number
+  fetchLimit: number
+  cursor?: RecentTransactionsCursor
+  resolvedBlocks: ResolvedBlockWindow
+  headBlockNumber: number
+  queryStartTime: number
+}) {
+  const {
+    dataset,
+    fromBlock,
+    pageToBlock,
+    windowToBlock,
+    timeframe,
+    fromTimestamp,
+    toTimestamp,
+    rangeLabel,
+    from_addresses,
+    to_addresses,
+    limit,
+    fetchLimit,
+    cursor,
+    resolvedBlocks,
+    headBlockNumber,
+    queryStartTime,
+  } = params
+
+  const hasAddressFilter = Boolean(from_addresses?.length || to_addresses?.length)
+  const query: Record<string, unknown> = {
+    type: 'tron',
+    fromBlock,
+    toBlock: pageToBlock,
+    fields: {
+      block: buildTronBlockFields(),
+      transaction: buildTronTransactionFields(),
+    },
+  }
+  if (hasAddressFilter) {
+    const transferFilter: Record<string, unknown> = {}
+    if (from_addresses?.length) transferFilter.owner = from_addresses
+    if (to_addresses?.length) transferFilter.to = to_addresses
+    query.transferTransactions = [transferFilter]
+    if (from_addresses?.length && !to_addresses?.length) {
+      query.triggerSmartContractTransactions = [{ owner: from_addresses }]
+    }
+  } else {
+    query.transactions = [{}]
+  }
+
+  const { records: results, scan: recentScan } = await portalFetchRecentRecordsWithScan(
+    `${PORTAL_URL}/datasets/${dataset}/stream`,
+    query,
+    {
+      itemKeys: ['transactions'],
+      limit: fetchLimit,
+      chunkSize: hasAddressFilter ? 500 : 25,
+    },
+  )
+
+  const allTxs = sortTronTransactions(
+    flattenTronTransactions(results, { includeLogs: false, includeInternalTransactions: false }),
+  ) as RecentTransactionItem[]
+  const page = paginateAscendingItems(
+    allTxs,
+    limit,
+    getBlockNumber,
+    cursor
+      ? {
+          page_to_block: cursor.page_to_block,
+          skip_inclusive_block: cursor.skip_inclusive_block,
+        }
+      : undefined,
+  )
+  const nextCursor =
+    page.hasMore && page.nextBoundary
+      ? createRecentTransactionsCursor({
+          dataset,
+          ...(timeframe ? { timeframe } : {}),
+          ...(fromTimestamp !== undefined ? { from_timestamp: fromTimestamp } : {}),
+          ...(toTimestamp !== undefined ? { to_timestamp: toTimestamp } : {}),
+          range_label: rangeLabel,
+          limit,
+          ...(from_addresses ? { from_addresses } : {}),
+          ...(to_addresses ? { to_addresses } : {}),
+          window_from_block: fromBlock,
+          window_to_block: windowToBlock,
+          page_to_block: page.nextBoundary.page_to_block,
+          skip_inclusive_block: page.nextBoundary.skip_inclusive_block,
+        })
+      : undefined
+  const notices = getTimestampWindowNotices(resolvedBlocks)
+  if (nextCursor) notices.push('Older results are available via _pagination.next_cursor.')
+
+  return formatResult(
+    page.pageItems,
+    buildRecentMessage(`Retrieved ${page.pageItems.length} recent Tron transactions`, rangeLabel, page.hasMore, limit),
     {
       toolName: 'portal_get_recent_activity',
       ...(notices.length > 0 ? { notices } : {}),

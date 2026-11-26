@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/server'
 import { z } from 'zod'
 
+import { detectChainType } from '../../helpers/chain.js'
 import {
   buildTokenListLookupNotices,
   resolveContractQuery,
@@ -106,14 +107,30 @@ export function registerResolveEntityTool(server: McpServer) {
       const protocolSlugs =
         effectiveKind === 'protocol' ? matches.flatMap((match) => ('slug' in match ? [match.slug] : [])) : []
 
+      const resolvedNetwork = 'dataset' in result ? result.dataset : undefined
+      const resolvedChainType = resolvedNetwork ? detectChainType(resolvedNetwork) : undefined
+      const isEnsName = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.eth$/i.test(result.query.trim())
+
       const suggestedArguments =
         matches.length > 0
           ? effectiveKind === 'token'
-            ? {
-                token_addresses: tokenAddresses,
-                token_symbols: [result.query],
-                note: 'Use token_addresses when you need a deterministic contract filter; token_symbols can be used by supported EVM token/log tools.',
-              }
+            ? resolvedChainType === 'solana'
+              ? {
+                  mint_addresses: tokenAddresses,
+                  mentions_account: tokenAddresses,
+                  note: 'Use these SPL mint addresses with portal_solana_query_transactions or portal_solana_query_instructions.',
+                }
+              : resolvedChainType === 'tron'
+                ? {
+                    contract_addresses: tokenAddresses,
+                    addresses: tokenAddresses,
+                    note: 'Use these TRC-20 contract addresses with portal_tron_query_logs or portal_tron_query_transactions.',
+                  }
+                : {
+                    token_addresses: tokenAddresses,
+                    token_symbols: [result.query],
+                    note: 'Use token_addresses when you need a deterministic contract filter; token_symbols can be used by supported EVM token/log tools.',
+                  }
             : effectiveKind === 'contract'
               ? {
                   contract_address: contractAddresses[0],
@@ -154,17 +171,23 @@ export function registerResolveEntityTool(server: McpServer) {
           : undefined
 
       if (matches.length === 0) {
-        notices.push(
-          effectiveKind === 'token'
-            ? 'No token-list match found. Check the network, use the exact token contract address, or try a canonical symbol.'
-            : effectiveKind === 'contract'
-              ? 'No built-in contract alias match found. Pass the exact contract address for deterministic EVM queries.'
-              : effectiveKind === 'pool'
-                ? 'No pool match found. Use a pair such as "WETH/USDC uniswap", or pass a 20-byte EVM pool address or 32-byte pool id.'
-                : effectiveKind === 'hyperliquid_coin'
-                  ? 'No Hyperliquid coin candidate could be normalized from the query.'
-                  : 'No protocol match found from DeFi Llama protocol metadata.',
-        )
+        if (isEnsName) {
+          notices.push(
+            `${quoteUntrusted(result.query)} looks like an ENS name. SQD Portal indexes raw on-chain records without off-chain ENS forward resolution; pass the resolved 0x address directly to wallet or query tools.`,
+          )
+        } else {
+          notices.push(
+            effectiveKind === 'token'
+              ? 'No token-list match found. Check the network, use the exact token contract address, or try a canonical symbol.'
+              : effectiveKind === 'contract'
+                ? 'No built-in contract alias match found. Pass the exact contract address for deterministic EVM queries.'
+                : effectiveKind === 'pool'
+                  ? 'No pool match found. Use a pair such as "WETH/USDC uniswap", or pass a 20-byte EVM pool address or 32-byte pool id.'
+                  : effectiveKind === 'hyperliquid_coin'
+                    ? 'No Hyperliquid coin candidate could be normalized from the query.'
+                    : 'No protocol match found from DeFi Llama protocol metadata.',
+          )
+        }
       }
       if (truncated) {
         notices.push(
