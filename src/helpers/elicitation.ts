@@ -24,16 +24,17 @@ export function supportsFormElicitation(
   fallbackCapabilities?: ClientCapabilities | unknown,
 ): boolean {
   const envelope = asRecord(context?.mcpReq?.envelope)
-  const fromEnvelope = asRecord(envelope?.[CLIENT_CAPABILITIES_META_KEY])
-  const capabilities = fromEnvelope ?? asRecord(fallbackCapabilities)
+  /* On 2026-07-28 every request carries an envelope; never fall back to legacy
+     session capabilities when a modern envelope omits clientCapabilities. */
+  const capabilities = envelope ? asRecord(envelope[CLIENT_CAPABILITIES_META_KEY]) : asRecord(fallbackCapabilities)
   if (!capabilities) return false
   const elicitation = asRecord(capabilities.elicitation)
   if (!elicitation) return false
   if ('form' in elicitation) {
     return Boolean(elicitation.form)
   }
-  // Pre-mode rule: `elicitation: {}` (without explicit url-only key) supports form mode.
-  return !('url' in elicitation) || Object.keys(elicitation).length === 0
+  // Pre-mode rule: bare `elicitation: {}` supports form mode; any other non-form key does not.
+  return Object.keys(elicitation).length === 0
 }
 
 export type FormElicitationOutcome<T> =
@@ -41,6 +42,7 @@ export type FormElicitationOutcome<T> =
   | { state: 'accepted'; value: T }
   | { state: 'declined' }
   | { state: 'cancelled' }
+  | { state: 'invalid' }
 
 /**
  * Read and validate an embedded form-mode elicitation response from a
@@ -57,7 +59,7 @@ export function readFormElicitationOutcome<S extends z.ZodTypeAny>(
   if (view.action === 'decline') return { state: 'declined' }
   if (view.action === 'cancel') return { state: 'cancelled' }
   const validated = acceptedContent(responses, key, schema)
-  if (validated === undefined) return { state: 'missing' }
+  if (validated === undefined) return { state: 'invalid' }
   return { state: 'accepted', value: validated as z.infer<S> }
 }
 

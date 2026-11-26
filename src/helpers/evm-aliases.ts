@@ -1,5 +1,6 @@
 import { EVENT_SIGNATURES } from '../constants/index.js'
 import { ActionableError } from './errors.js'
+import { quoteUntrusted } from './untrusted-text.js'
 
 const METHOD_ALIASES: Record<string, string[]> = {
   approve: ['0x095ea7b3'],
@@ -78,7 +79,7 @@ function normalizeHex4(value: string): string {
   const trimmed = value.trim().toLowerCase()
   if (!/^0x[0-9a-f]{8}$/.test(trimmed)) {
     throw new ActionableError(
-      `Invalid method sighash: ${value}. Use a 4-byte hex string like 0xa9059cbb or a known method alias.`,
+      `Invalid method sighash: ${quoteUntrusted(value)}. Use a 4-byte hex string like 0xa9059cbb or a known method alias.`,
       [`Available method aliases: ${listMethodAliases().join(', ')}.`],
       { method: value, available_aliases: listMethodAliases() },
       { code: 'invalid_request', origin: 'client_input', retryable: false },
@@ -91,7 +92,7 @@ function normalizeTopic0(value: string): string {
   const trimmed = value.trim().toLowerCase()
   if (!/^0x[0-9a-f]{64}$/.test(trimmed)) {
     throw new ActionableError(
-      `Invalid event topic0: ${value}. Use a 32-byte topic hash or a known event alias.`,
+      `Invalid event topic0: ${quoteUntrusted(value)}. Use a 32-byte topic hash or a known event alias.`,
       [`Available event aliases: ${listEventAliases().join(', ')}.`],
       { event: value, available_aliases: listEventAliases() },
       { code: 'invalid_request', origin: 'client_input', retryable: false },

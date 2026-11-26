@@ -18,6 +18,7 @@ import { registerPortalTool } from '../../helpers/mcp-registration.js'
 import { buildQueryCoverage, buildQueryFreshness } from '../../helpers/result-metadata.js'
 import { estimateBlockTime, getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { quoteUntrusted } from '../../helpers/untrusted-text.js'
 
 const DEFAULT_RECENT_SEARCH_DEPTH_BLOCKS = 100_000
 const DEFAULT_MAX_SCAN_BLOCKS = 1_000_000
@@ -275,7 +276,6 @@ export function registerContractDeploymentTool(server: McpServer) {
         1,
         Math.min(max_scan_blocks ?? DEFAULT_MAX_SCAN_BLOCKS, MAX_SCAN_BLOCKS, requestedBlocks),
       )
-      let deployment: DeploymentTrace | undefined
       const scanResult = await scanBoundedBlockRange<DeploymentTrace>({
         fromBlock: resolvedBlocks.from_block,
         toBlock: endBlock,
@@ -283,7 +283,7 @@ export function registerContractDeploymentTool(server: McpServer) {
         concurrency: 2,
         scanOrder: scan_order,
         maxScanBlocks,
-        shouldContinue: () => !deployment,
+        shouldContinue: (state) => state.items.length === 0,
         fetchChunk: async (chunkBounds) => {
           const records = await portalFetchStreamRange(portalUrl, {
             ...query,
@@ -291,10 +291,11 @@ export function registerContractDeploymentTool(server: McpServer) {
             toBlock: chunkBounds.toBlock,
           })
           const matches = flattenCreateTraces(records, normalizedContract)
-          deployment = scan_order === 'earliest' ? matches[0] : matches.at(-1)
-          return deployment ? [deployment] : []
+          const chunkMatch = scan_order === 'earliest' ? matches[0] : matches.at(-1)
+          return chunkMatch ? [chunkMatch] : []
         },
       })
+      const deployment = scanResult.items[0]
       const scannedFromBlock = scanResult.scannedFromBlock
       const scannedToBlock = scanResult.scannedToBlock
       const scannedBlocks = scanResult.scannedBlocks
@@ -304,7 +305,9 @@ export function registerContractDeploymentTool(server: McpServer) {
       const items = deployment ? [deployment] : []
       const notices = [...getTimestampWindowNotices(resolvedBlocks)]
       if (resolvedContract.alias) {
-        notices.push(`Resolved contract alias "${resolvedContract.alias}" to ${normalizedContract} on ${dataset}.`)
+        notices.push(
+          `Resolved contract alias ${quoteUntrusted(resolvedContract.alias)} to ${normalizedContract} on ${dataset}.`,
+        )
       }
       if (!hasExplicitWindow) {
         notices.push(

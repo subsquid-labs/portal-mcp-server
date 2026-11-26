@@ -29,12 +29,19 @@ describe('portal_list_networks ranking', () => {
     )
   })
 
-  it('prefers an exact query match ahead of featured rank', () => {
+  it('prefers direct and multi-token query matches ahead of featured rank', () => {
     const rows = [
+      { network: 'base-mainnet', type: 'mainnet', real_time: true },
       { network: 'ethereum-mainnet', type: 'mainnet', real_time: true },
       { network: 'base-sepolia', type: 'testnet', real_time: true },
     ]
-    const sorted = [...rows].sort((left, right) => compareNetworkRows(left, right, 'base-sepolia'))
-    assert.equal(sorted[0]?.network, 'base-sepolia')
+    const exactSorted = [...rows].sort((left, right) => compareNetworkRows(left, right, 'base-sepolia'))
+    assert.equal(exactSorted[0]?.network, 'base-sepolia')
+
+    const spacedSorted = [...rows].sort((left, right) => compareNetworkRows(left, right, 'base sepolia'))
+    assert.equal(spacedSorted[0]?.network, 'base-sepolia')
+
+    const familySorted = [...rows].sort((left, right) => compareNetworkRows(left, right, 'base'))
+    assert.equal(familySorted[0]?.network, 'base-mainnet')
   })
 })

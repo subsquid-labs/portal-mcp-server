@@ -10,7 +10,9 @@ import {
   parseTimeframeToSeconds,
   resolveTimeframeOrBlocks,
 } from '../../helpers/timeframe.js'
+import { normalizeTronAddress } from '../../helpers/tron.js'
 import { computeSolanaTimeSeries } from '../solana/time-series-shared.js'
+import { toTronInputError } from '../tron/shared.js'
 
 type CompareMetric = 'transaction_count' | 'avg_gas_price' | 'gas_used' | 'block_utilization' | 'unique_addresses'
 
@@ -31,6 +33,14 @@ type TimeSeriesBlock = {
     feePayer?: string
     from?: string
     to?: string
+    parameter?: {
+      value?: {
+        owner_address?: unknown
+        to_address?: unknown
+        contract_address?: unknown
+        receiver_address?: unknown
+      }
+    }
   }>
 }
 type BucketAccumulator = {
@@ -84,7 +94,9 @@ function getBlockNumber(block: TimeSeriesBlock): number | undefined {
 }
 
 function getBlockTimestamp(block: TimeSeriesBlock): number | undefined {
-  return block.timestamp ?? block.header?.timestamp
+  const raw = block.timestamp ?? block.header?.timestamp
+  if (raw === undefined) return undefined
+  return raw > 1e12 ? Math.floor(raw / 1000) : raw
 }
 
 function getBlockBigIntString(
@@ -233,7 +245,7 @@ export async function computeWindowSeries(params: {
       }
     }
 
-    const queryType = chainType === 'bitcoin' ? 'bitcoin' : 'evm'
+    const queryType = chainType === 'bitcoin' ? 'bitcoin' : chainType === 'tron' ? 'tron' : 'evm'
     const baseFields: any = {
       block: { number: true, timestamp: true },
     }
@@ -242,11 +254,25 @@ export async function computeWindowSeries(params: {
     if (metric === 'transaction_count' || metric === 'unique_addresses') {
       baseFields.transaction = { transactionIndex: true }
       if (metric === 'unique_addresses') {
-        baseFields.transaction.from = true
-        baseFields.transaction.to = true
+        if (chainType === 'tron') {
+          baseFields.transaction.parameter = true
+        } else {
+          baseFields.transaction.from = true
+          baseFields.transaction.to = true
+        }
       }
       if (address && chainType === 'evm') {
         queryExtras.transactions = [{ to: [address.toLowerCase()] }]
+      } else if (address && chainType === 'tron') {
+        let hex41: string
+        try {
+          hex41 = normalizeTronAddress(address, 'transaction')
+        } catch (error) {
+          throw toTronInputError(error)
+        }
+        queryExtras.transferTransactions = [{ owner: [hex41] }, { to: [hex41] }]
+        queryExtras.transferAssetTransactions = [{ owner: [hex41] }, { to: [hex41] }]
+        queryExtras.triggerSmartContractTransactions = [{ owner: [hex41] }, { contract: [hex41] }]
       } else {
         queryExtras.transactions = [{}]
       }
@@ -258,7 +284,8 @@ export async function computeWindowSeries(params: {
     }
 
     const hasTxData = metric === 'transaction_count' || metric === 'unique_addresses'
-    const initialChunkSize = hasTxData ? 5000 : 10000
+    const initialChunkSize =
+      chainType === 'tron' && hasTxData ? (metric === 'unique_addresses' ? 200 : 1000) : hasTxData ? 5000 : 10000
     const sortResults = (items: TimeSeriesBlock[]) =>
       items.sort((left, right) => (getBlockNumber(left) || 0) - (getBlockNumber(right) || 0))
 
@@ -269,23 +296,40 @@ export async function computeWindowSeries(params: {
 
       const results: TimeSeriesBlock[] = []
       let currentFrom = rangeFrom
+      let chunkSize = initialChunkSize
 
       while (currentFrom <= rangeTo) {
-        const plannedTo = Math.min(currentFrom + initialChunkSize - 1, rangeTo)
-        const chunk = (await portalFetchStream(
-          `${PORTAL_URL}/datasets/${dataset}/stream`,
-          {
-            type: queryType,
-            fromBlock: currentFrom,
-            toBlock: plannedTo,
-            includeAllBlocks: true,
-            fields: baseFields,
-            ...queryExtras,
-          },
-          {
-            maxBytes: 100 * 1024 * 1024,
-          },
-        )) as TimeSeriesBlock[]
+        const plannedTo = Math.min(currentFrom + chunkSize - 1, rangeTo)
+        let chunk: TimeSeriesBlock[]
+        try {
+          chunk = (await portalFetchStream(
+            `${PORTAL_URL}/datasets/${dataset}/stream`,
+            {
+              type: queryType,
+              fromBlock: currentFrom,
+              toBlock: plannedTo,
+              includeAllBlocks: true,
+              fields: baseFields,
+              ...queryExtras,
+            },
+            {
+              maxBytes: 100 * 1024 * 1024,
+            },
+          )) as TimeSeriesBlock[]
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          const shouldReduceChunkSize =
+            hasTxData &&
+            chunkSize > 50 &&
+            (message.includes('Response too large') ||
+              message.toLowerCase().includes('timed out') ||
+              message.toLowerCase().includes('timeout'))
+          if (shouldReduceChunkSize) {
+            chunkSize = Math.max(50, Math.floor(chunkSize / 2))
+            continue
+          }
+          throw err
+        }
 
         if (chunk.length === 0) {
           break
@@ -371,6 +415,15 @@ export async function computeWindowSeries(params: {
           if (tx.feePayer) bucket.addresses.add(tx.feePayer)
           if (tx.from) bucket.addresses.add(tx.from.toLowerCase())
           if (tx.to) bucket.addresses.add(tx.to.toLowerCase())
+          const tronValue = tx.parameter?.value
+          if (typeof tronValue?.owner_address === 'string') bucket.addresses.add(tronValue.owner_address.toLowerCase())
+          if (typeof tronValue?.to_address === 'string') bucket.addresses.add(tronValue.to_address.toLowerCase())
+          if (typeof tronValue?.contract_address === 'string') {
+            bucket.addresses.add(tronValue.contract_address.toLowerCase())
+          }
+          if (typeof tronValue?.receiver_address === 'string') {
+            bucket.addresses.add(tronValue.receiver_address.toLowerCase())
+          }
         })
       }
     })

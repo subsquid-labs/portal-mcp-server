@@ -132,7 +132,9 @@ const uniqueStrings = (values: string[]) => Array.from(new Set(values))
 function buildTokenResolutionNotices(resolutions: TokenSymbolResolution[], unresolvedSymbols: string[]) {
   const notices: string[] = []
   if (unresolvedSymbols.length > 0) {
-    notices.push(`No token-list match found for symbol(s): ${unresolvedSymbols.join(', ')}.`)
+    notices.push(
+      `No token-list match found for symbol(s): ${unresolvedSymbols.map((symbol) => quoteUntrusted(symbol)).join(', ')}.`,
+    )
   }
   for (const resolution of resolutions) {
     if (resolution.matches.length > 1) {

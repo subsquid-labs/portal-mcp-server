@@ -18,6 +18,7 @@ type ProgressState = {
   lastSentAt: number
   lastProgress: number
   lastPhase?: string
+  totalOwnerPhase?: string
   closed: boolean
 }
 
@@ -27,7 +28,8 @@ const DEFAULT_PROGRESS_INTERVAL_MS = 250
 
 export function readProgressToken(context: ServerContext | undefined): ProgressToken | undefined {
   const token = context?.mcpReq._meta?.progressToken
-  return typeof token === 'string' || typeof token === 'number' ? token : undefined
+  if (typeof token === 'string') return token
+  return typeof token === 'number' && Number.isSafeInteger(token) ? token : undefined
 }
 
 /**
@@ -78,12 +80,34 @@ export function reportPortalProgress(event: PortalProgressEvent & { phase?: stri
 
   const now = Date.now()
   const phaseChanged = event.phase !== undefined && event.phase !== state.lastPhase
-  const completed = event.total !== undefined && event.progress >= event.total
-  if (!event.force && !phaseChanged && !completed && now - state.lastSentAt < state.minIntervalMs) {
+  const firstEvent = state.lastProgress < 0
+  const ownerCompleted =
+    event.total !== undefined &&
+    Number.isFinite(event.total) &&
+    event.progress >= event.total &&
+    event.phase !== 'stream' &&
+    event.phase !== 'retry' &&
+    (state.totalOwnerPhase === undefined || event.phase === state.totalOwnerPhase)
+  if (!event.force && !firstEvent && !phaseChanged && !ownerCompleted && now - state.lastSentAt < state.minIntervalMs) {
     return
   }
 
-  const progress = Math.max(state.lastProgress + (phaseChanged ? 0 : 0), event.progress)
+  /* MCP requires progress to strictly increase on every notification. When a
+     nested retry or secondary phase reports a lower local counter, bump by 1
+     and omit mismatched local totals so clients never see progress > total. */
+  const rawProgress = Number.isFinite(event.progress) && event.progress >= 0 ? event.progress : 0
+  const progress = firstEvent ? rawProgress : Math.max(state.lastProgress + 1, rawProgress)
+
+  if (event.total !== undefined && state.totalOwnerPhase === undefined && event.phase !== 'retry') {
+    state.totalOwnerPhase = event.phase
+  }
+  const canIncludeTotal =
+    event.total !== undefined &&
+    Number.isFinite(event.total) &&
+    event.total >= progress &&
+    event.phase !== 'retry' &&
+    (state.totalOwnerPhase === undefined || event.phase === state.totalOwnerPhase)
+
   state.lastSentAt = now
   state.lastProgress = progress
   if (event.phase !== undefined) state.lastPhase = event.phase
@@ -91,7 +115,7 @@ export function reportPortalProgress(event: PortalProgressEvent & { phase?: stri
   const params: Record<string, unknown> = {
     progressToken: state.token,
     progress,
-    ...(event.total !== undefined ? { total: event.total } : {}),
+    ...(canIncludeTotal ? { total: event.total } : {}),
     ...(event.message ? { message: event.message } : {}),
   }
 

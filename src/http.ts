@@ -19,6 +19,7 @@ import {
   connectionKeyFromRequest,
   evaluateBodyLimit,
   evaluateRequestGuard,
+  isTrustedPeer,
   parseTrustedProxyPrefixes,
   readPositiveInt,
   readTrustedProxyCount,
@@ -51,6 +52,32 @@ const READY_PROBE_INTERVAL_MS = readPositiveInt(process.env.MCP_READY_PROBE_INTE
 const READY_MAX_AGE_MS = readPositiveInt(process.env.MCP_READY_MAX_AGE_MS, 90_000)
 const TRUSTED_PROXIES = readTrustedProxyCount(process.env.MCP_TRUST_PROXY)
 const TRUSTED_PROXY_PREFIXES = parseTrustedProxyPrefixes(process.env.MCP_TRUSTED_PROXY_PREFIXES)
+const SAFE_HOST_AUTHORITY = /^(?:\[[0-9a-fA-F:]+\]|[a-zA-Z0-9.-]+)(?::\d{1,5})?$/
+
+function parseConfiguredPublicOrigin(raw: string | undefined): string | undefined {
+  if (!raw?.trim()) return undefined
+  try {
+    const parsed = new URL(raw.trim())
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined
+    return parsed.origin
+  } catch {
+    return undefined
+  }
+}
+
+const PUBLIC_ORIGIN = parseConfiguredPublicOrigin(process.env.MCP_PUBLIC_ORIGIN)
+
+function resolveServerCardOrigin(req: IncomingMessage): string | undefined {
+  if (PUBLIC_ORIGIN) return PUBLIC_ORIGIN
+  const rawHost = readHeader(req, 'host')?.trim()
+  if (!rawHost || !SAFE_HOST_AUTHORITY.test(rawHost)) return undefined
+  const trustedProxy = TRUSTED_PROXIES > 0 && isTrustedPeer(req.socket.remoteAddress, TRUSTED_PROXY_PREFIXES)
+  const forwardedProto = trustedProxy
+    ? readHeader(req, 'x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+    : undefined
+  const scheme = forwardedProto === 'https' ? 'https' : 'http'
+  return `${scheme}://${rawHost}`
+}
 // Internal header carrying the hashed connection key from the Node layer to the
 // MCP handler; any client-supplied value is overwritten.
 const CONNECTION_KEY_HEADER = 'x-sqd-connection-key'
@@ -126,6 +153,7 @@ function runtimeContextFromRequest(ctx: McpRequestContext): RuntimeRequestContex
 const mcpHandler = createMcpHandler((ctx) => createPortalServer(runtimeContextFromRequest(ctx)), {
   legacy: 'stateless',
   responseMode: 'auto',
+  maxRequestBodySize: MAX_BODY_BYTES,
   onerror(error) {
     console.error('[mcp:http]', error)
   },
@@ -135,8 +163,10 @@ const handleMcpRequest = toNodeHandler(
   {
     async fetch(request: Request, options?: McpHandlerRequestOptions) {
       let uiDeclared = false
+      const contentType = request.headers.get('content-type')?.toLowerCase() ?? ''
       if (
         request.method === 'POST' &&
+        contentType.includes('application/json') &&
         getActivityExplorerDeploymentMode() === 'auto' &&
         parseExplicitActivityExplorerQueryFlag({ url: request.url }) === undefined
       ) {
@@ -151,6 +181,7 @@ const handleMcpRequest = toNodeHandler(
     },
   },
   {
+    maxRequestBodySize: MAX_BODY_BYTES,
     onerror(error) {
       console.error('[mcp:http-adapter]', error)
     },
@@ -221,10 +252,7 @@ const server = createServer(
         res.end(JSON.stringify({ error: 'Method not allowed' }))
         return
       }
-      const forwardedProto = readHeader(req, 'x-forwarded-proto')?.split(',')[0]?.trim()
-      const host = readHeader(req, 'host')
-      const origin = host ? `${forwardedProto === 'https' ? 'https' : 'http'}://${host}` : undefined
-      const payload = JSON.stringify(buildServerCard({ origin }), null, 2)
+      const payload = JSON.stringify(buildServerCard({ origin: resolveServerCardOrigin(req) }), null, 2)
       res.writeHead(200, SERVER_CARD_HEADERS)
       res.end(req.method === 'HEAD' ? undefined : payload)
       return

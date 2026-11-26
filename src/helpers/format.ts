@@ -925,20 +925,6 @@ function buildNextSteps(payload: RecordLike): RecordLike | undefined {
   }
 }
 
-function buildTechnicalDetails(payload: RecordLike): RecordLike | undefined {
-  const technicalDetails: RecordLike = {}
-
-  if (payload._meta !== undefined) technicalDetails.meta = payload._meta
-  if (payload._freshness !== undefined) technicalDetails.freshness = payload._freshness
-  if (payload._coverage !== undefined) technicalDetails.coverage = payload._coverage
-  if (payload._execution !== undefined) technicalDetails.execution = payload._execution
-  if (payload._pagination !== undefined) technicalDetails.pagination = payload._pagination
-  if (payload._ordering !== undefined) technicalDetails.ordering = payload._ordering
-  if (payload._tool_contract !== undefined) technicalDetails.tool_contract = payload._tool_contract
-
-  return Object.keys(technicalDetails).length > 0 ? technicalDetails : undefined
-}
-
 function buildDefaultFreshness(): RecordLike {
   return { kind: 'not_applicable' }
 }
@@ -1127,6 +1113,7 @@ function collectInvestigationPivots(payload: RecordLike): RecordLike[] {
           value: text,
           use_as: 'from_block/to_block',
         })
+        if (pivots.length >= 5) return pivots
       }
     }
 
@@ -1489,12 +1476,8 @@ export function formatResult(data: unknown, message?: string, options?: FormatOp
     // the compact JSON form below.
     jsonString = JSON.stringify(responsePayload)
   } catch {
-    try {
-      jsonString = JSON.stringify(responsePayload)
-    } catch {
-      return {
-        content: [{ type: 'text', text: 'Error: Unable to serialize response.' }],
-      }
+    return {
+      content: [{ type: 'text', text: 'Error: Unable to serialize response.' }],
     }
   }
 

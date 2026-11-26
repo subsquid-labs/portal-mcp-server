@@ -18,10 +18,21 @@ describe('MCP form elicitation helper', () => {
     assert.equal(supportsFormElicitation(modernCtx), true)
     assert.equal(supportsFormElicitation(undefined, { elicitation: {} }), true)
     assert.equal(supportsFormElicitation(undefined, { elicitation: { url: {} } }), false)
+    assert.equal(supportsFormElicitation(undefined, { elicitation: { futureMode: {} } }), false)
     assert.equal(supportsFormElicitation(undefined, {}), false)
+
+    // When a 2026 per-request envelope is present, it is authoritative and must not fall back.
+    const envelopeWithoutElicitation = {
+      mcpReq: {
+        envelope: {
+          [CLIENT_CAPABILITIES_META_KEY]: {},
+        },
+      },
+    } as unknown as ServerContext
+    assert.equal(supportsFormElicitation(envelopeWithoutElicitation, { elicitation: { form: {} } }), false)
   })
 
-  it('builds inputRequired form requests and parses accepted/declined/cancelled outcomes', () => {
+  it('builds inputRequired form requests and parses accepted/declined/cancelled/invalid outcomes', () => {
     const schema = z.object({ duration: z.enum(['30m', '15m']) })
     const result = buildFormElicitationResult('series_duration', 'Pick a duration', schema)
     assert.equal(result.resultType, 'input_required')
@@ -45,5 +56,23 @@ describe('MCP form elicitation helper', () => {
       },
     } as unknown as ServerContext
     assert.deepEqual(readFormElicitationOutcome(declinedCtx, 'series_duration', schema), { state: 'declined' })
+
+    const cancelledCtx = {
+      mcpReq: {
+        inputResponses: {
+          series_duration: { action: 'cancel' },
+        },
+      },
+    } as unknown as ServerContext
+    assert.deepEqual(readFormElicitationOutcome(cancelledCtx, 'series_duration', schema), { state: 'cancelled' })
+
+    const invalidCtx = {
+      mcpReq: {
+        inputResponses: {
+          series_duration: { action: 'accept', content: { duration: '999d' } },
+        },
+      },
+    } as unknown as ServerContext
+    assert.deepEqual(readFormElicitationOutcome(invalidCtx, 'series_duration', schema), { state: 'invalid' })
   })
 })

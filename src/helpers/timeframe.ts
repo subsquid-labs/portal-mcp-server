@@ -299,7 +299,7 @@ function getDurationExpression(input: string): string {
   let normalized = normalizeDurationText(input)
 
   const rangeMatch = normalized.match(
-    /\b(?:past|last|previous)\s+((?:\d+(?:\.\d+)?|a|an|one|half)(?:\s+an?)?\s*[a-z.]+|[a-z.]+)\b/,
+    /^(?:in\s+)?(?:the\s+)?(?:for|over|during|within)?\s*(?:the\s+)?(?:past|last|previous)\s+((?:\d+(?:\.\d+)?|a|an|one|half)(?:\s+an?)?\s*[a-z.]+|[a-z.]+)$/,
   )
   if (rangeMatch) {
     return rangeMatch[1]
@@ -1008,11 +1008,6 @@ export async function resolveTimeframeOrBlocks(params: {
   to_timestamp?: TimestampInput
 }): Promise<ResolvedBlockWindow> {
   const { dataset, timeframe, from_block, to_block, from_timestamp, to_timestamp } = params
-  reportPortalProgress({
-    phase: 'resolve_window',
-    progress: 0,
-    message: `Resolving query window on ${dataset}`,
-  })
   const hasTimestampWindow = from_timestamp !== undefined || to_timestamp !== undefined
   const hasBlockWindow = from_block !== undefined || to_block !== undefined
 
@@ -1033,6 +1028,12 @@ export async function resolveTimeframeOrBlocks(params: {
       },
     )
   }
+
+  reportPortalProgress({
+    phase: 'resolve_window',
+    progress: 0,
+    message: `Resolving query window on ${dataset}`,
+  })
 
   if (timeframe) {
     const head = await getBlockHead(dataset)
@@ -1204,7 +1205,7 @@ export async function resolveTimeframeOrBlocks(params: {
   } else if (from_block !== undefined) {
     return {
       from_block,
-      to_block: to_block || from_block + 1000,
+      to_block: to_block ?? from_block + 1000,
       range_kind: 'block_range',
     }
   }

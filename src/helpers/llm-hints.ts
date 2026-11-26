@@ -280,25 +280,6 @@ function buildMetricCardHints(payload: RecordLike, ui?: PortalUiSpec): LlmMetric
     })
 }
 
-function buildHeadline(payload: RecordLike, ui?: PortalUiSpec): LlmHeadlineHint | undefined {
-  const title = ui?.headline?.title
-  const subtitle = ui?.headline?.subtitle
-  const summary =
-    typeof payload.answer === 'string'
-      ? payload.answer
-      : typeof payload._summary === 'string'
-        ? payload._summary
-        : undefined
-
-  if (!title && !subtitle && !summary) return undefined
-
-  return {
-    ...(title ? { title } : {}),
-    ...(subtitle ? { subtitle } : {}),
-    ...(summary ? { summary } : {}),
-  }
-}
-
 function buildChartHint(payload: RecordLike): LlmChartHint | undefined {
   const chart = payload.chart
   if (!isRecord(chart) || typeof chart.data_key !== 'string' || typeof chart.kind !== 'string') {
@@ -729,40 +710,6 @@ function inferNormalizedFields(
       : []
 
   return fields.length > 0 ? fields : undefined
-}
-
-function buildParserNotes(
-  payload: RecordLike,
-  normalizedOutput: boolean,
-  metricCards: LlmMetricCardHint[],
-  chartHint: LlmChartHint | undefined,
-  tableHints: LlmTableHint[],
-  overrides?: LlmOverrides,
-): string[] | undefined {
-  const pagination = isRecord(payload._pagination) ? payload._pagination : undefined
-  const paginationNote = pagination
-    ? pagination.continuation_scope === 'adjacent_window'
-      ? 'A pagination cursor loads an older adjacent window; use _coverage to judge the completeness of the current window.'
-      : 'Check _pagination before assuming the returned list is complete.'
-    : undefined
-  const notes = [
-    metricCards.length > 0
-      ? 'Use _llm.metric_cards for headline numbers before recomputing values from arrays.'
-      : undefined,
-    chartHint
-      ? 'Use _llm.chart plus chart.tooltip and chart.interactions metadata for plotting and hover labels instead of inferring series structure.'
-      : undefined,
-    tableHints.length > 0
-      ? 'Use _llm.tables columns for labels, ordering, and value formats instead of guessing from field names.'
-      : undefined,
-    normalizedOutput
-      ? 'When present, prefer normalized aliases like primary_id, record_type, timestamp_human, sender, and recipient for cross-chain answers.'
-      : undefined,
-    paginationNote,
-    ...(overrides?.parser_notes ?? []),
-  ].filter((note): note is string => Boolean(note))
-
-  return notes.length > 0 ? Array.from(new Set(notes)).slice(0, 6) : undefined
 }
 
 export function buildLlmHints(payload: RecordLike, overrides?: LlmOverrides): PortalLlmHints {

@@ -1561,20 +1561,34 @@ export function registerEvmOhlcTool(server: McpServer) {
         const queryTarget = isUniswapV4SwapSource(source as EvmOhlcSource)
           ? `${normalizedPoolManagerAddress}:${normalizedPoolId}`
           : normalizedPoolAddress
-        if (normalizedPoolAddress && !isUniswapV4SwapSource(source as EvmOhlcSource)) {
-          const [tokenLookup, dexPairs] = await Promise.all([
-            resolveTokenByAddressFromListWithStatus(dataset, normalizedPoolAddress).catch(() => undefined),
-            (() => {
-              const dexChain = getDexScreenerChainForDataset(dataset)
-              return dexChain
-                ? getDexScreenerTokenPairs(dexChain, normalizedPoolAddress).catch(() => [])
-                : Promise.resolve([])
-            })(),
-          ])
+        if (
+          normalizedPoolAddress &&
+          !isUniswapV4SwapSource(source as EvmOhlcSource) &&
+          !poolPairMetadata &&
+          !paginationCursor
+        ) {
+          const tokenLookupBudget = await runOptionalWorkWithinBudget(
+            EVM_OHLC_METADATA_BUDGET_MS[mode as OhlcMode],
+            () => resolveTokenByAddressFromListWithStatus(dataset, normalizedPoolAddress),
+          ).catch((error) => {
+            if (error instanceof RequestCancelledError) throw error
+            return { value: undefined, timedOut: false }
+          })
+          const tokenLookup = tokenLookupBudget.value
           if (tokenLookup?.match) {
+            const dexChain = getDexScreenerChainForDataset(dataset)
+            const dexPairsBudget = dexChain
+              ? await runOptionalWorkWithinBudget(EVM_OHLC_METADATA_BUDGET_MS[mode as OhlcMode], () =>
+                  getDexScreenerTokenPairs(dexChain, normalizedPoolAddress),
+                ).catch((error) => {
+                  if (error instanceof RequestCancelledError) throw error
+                  return { value: undefined, timedOut: false }
+                })
+              : { value: undefined, timedOut: false }
+            const dexPairs = dexPairsBudget.value
             const topPools = (dexPairs ?? [])
               .filter(
-                (pair) =>
+                (pair): pair is DexScreenerPair & { pairAddress: string } =>
                   typeof pair.pairAddress === 'string' &&
                   /^0x[0-9a-fA-F]{40}$/.test(pair.pairAddress) &&
                   pair.pairAddress.toLowerCase() !== normalizedPoolAddress,
@@ -1592,7 +1606,7 @@ export function registerEvmOhlcTool(server: McpServer) {
                         ? 'aerodrome_slipstream_swap'
                         : undefined
                 return {
-                  pool_address: pair.pairAddress!.toLowerCase(),
+                  pool_address: pair.pairAddress.toLowerCase(),
                   pair: `${pair.baseToken?.symbol ?? '?'}/${pair.quoteToken?.symbol ?? '?'}`,
                   dex: pair.dexId,
                   ...(inferredSource ? { source: inferredSource } : {}),
@@ -2404,8 +2418,8 @@ export function registerEvmOhlcTool(server: McpServer) {
               'recent_trades',
             ],
             parser_notes: [
-              'Use _llm.metric_cards and primary_preview for the headline price before scanning rows.',
               'Check _coverage and gap_diagnostics before claiming the window is complete.',
+              'Use _llm.primary_preview and market_context.price.latest_close for the headline price before scanning rows.',
             ],
           },
           coverage: buildBucketCoverage({

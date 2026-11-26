@@ -45,6 +45,7 @@ import {
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
 import { normalizeTronAddress } from '../../helpers/tron.js'
 import { buildChartPanel, buildMetricCard, buildPortalUi, buildTablePanel } from '../../helpers/ui-metadata.js'
+import { quoteUntrusted } from '../../helpers/untrusted-text.js'
 import { visitHyperliquidFillBlocks } from '../hyperliquid/fill-stream.js'
 import { computeSolanaTimeSeries } from '../solana/time-series-shared.js'
 import { toTronInputError } from '../tron/shared.js'
@@ -981,7 +982,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
       })
       const isHyperliquid = chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
       const notices: string[] = []
-      const pipesRecipe = buildTimeSeriesPipesRecipe({
+      let pipesRecipe = buildTimeSeriesPipesRecipe({
         network: dataset,
         metric,
         interval,
@@ -990,7 +991,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         compare_previous,
         group_by,
       })
-      const longWindowNotice = hasTimestamps ? undefined : buildLongWindowNotice(duration)
+      let longWindowNotice = hasTimestamps ? undefined : buildLongWindowNotice(duration)
       if (longWindowNotice) {
         notices.push(longWindowNotice)
       }
@@ -1004,7 +1005,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           toolName: 'portal_get_time_series',
           dataset,
           actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
+          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills', 'tron'],
           suggestions: [
             'Use portal_debug_query_blocks for block-by-block Substrate inspection right now.',
             'Add a Substrate time-series implementation with event, call, or extrinsic metrics before using this chart tool on Substrate networks.',
@@ -2503,8 +2504,33 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             duration: z.enum(safePresets as [string, ...string[]]).describe('Supported window duration'),
           })
           const outcome = readFormElicitationOutcome(context, 'series_duration', choiceSchema)
+          if (outcome.state === 'invalid') {
+            throw new ActionableError(
+              `Invalid duration selection returned for ${dataset}.`,
+              [`Choose one of the supported durations (${safePresets.join(', ')}) or pass duration directly.`],
+              { dataset, supported_durations: safePresets },
+            )
+          }
           if (outcome.state === 'accepted') {
             duration = outcome.value.duration
+            windowLabel = duration
+            if (longWindowNotice) {
+              const previousIndex = notices.indexOf(longWindowNotice)
+              if (previousIndex !== -1) notices.splice(previousIndex, 1)
+            }
+            longWindowNotice = buildLongWindowNotice(duration)
+            if (longWindowNotice) {
+              notices.push(longWindowNotice)
+            }
+            pipesRecipe = buildTimeSeriesPipesRecipe({
+              network: dataset,
+              metric,
+              interval,
+              duration,
+              address,
+              compare_previous,
+              group_by,
+            })
           } else {
             try {
               assertSeriesDurationScannable({ dataset, chainType, duration })
@@ -2512,7 +2538,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               if (outcome.state === 'missing') {
                 return buildFormElicitationResult(
                   'series_duration',
-                  `${duration} exceeds the ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()}-block time-series scan cap on ${dataset}. Pick a supported duration to run now:`,
+                  `${quoteUntrusted(duration)} exceeds the ${MAX_SERIES_SCAN_BLOCKS.toLocaleString()}-block time-series scan cap on ${dataset}. Pick a supported duration to run now:`,
                   choiceSchema,
                 )
               }
@@ -2553,6 +2579,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         [blockFieldKey]: { number: true, timestamp: true },
       }
       const queryExtras: any = {}
+      let normalizedAddressForCache = address
 
       if (metric === 'transaction_count' || metric === 'transactions_per_block' || metric === 'unique_addresses') {
         baseFields.transaction =
@@ -2568,7 +2595,8 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           }
         }
         if (address && chainType === 'evm') {
-          queryExtras.transactions = [{ to: [address.toLowerCase()] }]
+          normalizedAddressForCache = address.toLowerCase()
+          queryExtras.transactions = [{ to: [normalizedAddressForCache] }]
         } else if (address && chainType === 'tron') {
           let hex41: string
           try {
@@ -2576,6 +2604,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
           } catch (error) {
             throw toTronInputError(error)
           }
+          normalizedAddressForCache = hex41
           queryExtras.transferTransactions = [{ owner: [hex41] }, { to: [hex41] }]
           queryExtras.transferAssetTransactions = [{ owner: [hex41] }, { to: [hex41] }]
           queryExtras.triggerSmartContractTransactions = [{ owner: [hex41] }, { contract: [hex41] }]
@@ -2599,9 +2628,13 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
             ? address
               ? 750
               : (EVM_GENERIC_TIME_SERIES_CHUNK_SIZE[metric] ?? 250)
-            : hasTxData
-              ? 5000
-              : 10000
+            : chainType === 'tron' && hasTxData
+              ? metric === 'unique_addresses'
+                ? 200
+                : 1000
+              : hasTxData
+                ? 5000
+                : 10000
       let adaptiveChunkReduced = false
       const sortResults = (items: TimeSeriesBlock[]) =>
         items.sort((left, right) => (getBlockNumber(left) || 0) - (getBlockNumber(right) || 0))
@@ -2614,7 +2647,6 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         const results: TimeSeriesBlock[] = []
         let currentFrom = rangeFrom
         let chunkSize = initialChunkSize
-        let chunkSizeReduced = false
 
         while (currentFrom <= rangeTo) {
           const plannedTo = Math.min(currentFrom + chunkSize - 1, rangeTo)
@@ -2642,14 +2674,16 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
 
             if (chainType === 'solana' && shouldReduceChunkSize && chunkSize > MIN_SOLANA_GENERIC_CHUNK_SIZE) {
               chunkSize = Math.max(MIN_SOLANA_GENERIC_CHUNK_SIZE, Math.floor(chunkSize / 2))
-              chunkSizeReduced = true
               adaptiveChunkReduced = true
               continue
             }
 
-            if (chainType === 'evm' && shouldReduceChunkSize && chunkSize > MIN_EVM_GENERIC_CHUNK_SIZE) {
+            if (
+              (chainType === 'evm' || chainType === 'tron') &&
+              shouldReduceChunkSize &&
+              chunkSize > MIN_EVM_GENERIC_CHUNK_SIZE
+            ) {
               chunkSize = Math.max(MIN_EVM_GENERIC_CHUNK_SIZE, Math.floor(chunkSize / 2))
-              chunkSizeReduced = true
               adaptiveChunkReduced = true
               continue
             }
@@ -2689,7 +2723,7 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
         metric,
         interval,
         duration,
-        address,
+        address: normalizedAddressForCache,
         mode,
         from_block: effectiveFromBlock,
         to_block: toBlock,
@@ -2844,10 +2878,18 @@ export function registerGetTimeSeriesDataTool(server: McpServer) {
               if (tx.from) bucket.addresses.add(tx.from.toLowerCase())
               if (tx.to) bucket.addresses.add(tx.to.toLowerCase())
               const tronValue = tx.parameter?.value
-              if (tronValue?.owner_address) bucket.addresses.add(tronValue.owner_address.toLowerCase())
-              if (tronValue?.to_address) bucket.addresses.add(tronValue.to_address.toLowerCase())
-              if (tronValue?.contract_address) bucket.addresses.add(tronValue.contract_address.toLowerCase())
-              if (tronValue?.receiver_address) bucket.addresses.add(tronValue.receiver_address.toLowerCase())
+              if (typeof tronValue?.owner_address === 'string') {
+                bucket.addresses.add(tronValue.owner_address.toLowerCase())
+              }
+              if (typeof tronValue?.to_address === 'string') {
+                bucket.addresses.add(tronValue.to_address.toLowerCase())
+              }
+              if (typeof tronValue?.contract_address === 'string') {
+                bucket.addresses.add(tronValue.contract_address.toLowerCase())
+              }
+              if (typeof tronValue?.receiver_address === 'string') {
+                bucket.addresses.add(tronValue.receiver_address.toLowerCase())
+              }
             })
           }
         })

@@ -12,6 +12,7 @@ import {
   getDexScreenerPair,
   getDexScreenerTokenPairs,
 } from './external-apis.js'
+import { tronHexToBase58 } from './tron.js'
 import { isValidEvmAddress, normalizeEvmAddress } from './validation.js'
 
 export type TokenListSource = 'coingecko_token_list'
@@ -205,6 +206,18 @@ function filterTokensByQuery(tokens: CoinGeckoToken[], query: string) {
     return tokens.filter((token) => token.address.toLowerCase() === normalizedAddress)
   }
 
+  /* Support Tron 41-prefixed hex addresses against Base58 CoinGecko token lists. */
+  if (/^(?:0x)?41[0-9a-fA-F]{40}$/.test(trimmed)) {
+    const hex41 = trimmed.replace(/^0x/i, '').toLowerCase()
+    try {
+      const base58 = tronHexToBase58(hex41)
+      const matchedTron = tokens.filter((token) => token.address === base58)
+      if (matchedTron.length > 0) return matchedTron
+    } catch {
+      // Fall through to symbol/name matching if hex conversion fails.
+    }
+  }
+
   /* Support direct Base58 mint / TRC-20 address lookups on Solana and Tron. */
   const exactAddress = tokens.filter((token) => token.address === trimmed)
   if (exactAddress.length > 0) return exactAddress
@@ -228,8 +241,6 @@ export function getTokenListChainForDataset(dataset: string): string | undefined
   if (normalized.startsWith('polygon-')) return 'polygon'
   if (normalized.startsWith('avalanche-')) return 'avalanche'
   if (normalized.startsWith('binance-') || normalized.startsWith('bsc-')) return 'bsc'
-  if (normalized.startsWith('solana-')) return 'solana'
-  if (normalized.startsWith('tron-')) return 'tron'
   return undefined
 }
 
@@ -271,7 +282,12 @@ export async function getTokenMetadataMapForDatasetWithStatus(
 ): Promise<{ metadata: Map<string, ResolvedTokenEntity>; lookup: TokenListLookupMetadata }> {
   const result = await getTokenListForDatasetWithStatus(dataset)
   return {
-    metadata: new Map(result.tokens.map((token) => [token.address.toLowerCase(), token])),
+    metadata: new Map(
+      result.tokens.map((token) => [
+        /^0x[0-9a-fA-F]{40}$/.test(token.address) ? token.address.toLowerCase() : token.address,
+        token,
+      ]),
+    ),
     lookup: result.lookup,
   }
 }
@@ -300,8 +316,21 @@ export async function resolveTokenByAddressFromListWithStatus(
   }
 
   const result = await getCoinGeckoTokenListWithStatus(tokenListChain)
-  const normalizedAddress = normalizeEvmAddress(address)
-  const token = result.tokens.find((entry) => entry.address.toLowerCase() === normalizedAddress)
+  const trimmed = address.trim()
+  let token: CoinGeckoToken | undefined
+  if (/^0x[0-9a-fA-F]{40}$/.test(trimmed)) {
+    const normalizedAddress = normalizeEvmAddress(trimmed)
+    token = result.tokens.find((entry) => entry.address.toLowerCase() === normalizedAddress)
+  } else if (tokenListChain === 'tron' && /^(?:0x)?41[0-9a-fA-F]{40}$/.test(trimmed)) {
+    try {
+      const base58 = tronHexToBase58(trimmed.replace(/^0x/i, '').toLowerCase())
+      token = result.tokens.find((entry) => entry.address === base58)
+    } catch {
+      token = undefined
+    }
+  } else {
+    token = result.tokens.find((entry) => entry.address === trimmed)
+  }
   return {
     match: token ? asResolvedToken(dataset, tokenListChain, token) : undefined,
     lookup: lookupFromTokenListResult(result),

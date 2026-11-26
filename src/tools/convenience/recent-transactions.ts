@@ -395,7 +395,7 @@ export function registerGetRecentTransactionsTool(server: McpServer) {
           toolName: 'portal_get_recent_activity',
           dataset,
           actualChainType: chainType,
-          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills'],
+          supportedChains: ['evm', 'solana', 'bitcoin', 'hyperliquidFills', 'tron'],
           suggestions: [
             'Use portal_debug_query_blocks to inspect recent Substrate blocks today.',
             'Use portal_debug_resolve_time_to_block if you need to turn a natural time into a Substrate block number.',
@@ -824,13 +824,22 @@ async function queryTronRecent(params: {
     },
   }
   if (hasAddressFilter) {
-    const transferFilter: Record<string, unknown> = {}
-    if (from_addresses?.length) transferFilter.owner = from_addresses
-    if (to_addresses?.length) transferFilter.to = to_addresses
-    query.transferTransactions = [transferFilter]
-    if (from_addresses?.length && !to_addresses?.length) {
-      query.triggerSmartContractTransactions = [{ owner: from_addresses }]
+    const transferFilters: Record<string, unknown>[] = []
+    const assetFilters: Record<string, unknown>[] = []
+    const contractCallFilters: Record<string, unknown>[] = []
+    if (from_addresses?.length) {
+      transferFilters.push({ owner: from_addresses })
+      assetFilters.push({ owner: from_addresses })
+      contractCallFilters.push({ owner: from_addresses })
     }
+    if (to_addresses?.length) {
+      transferFilters.push({ to: to_addresses })
+      assetFilters.push({ to: to_addresses })
+      contractCallFilters.push({ contract: to_addresses })
+    }
+    query.transferTransactions = transferFilters
+    query.transferAssetTransactions = assetFilters
+    query.triggerSmartContractTransactions = contractCallFilters
   } else {
     query.transactions = [{}]
   }
@@ -842,6 +851,8 @@ async function queryTronRecent(params: {
       itemKeys: ['transactions'],
       limit: fetchLimit,
       chunkSize: hasAddressFilter ? 500 : 25,
+      maxChunks: 40,
+      concurrency: 2,
     },
   )
 

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { Buffer } from 'node:buffer'
 
 import { CLIENT_CAPABILITIES_META_KEY, type McpServer } from '@modelcontextprotocol/server'
 
@@ -96,6 +97,8 @@ export function resolveActivityExplorerSurface(
   return options?.uiDeclared === true
 }
 
+const MAX_UI_CAPABILITY_BATCH_SCAN = 100
+
 /**
  * Inspect a parsed JSON-RPC request body (either a single message or batch) to
  * detect whether the caller explicitly declared MCP Apps UI support via the
@@ -103,8 +106,9 @@ export function resolveActivityExplorerSurface(
  */
 export function extractDeclaredUiCapabilityFromBody(body: unknown): boolean {
   const messages = Array.isArray(body) ? body : [body]
-  for (const item of messages) {
-    const message = asRecord(item)
+  const limit = Math.min(messages.length, MAX_UI_CAPABILITY_BATCH_SCAN)
+  for (let i = 0; i < limit; i++) {
+    const message = asRecord(messages[i])
     const params = asRecord(message?.params)
     if (!params) continue
     const meta = asRecord(params._meta)
@@ -216,7 +220,7 @@ export function registerActivityExplorerResource(server: McpServer, runtime: Run
         title: 'SQD Explorer',
         description:
           index === 0
-            ? 'Beta. Interactive evidence views for blockchain activity, wallets, contracts, token flows, markets, and network analytics. Opt in per deployment with MCP_APP_ENABLED=true or per connection with ?app=1; ?app=0 opts a connection out.'
+            ? 'Beta. Interactive evidence views for blockchain activity, wallets, contracts, token flows, markets, and network analytics. Activates automatically for MCP Apps hosts; override per deployment with MCP_APP_ENABLED=true|false or per connection with ?app=1|?app=0.'
             : 'Retained SQD Explorer URI for installed-client compatibility.',
         mimeType: MCP_APP_MIME_TYPE,
         cacheHint: { ttlMs: 86_400_000, cacheScope: 'public' },

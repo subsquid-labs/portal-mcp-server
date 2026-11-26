@@ -1,7 +1,8 @@
 import { cp, mkdir, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = process.cwd()
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const sourceRoot = path.join(root, 'plugins/portal/skills')
 const outputRoot = path.join(root, 'dist/skills')
 
@@ -15,7 +16,7 @@ for (const entry of entries) {
   if (!entry.isDirectory()) continue
   await cp(path.join(sourceRoot, entry.name), path.join(outputRoot, entry.name), {
     recursive: true,
-    dereference: false,
+    dereference: true,
   })
   copied.push(entry.name)
 }

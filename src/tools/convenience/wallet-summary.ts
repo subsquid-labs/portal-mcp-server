@@ -122,15 +122,16 @@ export function buildWalletCompleteness(params: {
   hasMore: boolean
   windowComplete: boolean
   failedSections?: string[]
+  hasCursor?: boolean
 }): WalletCompleteness {
   const failedSections = Array.from(new Set(params.failedSections ?? []))
   const sectionsComplete = failedSections.length === 0
   const resultComplete = params.windowComplete && sectionsComplete && !params.hasMore
   const state: WalletCompleteness['state'] = !sectionsComplete
     ? 'section_partial'
-    : params.hasMore
+    : params.hasMore && params.hasCursor !== false
       ? 'cursor_page'
-      : !params.windowComplete
+      : !params.windowComplete || params.hasMore
         ? 'partial_window'
         : 'complete'
   return {
@@ -1148,6 +1149,18 @@ export function applyWalletSummaryResponseFormat<T extends Record<string, unknow
       ? (summary.fund_flow as Record<string, unknown>)
       : undefined
 
+  const tron =
+    summary.tron && typeof summary.tron === 'object' && !Array.isArray(summary.tron)
+      ? (summary.tron as Record<string, unknown>)
+      : undefined
+  const compactTron = tron
+    ? {
+        trx_transfers_count: tron.trx_transfers_count,
+        contract_calls_count: tron.contract_calls_count,
+        trc20_transfers_count: tron.trc20_transfers_count,
+      }
+    : undefined
+
   if (responseFormat === 'compact') {
     const activityItems = Array.isArray(activity?.items) ? activity.items : undefined
     const relationships =
@@ -1169,6 +1182,7 @@ export function applyWalletSummaryResponseFormat<T extends Record<string, unknow
             },
           }
         : {}),
+      ...(compactTron ? { tron: compactTron } : {}),
       ...(relationships
         ? {
             relationships: {
@@ -1203,6 +1217,7 @@ export function applyWalletSummaryResponseFormat<T extends Record<string, unknow
   return {
     ...summary,
     ...(activity ? { activity: { count: activity.count } } : {}),
+    ...(compactTron ? { tron: compactTron } : {}),
     ...(fundFlow
       ? {
           fund_flow: {
@@ -1586,6 +1601,7 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           timeframe,
           from_timestamp,
           to_timestamp,
+          include_tokens,
           mode,
           limit_per_type,
           response_format,
@@ -1594,7 +1610,9 @@ export function registerGetWalletSummaryTool(server: McpServer) {
           compatibilityNotices:
             requestedLimitPerType > limit_per_type
               ? [
-                  `Accepted the retained limit_per_type ${requestedLimitPerType} for installed-client compatibility and returned safe ${limit_per_type}-row category pages. Continue with _pagination.next_cursor for older activity.`,
+                  chainType === 'tron'
+                    ? `Accepted the retained limit_per_type ${requestedLimitPerType} for installed-client compatibility and returned safe ${limit_per_type}-row category pages. Use portal_tron_query_transactions or portal_tron_query_logs for full cursor pagination.`
+                    : `Accepted the retained limit_per_type ${requestedLimitPerType} for installed-client compatibility and returned safe ${limit_per_type}-row category pages. Continue with _pagination.next_cursor for older activity.`,
                 ]
               : [],
         })
@@ -2489,6 +2507,7 @@ async function buildNonEvmWalletSummary(params: {
   timeframe: string
   from_timestamp?: string | number
   to_timestamp?: string | number
+  include_tokens?: boolean
   mode: 'fast' | 'deep'
   limit_per_type: number
   response_format?: ResponseFormat
@@ -2503,6 +2522,7 @@ async function buildNonEvmWalletSummary(params: {
     timeframe,
     from_timestamp,
     to_timestamp,
+    include_tokens = true,
     mode,
     limit_per_type,
     response_format,
@@ -2586,9 +2606,11 @@ async function buildNonEvmWalletSummary(params: {
         ? 250
         : chainType === 'bitcoin'
           ? 200
-          : chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
-            ? 2_000
-            : undefined
+          : chainType === 'tron'
+            ? 12_000
+            : chainType === 'hyperliquidFills' || chainType === 'hyperliquidReplicaCmds'
+              ? 2_000
+              : undefined
 
     if (fastBlockCap !== undefined && toBlock - fromBlock + 1 > fastBlockCap) {
       fromBlock = Math.max(fromBlock, toBlock - fastBlockCap + 1)
@@ -3343,7 +3365,8 @@ async function buildNonEvmWalletSummary(params: {
       retryBudgetMs: WALLET_PRIMARY_RETRY_BUDGET_MS,
     }
 
-    const [trxFetch, callFetch, trc20Fetch] = await Promise.all([
+    const emptyFetchResult = { records: [] as unknown[], scan: { exhausted: true } }
+    const [trxOutcome, callOutcome, trc20Outcome] = await Promise.allSettled([
       portalFetchRecentRecordsWithScan(
         streamUrl,
         {
@@ -3372,25 +3395,53 @@ async function buildNonEvmWalletSummary(params: {
         },
         { ...fetchOpts, itemKeys: ['transactions'] },
       ),
-      portalFetchRecentRecordsWithScan(
-        streamUrl,
-        {
-          type: 'tron',
-          fromBlock,
-          toBlock,
-          fields: {
-            block: buildTronBlockFields(),
-            log: buildTronLogFields(),
-            transaction: { transactionIndex: true, hash: true },
-          },
-          logs: [
-            { topic0: [transferTopic0], topic1: [topicHex], transaction: true },
-            { topic0: [transferTopic0], topic2: [topicHex], transaction: true },
-          ],
-        },
-        { ...fetchOpts, itemKeys: ['logs'] },
-      ),
+      include_tokens
+        ? portalFetchRecentRecordsWithScan(
+            streamUrl,
+            {
+              type: 'tron',
+              fromBlock,
+              toBlock,
+              fields: {
+                block: buildTronBlockFields(),
+                log: buildTronLogFields(),
+                transaction: { transactionIndex: true, hash: true },
+              },
+              logs: [
+                { topic0: [transferTopic0], topic1: [topicHex], transaction: true },
+                { topic0: [transferTopic0], topic2: [topicHex], transaction: true },
+              ],
+            },
+            { ...fetchOpts, itemKeys: ['logs'] },
+          )
+        : Promise.resolve(emptyFetchResult),
     ])
+
+    const outcomes = [
+      { name: 'trx_transfers', outcome: trxOutcome },
+      { name: 'contract_calls', outcome: callOutcome },
+      ...(include_tokens ? [{ name: 'trc20_transfers', outcome: trc20Outcome }] : []),
+    ]
+    for (const { outcome } of outcomes) {
+      if (outcome.status === 'rejected' && outcome.reason instanceof RequestCancelledError) {
+        throw outcome.reason
+      }
+    }
+    const failedSections: string[] = []
+    let firstError: unknown
+    for (const { name, outcome } of outcomes) {
+      if (outcome.status === 'rejected') {
+        failedSections.push(name)
+        firstError ??= outcome.reason
+      }
+    }
+    if (failedSections.length === outcomes.length && firstError !== undefined) {
+      throw firstError
+    }
+
+    const trxFetch = trxOutcome.status === 'fulfilled' ? trxOutcome.value : emptyFetchResult
+    const callFetch = callOutcome.status === 'fulfilled' ? callOutcome.value : emptyFetchResult
+    const trc20Fetch = trc20Outcome.status === 'fulfilled' ? trc20Outcome.value : emptyFetchResult
 
     const trxTxs = sortTronTransactions(
       flattenTronTransactions(trxFetch.records, { includeLogs: false, includeInternalTransactions: false }),
@@ -3414,6 +3465,7 @@ async function buildNonEvmWalletSummary(params: {
     let sentSun = 0n
     let inboundCount = 0
     let outboundCount = 0
+    let selfTransferCount = 0
     let skippedFailedTrx = 0
     for (const tx of trxPage.pageItems) {
       if (tx.status === 'failed' || tx.success === false) {
@@ -3421,11 +3473,16 @@ async function buildNonEvmWalletSummary(params: {
         continue
       }
       const sunRaw = typeof tx.amount_sun === 'string' && /^\d+$/.test(tx.amount_sun) ? BigInt(tx.amount_sun) : 0n
-      if (tx.recipient_base58 === base58Address) {
+      const isRecipient = tx.recipient_base58 === base58Address
+      const isSender = tx.sender_base58 === base58Address
+      if (isRecipient && isSender) {
+        receivedSun += sunRaw
+        sentSun += sunRaw
+        selfTransferCount += 1
+      } else if (isRecipient) {
         receivedSun += sunRaw
         inboundCount += 1
-      }
-      if (tx.sender_base58 === base58Address) {
+      } else if (isSender) {
         sentSun += sunRaw
         outboundCount += 1
       }
@@ -3454,10 +3511,21 @@ async function buildNonEvmWalletSummary(params: {
         seenActivityIds.add(id)
         return true
       })
-      .sort((a, b) => Number(a.timestamp || 0) - Number(b.timestamp || 0))
+      .sort((a, b) => {
+        const tsDelta = Number(a.timestamp ?? 0) - Number(b.timestamp ?? 0)
+        if (tsDelta !== 0) return tsDelta
+        const blockDelta = Number(a.block_number ?? 0) - Number(b.block_number ?? 0)
+        if (blockDelta !== 0) return blockDelta
+        const txIdxDelta = Number(a.transactionIndex ?? 0) - Number(b.transactionIndex ?? 0)
+        if (txIdxDelta !== 0) return txIdxDelta
+        const logIdxDelta = Number(a.logIndex ?? -1) - Number(b.logIndex ?? -1)
+        if (logIdxDelta !== 0) return logIdxDelta
+        return String(a.primary_id ?? '').localeCompare(String(b.primary_id ?? ''))
+      })
 
     const tronHasMore = trxPage.hasMore || callPage.hasMore || trc20Page.hasMore
     const tronWindowComplete =
+      failedSections.length === 0 &&
       fromBlock <= requestedFromBlock &&
       (trxFetch.scan?.exhausted ?? true) &&
       (callFetch.scan?.exhausted ?? true) &&
@@ -3465,8 +3533,18 @@ async function buildNonEvmWalletSummary(params: {
     const tronCompleteness = buildWalletCompleteness({
       hasMore: tronHasMore,
       windowComplete: tronWindowComplete,
+      failedSections,
+      hasCursor: false,
     })
 
+    if (failedSections.length > 0) {
+      notices.push(
+        `Some Tron wallet sections failed to load (${failedSections.join(', ')}); remaining sections are shown as a partial result.`,
+      )
+    }
+    if (!include_tokens) {
+      notices.push('TRC-20 transfer logs were skipped because include_tokens=false.')
+    }
     if (skippedFailedTrx > 0) {
       notices.push(
         `Excluded ${skippedFailedTrx} failed TRX transfer${skippedFailedTrx === 1 ? '' : 's'} from received/sent TRX totals.`,
@@ -3485,6 +3563,7 @@ async function buildNonEvmWalletSummary(params: {
         assets_moved: (receivedSun > 0n || sentSun > 0n ? 1 : 0) + trc20Contracts.size,
         inbound_movements: inboundCount,
         outbound_movements: outboundCount,
+        ...(selfTransferCount > 0 ? { self_transfers: selfTransferCount } : {}),
         trc20_transfer_logs: trc20Page.pageItems.length,
       },
       asset_flows: [
@@ -3505,12 +3584,19 @@ async function buildNonEvmWalletSummary(params: {
         {
           goal: 'Inspect full Tron transactions for this wallet',
           tool: 'portal_tron_query_transactions',
-          address,
+          suggested_arguments: {
+            network: dataset,
+            from_addresses: [base58Address],
+            to_addresses: [base58Address],
+          },
         },
         {
           goal: 'Inspect TRC-20 transfer logs for this wallet',
           tool: 'portal_tron_query_logs',
-          address,
+          suggested_arguments: {
+            network: dataset,
+            addresses: [base58Address],
+          },
         },
       ],
     }
@@ -3650,7 +3736,11 @@ async function buildNonEvmWalletSummary(params: {
             hasMore: tronHasMore,
             windowComplete: tronWindowComplete,
             sections: {
-              activity: buildSectionPagination(activityItems.length, tronHasMore),
+              trx_transfers: buildSectionPagination(trxPage.pageItems.length, trxPage.hasMore),
+              contract_calls: buildSectionPagination(callPage.pageItems.length, callPage.hasMore),
+              ...(include_tokens
+                ? { trc20_transfers: buildSectionPagination(trc20Page.pageItems.length, trc20Page.hasMore) }
+                : {}),
             },
           }),
           ...(tronHasMore || !tronWindowComplete ? { continuation: 'none' } : {}),

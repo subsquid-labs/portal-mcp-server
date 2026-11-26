@@ -11,8 +11,11 @@ describe('entity-resolution token list chain mapping', () => {
     assert.equal(getTokenListChainForDataset('tron-mainnet'), 'tron')
   })
 
-  it('returns undefined for chains without a CoinGecko token list', () => {
+  it('returns undefined for chains without a CoinGecko token list or non-EVM testnets', () => {
     assert.equal(getTokenListChainForDataset('bitcoin-mainnet'), undefined)
     assert.equal(getTokenListChainForDataset('polkadot'), undefined)
+    assert.equal(getTokenListChainForDataset('solana-devnet'), undefined)
+    assert.equal(getTokenListChainForDataset('tron-shasta'), undefined)
+    assert.equal(getTokenListChainForDataset('tron-nile'), undefined)
   })
 })

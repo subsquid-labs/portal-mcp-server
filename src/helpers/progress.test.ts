@@ -49,4 +49,41 @@ describe('notifications/progress helper', () => {
     assert.equal(sent[1]?.params.progress, 50)
     assert.equal(sent[2]?.params.progress, 100)
   })
+
+  it('rejects non-safe-integer numeric progress tokens', async () => {
+    for (const badToken of [Number.NaN, Number.POSITIVE_INFINITY, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+      const sent: unknown[] = []
+      await runWithPortalProgress(mockContext(badToken, sent), async () => {
+        assert.equal(hasPortalProgressReporter(), false)
+        reportPortalProgress({ progress: 1, total: 10, message: 'ignored' })
+      })
+      assert.equal(sent.length, 0)
+    }
+  })
+
+  it('enforces strict monotonicity and omits inconsistent or non-owner totals', async () => {
+    const sent: Array<{ method: string; params: Record<string, unknown> }> = []
+    await runWithPortalProgress(
+      mockContext(42, sent),
+      async () => {
+        reportPortalProgress({ phase: 'scan', progress: 50, total: 100, message: 'Halfway' })
+        // Inner stream chunk with its own smaller progress/total must not regress or overwrite scan's total
+        reportPortalProgress({ phase: 'stream', progress: 10, total: 10, message: 'Inner chunk' })
+        // Retry phase must advance monotonically and omit total
+        reportPortalProgress({ phase: 'retry', progress: 1, total: 5, message: 'Retry 1' })
+        // Scan completion beyond previous monotonic high-water mark keeps scan's total when total >= progress
+        reportPortalProgress({ phase: 'scan', progress: 100, total: 100, message: 'Done' })
+      },
+      { minIntervalMs: 60_000 },
+    )
+    assert.equal(sent.length, 4)
+    assert.deepEqual(
+      sent.map((n) => n.params.progress),
+      [50, 51, 52, 100],
+    )
+    assert.equal(sent[0]?.params.total, 100)
+    assert.equal('total' in (sent[1]?.params ?? {}), false)
+    assert.equal('total' in (sent[2]?.params ?? {}), false)
+    assert.equal(sent[3]?.params.total, 100)
+  })
 })

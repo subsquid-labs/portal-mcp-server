@@ -171,7 +171,9 @@ function buildTokenResolutionNotices(
 ) {
   const notices: string[] = []
   if (unresolvedSymbols.length > 0) {
-    notices.push(`No token-list match found for ${fieldName}: ${unresolvedSymbols.join(', ')}.`)
+    notices.push(
+      `No token-list match found for ${fieldName}: ${unresolvedSymbols.map((symbol) => quoteUntrusted(symbol)).join(', ')}.`,
+    )
   }
   for (const resolution of resolutions) {
     if (resolution.matches.length > 1) {
@@ -911,7 +913,7 @@ export function registerQueryTransactionsTool(server: McpServer) {
       const normalizedTransactionHash = transaction_hash?.trim().toLowerCase()
       if (normalizedTransactionHash !== undefined && !/^0x[0-9a-f]{64}$/.test(normalizedTransactionHash)) {
         throw new ActionableError(
-          `Invalid transaction_hash: ${transaction_hash}. Expected a 32-byte 0x-prefixed hex hash.`,
+          `Invalid transaction_hash: ${quoteUntrusted(transaction_hash ?? '')}. Expected a 32-byte 0x-prefixed hex hash.`,
           ['Pass a 66-character transaction hash such as 0x... and narrow the block range or timeframe.'],
           { field: 'transaction_hash' },
           { code: 'invalid_request', origin: 'client_input', retryable: false },
@@ -940,7 +942,9 @@ export function registerQueryTransactionsTool(server: McpServer) {
       const effectiveScanOrder: 'earliest' | 'latest' =
         scan_order ??
         (normalizedTransactionHash !== undefined
-          ? 'latest'
+          ? from_block !== undefined && to_block === undefined
+            ? 'earliest'
+            : 'latest'
           : hasClientFilters && effectiveOrderBy === 'chronological'
             ? 'earliest'
             : 'latest')
@@ -1088,7 +1092,12 @@ export function registerQueryTransactionsTool(server: McpServer) {
             fromBlock: resolvedFromBlock,
             toBlock: pageToBlock,
             limit,
-            chunkSize: normalizedTransactionType !== undefined ? 100 : adaptiveChunkSize,
+            chunkSize:
+              normalizedTransactionHash && !fromFilters && !toFilters
+                ? 50
+                : normalizedTransactionType !== undefined
+                  ? 100
+                  : adaptiveChunkSize,
             scanOrder: effectiveScanOrder,
             orderBy: effectiveOrderBy,
             maxScanBlocks: Math.max(
@@ -1363,7 +1372,9 @@ export function registerQueryTransactionsTool(server: McpServer) {
           `More matching transactions exist beyond the returned page for scanned blocks ${scanResult.scannedFromBlock}-${scanResult.scannedToBlock}; continue with _pagination.next_cursor.`,
         )
       }
-      const boundedSearchNotice = scanResult ? buildBoundedSearchNotice(scanResult, 'EVM transaction scan') : undefined
+      const exactHashMatched = Boolean(normalizedTransactionHash && page.pageItems.length > 0)
+      const boundedSearchNotice =
+        scanResult && !exactHashMatched ? buildBoundedSearchNotice(scanResult, 'EVM transaction scan') : undefined
       if (boundedSearchNotice) notices.push(boundedSearchNotice)
       const freshness = buildQueryFreshness({
         finality: finalized_only ? 'finalized' : 'latest',
@@ -1378,7 +1389,11 @@ export function registerQueryTransactionsTool(server: McpServer) {
         items: page.pageItems,
         getBlockNumber,
         hasMore: page.hasMore,
-        windowComplete: scanResult ? !scanResult.hasUnscannedBlocks : (recentScan?.exhausted ?? true),
+        windowComplete: exactHashMatched
+          ? true
+          : scanResult
+            ? !scanResult.hasUnscannedBlocks
+            : (recentScan?.exhausted ?? true),
       })
 
       const message =

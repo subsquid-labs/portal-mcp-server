@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -8,19 +8,34 @@ import { nodeSkillFiles } from '@modelcontextprotocol/server/ext/skills/node'
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url))
 
+function hasAnySkillFolder(dir: string): boolean {
+  if (!existsSync(dir)) return false
+  try {
+    return readdirSync(dir, { withFileTypes: true }).some(
+      (entry) => entry.isDirectory() && existsSync(path.join(dir, entry.name, 'SKILL.md')),
+    )
+  } catch {
+    return false
+  }
+}
+
 /**
  * Resolve the directory containing SQD's bundled skill folders.
- * Prefers the built `dist/skills` copy (used in npm packages and container
- * images) and falls back to `plugins/portal/skills` when running from `src/`.
+ * When running from `dist/`, prefers the packaged `dist/skills` directory;
+ * when running from `src/` during development, prefers `plugins/portal/skills`
+ * so source edits are not shadowed by a stale build output.
  */
 export function resolveSkillsDirectory(): string | undefined {
-  const candidates = [
-    path.resolve(MODULE_DIR, 'skills'),
-    path.resolve(MODULE_DIR, '../dist/skills'),
-    path.resolve(MODULE_DIR, '../plugins/portal/skills'),
-  ]
+  const runningFromSource = path.basename(MODULE_DIR) === 'src'
+  const candidates = runningFromSource
+    ? [path.resolve(MODULE_DIR, '../plugins/portal/skills'), path.resolve(MODULE_DIR, '../dist/skills')]
+    : [
+        path.resolve(MODULE_DIR, 'skills'),
+        path.resolve(MODULE_DIR, '../dist/skills'),
+        path.resolve(MODULE_DIR, '../plugins/portal/skills'),
+      ]
   for (const candidate of candidates) {
-    if (existsSync(path.join(candidate, 'portal/SKILL.md'))) {
+    if (hasAnySkillFolder(candidate)) {
       return candidate
     }
   }

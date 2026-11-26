@@ -23,6 +23,7 @@ export function buildServerCard(options: ServerCardOptions = {}) {
     description: entry.frontmatter.description,
   }))
 
+  const appMode = getActivityExplorerDeploymentMode()
   return {
     schemaVersion: '2026-07-28',
     serverInfo: {
@@ -48,14 +49,17 @@ export function buildServerCard(options: ServerCardOptions = {}) {
       resources: true,
       prompts: true,
       progress: true,
-      elicitation: { form: true },
       extensions: {
-        'io.modelcontextprotocol/ui': {
-          name: 'SQD Explorer',
-          stage: 'beta',
-          mode: getActivityExplorerDeploymentMode(),
-          mimeTypes: ['text/html;profile=mcp-app'],
-        },
+        ...(appMode !== 'disabled'
+          ? {
+              'io.modelcontextprotocol/ui': {
+                name: 'SQD Explorer',
+                stage: 'beta',
+                mode: appMode,
+                mimeTypes: ['text/html;profile=mcp-app'],
+              },
+            }
+          : {}),
         ...(skills && skills.length > 0
           ? {
               'io.modelcontextprotocol/skills': {
@@ -78,6 +82,7 @@ export function buildServerCard(options: ServerCardOptions = {}) {
 export const SERVER_CARD_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json; charset=utf-8',
   'Cache-Control': 'public, max-age=300',
+  Vary: 'Host, X-Forwarded-Proto',
   'Access-Control-Allow-Origin': '*',
   'X-Content-Type-Options': 'nosniff',
 }

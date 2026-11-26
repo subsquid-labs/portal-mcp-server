@@ -29,6 +29,7 @@ import {
 } from '../../helpers/result-metadata.js'
 import { type TimestampInput, getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { quoteUntrusted } from '../../helpers/untrusted-text.js'
 import { isValidBitcoinAddress, normalizeBitcoinAddressForPortal } from '../../helpers/validation.js'
 
 export function registerQueryBitcoinTransactionsTool(server: McpServer) {
@@ -206,11 +207,11 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
         response_format = paginationCursor.request.response_format
       }
       let normalizedAddress: string | undefined
-      if (address !== undefined && address.trim() !== '') {
+      if (address !== undefined) {
         const trimmed = address.trim()
-        if (!isValidBitcoinAddress(trimmed)) {
+        if (!trimmed || !isValidBitcoinAddress(trimmed)) {
           throw new ActionableError(
-            `Invalid Bitcoin address: ${address}.`,
+            `Invalid Bitcoin address: ${quoteUntrusted(address)}.`,
             ['Provide a valid Bitcoin address starting with bc1, 1, or 3.'],
             { field: 'address' },
             { code: 'invalid_request', origin: 'client_input', retryable: false },
@@ -220,11 +221,11 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
       }
 
       let normalizedTxid: string | undefined
-      if (txid !== undefined && txid.trim() !== '') {
+      if (txid !== undefined) {
         const cleaned = txid.trim().toLowerCase().replace(/^0x/, '')
         if (!/^[0-9a-f]{64}$/.test(cleaned)) {
           throw new ActionableError(
-            `Invalid Bitcoin txid: ${txid}. Expected a 64-character hex transaction ID.`,
+            `Invalid Bitcoin txid: ${quoteUntrusted(txid)}. Expected a 64-character hex transaction ID.`,
             ['Provide a 64-character hex Bitcoin txid/hash and narrow the block window or timeframe.'],
             { field: 'txid' },
             { code: 'invalid_request', origin: 'client_input', retryable: false },
@@ -279,7 +280,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
           fromBlock: resolvedFromBlock,
           toBlock: pageToBlock,
           chunkSize: 10,
-          scanOrder: 'latest',
+          scanOrder: from_block !== undefined && to_block === undefined ? 'earliest' : 'latest',
           maxScanBlocks: Math.min(200, pageToBlock - resolvedFromBlock + 1),
           shouldContinue: () => !foundMatch,
           fetchChunk: async (chunk) => {
@@ -366,6 +367,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
               itemKeys: ['transactions'],
               limit: fetchLimit,
               chunkSize: 50,
+              maxChunks: 40,
             },
           ),
           portalFetchRecentRecordsWithScan(
@@ -385,6 +387,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
               itemKeys: ['transactions'],
               limit: fetchLimit,
               chunkSize: 50,
+              maxChunks: 40,
             },
           ),
         ])
@@ -477,7 +480,7 @@ export function registerQueryBitcoinTransactionsTool(server: McpServer) {
           : undefined
       let pageItems = page.pageItems
       let inlineHydratedBlockCount = 0
-      if ((include_inputs || include_outputs) && pageItems.length > 0) {
+      if ((include_inputs || include_outputs) && effectiveResponseFormat !== 'summary' && pageItems.length > 0) {
         const txKeys = new Set(
           pageItems
             .map((item) => {

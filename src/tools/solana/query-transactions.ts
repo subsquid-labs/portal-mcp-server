@@ -32,6 +32,7 @@ import {
 } from '../../helpers/result-metadata.js'
 import { type TimestampInput, getTimestampWindowNotices, resolveTimeframeOrBlocks } from '../../helpers/timeframe.js'
 import { buildExecutionMetadata, buildToolDescription } from '../../helpers/tool-ux.js'
+import { quoteUntrusted } from '../../helpers/untrusted-text.js'
 import { getValidationNotices, isValidSolanaAddress, validateSolanaQuerySize } from '../../helpers/validation.js'
 
 // ============================================================================
@@ -272,7 +273,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
       const normalizedSignature = signature?.trim()
       if (normalizedSignature !== undefined && !/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(normalizedSignature)) {
         throw new ActionableError(
-          `Invalid Solana transaction signature: ${signature}.`,
+          `Invalid Solana transaction signature: ${quoteUntrusted(signature ?? '')}.`,
           ['Pass a base58-encoded 64-byte Solana transaction signature and narrow the slot range or timeframe.'],
           { field: 'signature' },
           { code: 'invalid_request', origin: 'client_input', retryable: false },
@@ -374,14 +375,17 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
         const matchedBlocks: unknown[] = []
         let foundMatch = false
         /* Unfiltered Solana slots carry ~1,500–3,000 transactions each, so cap
-           unfiltered signature scans to 50 slots (~20s of Solana blocks) unless
-           the caller narrows with fee_payer, mentions_account, or slot bounds. */
-        const maxSignatureScanSlots = hasFilters ? 2_000 : 50
+           unfiltered signature scans to 50 slots on timeframe windows (or 250
+           slots when explicit from_block/to_block bounds are given) unless the
+           caller narrows with fee_payer or mentions_account. */
+        const hasExplicitSlotBounds = from_block !== undefined && to_block !== undefined
+        const maxSignatureScanSlots = hasFilters ? 2_000 : hasExplicitSlotBounds ? 250 : 50
+        const signatureScanOrder = from_block !== undefined && to_block === undefined ? 'earliest' : 'latest'
         const signatureScan = await scanBoundedBlockRange<unknown>({
           fromBlock: resolvedFromBlock,
           toBlock: pageToBlock,
           chunkSize: hasFilters ? 100 : 10,
-          scanOrder: 'latest',
+          scanOrder: signatureScanOrder,
           maxScanBlocks: Math.min(maxSignatureScanSlots, pageToBlock - resolvedFromBlock + 1),
           shouldContinue: () => !foundMatch,
           fetchChunk: async (chunk) => {
@@ -486,6 +490,7 @@ export function registerQuerySolanaTransactionsTool(server: McpServer) {
                 finalized_only,
                 ...(fee_payer ? { fee_payer } : {}),
                 ...(mentions_account ? { mentions_account } : {}),
+                ...(normalizedSignature ? { signature: normalizedSignature } : {}),
                 include_instructions,
                 include_balances,
                 include_token_balances,

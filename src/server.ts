@@ -403,7 +403,11 @@ function buildPortalServer(runtimeContext: RuntimeRequestContext, appEnabled: bo
         }
       }
       if (updated) {
-        server.sendToolListChanged()
+        try {
+          server.sendToolListChanged()
+        } catch {
+          // Ignore send failures if the client disconnected during initialization.
+        }
       }
     }
   }
